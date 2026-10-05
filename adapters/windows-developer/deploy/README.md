@@ -73,7 +73,10 @@ It runs seven checks in a temporary directory (node and Git Bash, the environmen
 including a junction and the Windows-only forms, timeout with process-tree kill, a legacy-encoded file edit that must pass and its
 UTF-8 rewrite that must be blocked, log redaction) and prints `PASS:`/`FAIL:` lines; exit code 1 means a failure. Then:
 ```powershell
-Start-ScheduledTask -TaskName SomeWorkWindowsDeveloper
+# the task belongs to the service account, so even an administrator gets 'Access is denied' from Start-ScheduledTask / schtasks /Run:
+# start it as SYSTEM (a throwaway task) or reboot
+schtasks /Create /TN SomeworkStartAgent /SC ONCE /ST 23:59 /RL HIGHEST /RU SYSTEM /TR "schtasks /Run /TN SomeWorkWindowsDeveloper" /F
+schtasks /Run /TN SomeworkStartAgent
 Get-Content C:\somework\logs\supervisor.log -Tail 5
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8081/ready | Select-Object -ExpandProperty Content
 ```
