@@ -25,20 +25,26 @@ Not a problem (checked):
   before the dispatcher script runs. Harmless noise; filter it if it bothers anyone.
 - NATS-TLS warnings and failed jobs on the agents VM: from the bugs fixed on deployment day.
 Still open (needs a decision or access I do not have):
-- HYPERVISOR EXPOSURE: about 470 failed root logins per day against the public web UI (one source
-  address) plus constant ssh probing. The UI and ssh are reachable from the internet. Options, in
-  order of value: two-factor for the root account; restrict the UI/ssh to the tailnet or known
-  addresses (the owner uses the UI from outside the tailnet, so this needs care); a ban-on-failure
-  tool on the host. All need root on the hypervisor. An alert (>50 failures/hour) now exists.
-- BACKUP SPACE: the backup storage is about 76% full (roughly 78 GB free of 322). The Windows template and
-  the two clones are not in the nightly job; each has a 400 GB disk, so adding them needs more backup
-  space or exclusions (never back up the clones' reproducible state, back up the template once).
-  [DECISION]
-- The QA app on the QA machine cannot create a session: the web back end needs the product's WEB
-  database schema, which the installed (desktop) product does not have. The repository's own route
-  restores it from two backup files in a cloud blob container. That needs an interactive `az login`
-  by the owner (conditional access); until then QA local mode cannot verify a ticket. The exact
-  command: az login --tenant <tenant id from the repository's scripts> --scope https://storage.azure.com/.default
+- HYPERVISOR EXPOSURE: (partly resolved 2026-10-05) ssh (22), the web UI (8006), spiceproxy (3128), rpcbind
+  (111) and LLMNR (5355) are dropped on the public interface for every source except
+  /etc/agent-cluster-host/allowed-sources.txt (today only the owner's workstation address). 443 is
+  Cloudflare-only (separate rules). Installed as systemd unit agent-host-firewall.service (script
+  /usr/local/sbin/agent-host-firewall, plain iptables chain AC_HOST_INPUT; the Proxmox firewall stays off so it
+  cannot disturb the existing NAT and bridge rules). Tested by removing the allowed address briefly: the UI
+  timed out and the ssh port was closed. The host is on the tailnet (admin-cloud-hypervisor, key expiry
+  disabled): ssh and the UI work over it from anywhere, so the public allow-list is only a fallback.
+  Root has TOTP two-factor (checked 2026-10-05). IPv6: the same five ports are dropped for all IPv6 sources
+  (no v6 allow-list), nothing else listens on public IPv6 except Tailscale's UDP port, and v6 forwarding is
+  off. It is a port block-list, not default-deny: a new service on the host would be exposed on v6 (and v4)
+  until added to the list. [DECISION] convert to default-deny with explicit allows (needs ICMPv6, DHCP). Lesson: 8006 was open to everyone for
+  about 15 minutes on 2026-10-05 through a misread instruction; nobody else reached it. Keep it restricted.
+- BACKUP SPACE: (resolved 2026-10-05) quota of zpve/agent-backups raised 300 -> 500 GB; the nightly job is split:
+  VMs 101,102,104,105,106 keep 3 (02:30), VM 103 keeps 1 (04:00, 73 GB per archive); the old VM 103 archives
+  were pruned; the template (110) got one manual backup; the clones are deliberately not backed up. Still
+  open: backups sit on the same pool as the VMs and there is no off-host copy (section 8).
+- The QA app on the QA machine cannot create a session until the product's WEB database schema is
+  restored. The owner logged in (az), the two backup files were downloaded and copied to the machine and the
+  restore is in progress (2026-10-05). Delete the backup files on the machine and on the workstation afterwards.
 
 --------------------------------------------------------------------------------------
 1. FLEET DASHBOARD (SomeWork section)
@@ -65,7 +71,7 @@ Still open (needs a decision or access I do not have):
   silently. `bun` is installed (checksum verified) and the web app runs in auth-less local mode as an
   unprivileged user. Start/stop scripts are idempotent. It does NOT start by itself at boot (by design;
   first start after boot takes about 3 minutes because the database starts late).
-- BLOCKER: the web database schema is missing (see section 0). Nothing can be verified until it is
+- BLOCKER (restore in progress, see section 0): the web database schema. Nothing can be verified until it is
   restored. Everything after that is mechanical (the QA machine report lists the steps).
 - Not tested: starting and stopping the app as the future unprivileged QA service account (a helper
   that grants it the run right on the two tasks is written and parse-checked, never run).
@@ -89,9 +95,8 @@ Still open (needs a decision or access I do not have):
 --------------------------------------------------------------------------------------
 3. WINDOWS DEVELOPER AGENT (code.windows)                 status: live, not useful yet
 --------------------------------------------------------------------------------------
-- No git token yet (empty placeholder file): it cannot push or open pull requests. Needs its own
-  fine-grained token for one repository (contents + pull requests write). Creating a token needs a
-  passkey check in the person's browser ("sudo mode").
+- (resolved 2026-10-05) It has its own fine-grained token (one repository, contents + pull requests write,
+  expires 2027-01-03), installed on the machine. Never exercised with a real push yet.
 - Only a tooling-check build profile exists. The real product build needs a package-restore
   credential that the service account can read. [DECISION] where that credential lives.
 - The sandbox is a local unprivileged account plus firewall rules: a weaker boundary than the
@@ -110,8 +115,8 @@ Still open (needs a decision or access I do not have):
 --------------------------------------------------------------------------------------
 - No review has been run on the real model yet (only the canned test model); no real review of a
   private repository.
-- No read-only repository token yet, so private repositories cannot be cloned or their pull
-  request context read. Needs a fine-grained read-only token (contents + pull requests read).
+- (resolved 2026-10-05) It has a fine-grained read-only token (one repository, contents + pull requests read,
+  expires 2027-01-03): clone works, writes are refused. No real review has used it yet.
 - The repository skills it should use are configured by name only; whether they behave well when
   loaded as "index + open on demand" is untested.
 - The demo reviewer (code.review v1/v2) was retired on 2026-10-05: the agent is disabled and its card was
@@ -129,16 +134,23 @@ Still open (needs a decision or access I do not have):
   succeeded on them.
 - The two extra model providers are wired but not credentialed or enabled. [DECISION] one
   runs under a personal account and the other routes to third-party model hosts: opt-in only.
-- Its repository token expires in early November 2026.
+- The developer agent's repository token expires in early November 2026.
+- Windows developer and reviewer tokens (one repository each, 90 days, expire 2027-01-03) are installed. Creating
+  a token: the GitHub tab detaches when the form is submitted, so post the form from inside the page and
+  capture the token from the response.
 - The one real pull request path was exercised once (a draft PR, since closed). No CI interplay
   was observed.
 
 --------------------------------------------------------------------------------------
 6. MANAGER AGENT (Telegram)
 --------------------------------------------------------------------------------------
-- Never proven through real Telegram yet: /status, /agents, the catalog tool inside the container,
-  and a write approval round trip are untested. The extension was only tested against a stub of
-  the tool-registration API.
+- (corrected 2026-10-05) The owner has used the manager through real Telegram. The central logs show it
+  on 2026-10-05 around 17:52-17:58 UTC+2: catalog reads, a message send, then a task submit and a task
+  read. Not visible in the logs (they record routes, not tool names or approvals): whether /status and
+  /agents were used and whether a write approval round trip was completed. Ask the owner or add an
+  approval event to the manager log before claiming either.
+- The manager logged "Telegram polling failed; retrying" once (17:59) and recovered; one start at 18:31
+  logged runtime_register_failed (card not found) and succeeded on the next start. Both are unexplained.
 - (resolved 2026-10-05) The new unit is enabled and the old bridge unit disabled, so a host reboot brings the
   manager back (lingering is on).
 - The gateway binds to the Docker bridge address of the Pi network and a firewall rule allows
@@ -188,8 +200,8 @@ tasks; none has a message handler. The manager polled the inbox several times an
 --------------------------------------------------------------------------------------
 8. INFRASTRUCTURE / OPERATIONS
 --------------------------------------------------------------------------------------
-- Backups: the nightly VM backup job covers the original six VMs only. The Windows template and
-  both clones (and any future ones) are not in it. There is no off-host copy and no restore drill.
+- Backups: the nightly jobs cover the original six VMs, the template has one manual backup, the clones are
+  not backed up on purpose. There is no off-host copy and no restore drill.
 - The private CA key and the domain master key exist only on the workstation and in the password
   manager (plus the domain host for the master key). No tested recovery procedure.
 - The golden Windows template must never be booted. If it is, it is no longer a clean source.
@@ -200,12 +212,13 @@ tasks; none has a message handler. The manager polled the inbox several times an
   model login. A script for the identity part would remove most of the manual work.
 - Clone creation of the full VM (not from a template) needs the source powered off for the whole
   copy (EFI + TPM + ZFS restriction). Use the template.
-- The Proxmox API token for the fleet has no expiry set. Rotate periodically. Creating tokens,
-  users and ACLs needs a root session (today: the owner sharing a browser tab).
+- The Proxmox API token for the fleet has no expiry set. Rotate periodically. It also has read-only access
+  to the backup storage. Creating tokens, users and ACLs now works over root ssh to the hypervisor (alias
+  in the owner's ssh config, dedicated key, tailnet or allow-listed address only).
 - Disk of the original Windows VM was doubled; its recovery partition was removed and the
   Windows recovery environment is disabled.
-- Tailscale on the clones was joined with single-use keys; the nodes' own node-key expiry applies
-  (about six months) and needs re-authentication.
+- (resolved 2026-10-05) Node-key expiry is disabled for the hypervisor, agents, observability and the three
+  Windows machines in the Tailscale admin console. A new machine needs it disabled too.
 - Model logins: every agent holds its own OAuth login (they rotate on use). If an agent is idle for
   very long the refresh token may expire and need a new device-code login.
 
@@ -221,7 +234,7 @@ tasks; none has a message handler. The manager polled the inbox several times an
 - The fleet dashboard's own source tree is not under version control (a safety copy exists).
   Put it in a repository.
 - The GitHub fine-grained tokens are created in the owner's browser only after a passkey check;
-  nothing automates their rotation (30-day expiry).
+  nothing automates their rotation (the two new tokens expire 2027-01-03).
 - Each agent's host-side files (keys, auth.json, .env, compose files) are not in the repository
   or in any backup other than the password manager entries listed in the memory notes.
 
@@ -263,55 +276,37 @@ approvals, same task notifications.
   Slack (identifiers, states, short summaries) and keep source code and secrets out.
 
 --------------------------------------------------------------------------------------
-11. PLANNED: EVENT HUB (triggers for the agents)
+11. EVENTS AND REACTIONS (decided 2026-10-05, deployed on the pilot 2026-10-05/06)
 --------------------------------------------------------------------------------------
-Working name: "event hub" / "trigger router". It is not just a scheduler: it ingests events from
-outside and inside, decides what they mean, and tells the right agent to do something. The
-domain only moves tasks and messages that something else submits; today nothing watches the world.
-What it does:
-- Time triggers: cron-style schedules with a time zone, jitter, and a missed-run policy (skip,
-  run once, run all). Example: nightly review of open pull requests, a daily health check.
-- External events in: webhooks from code hosting (pull request opened/updated/merged, push, check
-  failed), the issue tracker (ticket moved to a status, label added, comment), chat (Slack/Telegram
-  events), monitoring (alert fired/resolved from the log/metrics stack), the hypervisor and
-  anything with a webhook. Plus polling adapters for sources that cannot call out.
-- Internal events in: SomeWork task events (finished, failed, waiting for input), agent liveness
-  changes, approvals pending too long, budget limits reached, new commits on a watched branch.
-- Output: submit a task to a capability (with a budget), send a message to an agent or to the
-  manager, start a chain (developer -> reviewer -> QA), or just notify the owner. Every output is an
-  ordinary SomeWork task/message under the hub's own identity, so policy, approvals, budgets and
-  the audit trail apply unchanged.
-Design points to settle:
-- Where it lives: a new role/service (own package on the agent kit, own identity, own card or none)
-  versus a feature of the domain. Prefer a separate service so the domain stays small.
-- Ingestion edge: a small HTTP receiver. Nothing on the private network should be exposed publicly:
-  decide between a tunnel/reverse proxy with an allow-listed path, a relay that the hub polls, or a
-  provider-side queue. Each source gets its own secret/signature verification (HMAC or signed
-  headers), replay protection (timestamp window + delivery id), size limits and rate limits.
-- Event model: normalise everything to one envelope (id, source, type, subject, time, data, trace)
-  such as CloudEvents; keep the raw payload only briefly and never log bodies that may contain
-  code, customer data or secrets. Redact before storage.
-- Durability: persist accepted events before acknowledging them (the domain outbox pattern or a
-  JetStream stream); at-least-once delivery with a stable idempotency key per event so a retried
-  webhook never creates a second task. Dead-letter queue and a way to replay.
-- Rules: declarative, versioned, reviewable (files in a repository, not clicked together). A rule
-  = match (source, type, filters on fields, schedule) + action (capability, input template, budget,
-  target agent) + guards (rate limit per rule and per subject, dedupe window, quiet hours,
-  daily budget, require owner approval before the first run).
-- Loop protection: events caused by the agents themselves (a pull request the developer agent
-  opened, a ticket comment the QA agent wrote) must not trigger the same agents again. Tag
-  outputs, ignore own events, cap chain depth.
-- Safety: the hub's identity may invoke only an explicit allow-list of capabilities; write
-  capabilities stay behind the manager's approval path; untrusted event text is data, never
-  instructions (it is passed to agents as quoted context, with the source marked untrusted).
-- Operations: health endpoint, metrics, structured logs, a section in the fleet dashboard (events
-  in, rules fired, dropped/deduped, dead letters, oldest pending), and a kill switch per rule and
-  per source.
-- Testing: a fake webhook sender with recorded real payloads, signature failure cases, replay and
-  duplicate deliveries, clock skew, a rule that would loop, and a real end-to-end chain on the pilot.
-- First useful rules to ship: pull request opened -> reviewer task; ticket enters the testing
-  status -> QA task (approval-gated writes); alert fired -> message to the manager; nightly
-  schedule -> status digest to the owner.
+Design is decided; see docs/EVENTS.md, docs/adr/0001 and 0002 and the glossary in CONTEXT.md. All of it is meant
+for the first version. Build order: (1) domain: the `submitTask` reaction, event dedupe key, hop/depth counters;
+(2) receiver + hub skeleton, clock producer, one dry-run rule; (3) GitHub pull request -> review end to end,
+including the new Cloudflare host and Woodpecker; (4) issue tracker webhook mapping and the QA flow;
+(5) agent handlers in the kit; (6) log-stack and Datadog alerts; (7) dashboard section and manager controls.
+Deployed on the pilot 2026-10-05 (domain with events/rules/reactions, receiver on the DMZ VM, hub on the agents VM, rules applied,
+Grafana contact point + policy route, Woodpecker server and runner VM, manager with event intake, approvals and controls). Verified end
+to end: a signed delivery posted twice yields one event and one task; forged, unsigned and wrong-source requests are rejected; receiver and
+hub restarts lose and duplicate nothing; a Grafana alert reaches the manager. Still open work items:
+- (done 2026-10-05) Cloudflare host, origin certificate, strict TLS, Authenticated Origin Pulls and the POST-only rule are in place; Woodpecker is logged in,
+  the agents repository is enabled and has its pipeline secrets (the pull request comment secret still needs a token the owner creates). Runner log shipping is open.
+- The owner wires the senders: Jira webhook, GitHub (signing secret file), Datadog webhook (custom payload), using the hook URL file.
+- qa.verify is not in the catalog until the QA agent is deployed: qa-on-ticket skips every firing with an error until then.
+- (done 2026-10-06) Kit handlers, token pools, the dashboard Events section and the manager controls are deployed: developer and reviewer on
+  image tag pilot-7 (events ON only for the developer agent, EVENTS_ENABLED=1), Windows developer on the new kit code (events off), dashboard
+  image 0.2.0-events on the services VM. Live acceptance results: docs/EVENTS_ACCEPTANCE.md (scripts in scripts/events-acceptance/).
+- Windows developer is not on the dashboard's agent list: its /status listens on localhost of that machine only (add a narrow inbound
+  firewall rule for the services VM and a bind address if the dashboard should show its handlers and pools).
+- The developer agent's events token pool is throttled for the rest of 2026-10-05/06 (an acceptance rule left on during a 150-event burst
+  woke it 30 times, 120 further wakes were suppressed as designed). It resets at the daily rollover; no real work is affected.
+- Reviewer: its read-only command check refuses plain pipelines (find | sed | sort | head), which makes a task wait for approval; decide
+  whether to allow pipes of read-only programs.
+- Fixed on the way: the remote sandbox environment did not pass the output info argument to the tool library, so any bash tool call crashed
+  the developer agent process (present since the Pi 1.0.3 upgrade; regression test in packages/agent-kit/test/sandbox.test.ts).
+- Hub secret filed in the password manager; rotate by bumping source versions.
+- The Rust test `ten_times_stress_degrades_gracefully_without_errors` (crates/somework-it/tests/load_control_plane.rs, a debug-build 10x load
+  profile with a 15 s p95 limit) is timing-sensitive: on a busy workstation (load average 20-40) it fails on the commit before the events work
+  too (p95 23.9 s there, 18.5 s with the events code, no errors), and passes on a quiet machine. Run it alone on a quiet host before trusting
+  it, or move it to the manual pipeline.
 
 --------------------------------------------------------------------------------------
 12. DECISIONS WAITING FOR THE OWNER (summary)
