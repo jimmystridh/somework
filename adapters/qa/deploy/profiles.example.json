@@ -1,0 +1,13 @@
+{
+  "app": {
+    "default": {
+      "start": "nohup npm run dev -- --host 127.0.0.1 --port 5173 > .qa-app.log 2>&1 < /dev/null & echo $! > .qa-app.pid",
+      "health": ["http://127.0.0.1:5173/"],
+      "stop": "kill $(cat .qa-app.pid)",
+      "cwd": ".",
+      "env": { "APP_MODE": "local" },
+      "startupTimeoutSeconds": 180,
+      "backendRevisionCommand": "curl -s http://127.0.0.1:8080/version"
+    }
+  }
+}

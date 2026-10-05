@@ -1,0 +1,13 @@
+# Outbound destinations the service user may reach. One per line: a host name, an IPv4 address, a CIDR block or an a.b.c.d-e.f.g.h range.
+# Host names are resolved when firewall.ps1 runs (and again by its refresh task); everything else outbound is blocked for that user.
+# Loopback is always allowed: the application under test and the browser talk over it.
+somework.example.test
+api.openai.com
+auth.openai.com
+chatgpt.com
+github.com
+codeload.github.com
+registry.npmjs.org
+# the ticket system's host (add the address of its certificate-authenticating gateway too, if that is a different name)
+jira.example.test
+# the application's own package feeds and mirrors go here

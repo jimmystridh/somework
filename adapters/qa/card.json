@@ -1,0 +1,246 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/qa",
+  "domainId": "development",
+  "displayName": "QA",
+  "description": "Verifies a ticket against a revision of a repository in a real browser, on a machine that runs the application in local mode (no identity provider). Returns a verdict with the acceptance checks, the fixtures it created, a video and screenshots as artifacts, and what it did in the ticket system. Writes to the ticket system (comment, label, hand-back) only after the requester approves each action, and never moves a ticket to a done state.",
+  "owner": {
+    "team": "platform"
+  },
+  "interfaces": [
+    {
+      "protocol": "mcp"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "qa.verify",
+      "version": "1",
+      "name": "Verify a ticket in the browser",
+      "description": "Give a ticket key and a repository (url + ref; name the full commit SHA when handing work over). The agent reads the ticket, checks out the ref, starts the application from the configured profile, reproduces the ticket's scenario in a headless browser, builds the data it needs, records one short video of the decisive pass, and reports `verified`, `not_fixed`, `blocked` or `skipped` (a ticket key the agent is not configured to handle). Every write to the ticket system (comment, label, hand-back, attachment) waits for the requester's approval (the task shows input_required; answer with {approved: true|false, reason?}). A budget (maxTokens, maxMinutes) is required.",
+      "tags": [
+        "contract:idempotent",
+        "qa",
+        "browser",
+        "windows"
+      ],
+      "sideEffects": "write",
+      "timeoutSeconds": 3600,
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "repository",
+          "budget"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "ticket key, for example PROJ-123; the agent is configured with the pattern of the keys it handles"
+          },
+          "repository": {
+            "type": "object",
+            "required": [
+              "url",
+              "ref"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "ref": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "the revision to verify: a branch, a tag, a commit SHA (name the full resolved SHA when handing work over) or refs/pull/<n>/head"
+              }
+            }
+          },
+          "scenario": {
+            "type": "string",
+            "maxLength": 8000,
+            "description": "optional extra steps or acceptance criteria from the requester, in addition to the ticket"
+          },
+          "app": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "description": "name of the application profile configured on the agent (default: default)"
+          },
+          "agentKey": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "stable key that selects the conversation; default: repository + the task's conversation"
+          },
+          "model": {
+            "type": "object",
+            "required": [
+              "provider",
+              "id"
+            ],
+            "additionalProperties": false,
+            "description": "optional model for a new conversation; must be enabled on the agent (PI_ALLOWED_MODELS). Default: the agent's own model.",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "id": {
+                "type": "string",
+                "maxLength": 200
+              }
+            }
+          },
+          "budget": {
+            "type": "object",
+            "required": [
+              "maxTokens",
+              "maxMinutes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "maxMinutes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "verdict",
+          "ticket"
+        ],
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "not_fixed",
+              "blocked",
+              "skipped"
+            ]
+          },
+          "ticket": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "object",
+            "properties": {
+              "frontendSha": {
+                "type": "string"
+              },
+              "backendRevision": {
+                "type": "string",
+                "description": "the revision of the local back end the check ran against, when the profile can tell"
+              }
+            }
+          },
+          "acceptanceChecks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "criterion",
+                "passed"
+              ],
+              "properties": {
+                "criterion": {
+                  "type": "string"
+                },
+                "passed": {
+                  "type": "boolean"
+                },
+                "evidence": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fixtures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "description"
+              ],
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "keys": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "artifactId",
+                "kind",
+                "filename"
+              ],
+              "properties": {
+                "artifactId": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "video",
+                    "screenshot",
+                    "log"
+                  ]
+                },
+                "filename": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "jira": {
+            "type": "object",
+            "properties": {
+              "commented": {
+                "type": "boolean"
+              },
+              "labelled": {
+                "type": "boolean"
+              },
+              "transitioned": {
+                "type": "boolean"
+              },
+              "attached": {
+                "type": "boolean"
+              },
+              "skippedReason": {
+                "type": "string"
+              }
+            }
+          },
+          "notes": {
+            "type": "string"
+          },
+          "usage": {
+            "type": "object"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  ]
+}
