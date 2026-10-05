@@ -1,0 +1,272 @@
+{
+  "title": "SomeWork Pi agent (logs)",
+  "uid": "somework-pi-agent-logs",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "loki",
+        "label": "Loki"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Jobs finished by status (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (count_over_time({source=\"docker\", container=~\"somework-pi-agent-.*\", event=\"job_finished\"} | json [1h]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Job failures and refusals (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (event) (count_over_time({source=\"docker\", container=~\"somework-pi-agent-.*\", event=~\"job_failed|job_refused\"} [1h]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{event}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Tokens per hour",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(sum_over_time({source=\"docker\", container=~\"somework-pi-agent-.*\", event=\"job_finished\"} | json | unwrap totalTokens [1h]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "total"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Input / output tokens per hour",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(sum_over_time({source=\"docker\", container=~\"somework-pi-agent-.*\", event=\"job_finished\"} | json | unwrap inputTokens [1h]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "input"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Cost, USD per day",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 6,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(sum_over_time({source=\"docker\", container=~\"somework-pi-agent-.*\", event=\"job_finished\"} | json | unwrap costUsd [24h]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Job duration p50 (s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 16,
+        "w": 9,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "max(quantile_over_time(0.5, {source=\"docker\", container=~\"somework-pi-agent-.*\", event=\"job_finished\"} | json | unwrap durationMs [1h])) / 1000",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Job duration p95 (s)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 15,
+        "y": 16,
+        "w": 9,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "max(quantile_over_time(0.95, {source=\"docker\", container=~\"somework-pi-agent-.*\", event=\"job_finished\"} | json | unwrap durationMs [1h])) / 1000",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Approvals requested (1h)",
+      "type": "timeseries",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "sum by (tool) (count_over_time({source=\"docker\", container=~\"somework-pi-agent-.*\", event=\"approval_requested\"} | json [1h]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "legendFormat": "{{tool}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Agent log (errors and warnings)",
+      "type": "logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "expr": "{source=\"docker\", container=~\"somework-pi-agent-.*\", level=~\"warn|error\"}",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          }
+        }
+      ]
+    }
+  ],
+  "description": "Derived entirely from the agent's structured logs (events job_finished, job_failed, job_refused, approval_requested); no Prometheus needed. Tokens and cost are counted when a job finishes."
+}

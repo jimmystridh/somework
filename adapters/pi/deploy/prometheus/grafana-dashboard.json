@@ -1,0 +1,220 @@
+{
+  "title": "SomeWork Pi agent",
+  "uid": "somework-pi",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-12h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Jobs finished by status (1h)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(somework_pi_jobs_total[1h]))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Active jobs",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "somework_pi_active_jobs",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Job duration p50 / p95 (s)",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(somework_pi_job_duration_seconds_bucket[1h])))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Tokens per hour by kind",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (kind) (increase(somework_pi_tokens_total[1h]))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Tool calls (1h)",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (tool) (increase(somework_pi_tool_calls_total[1h]))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Approvals by decision (1h)",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (decision) (increase(somework_pi_approvals_total[1h]))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Cost, USD per day",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(somework_pi_cost_usd_total[24h]))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Jobs detached (shutdown / lease lost)",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(somework_pi_detached_total[1h]))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Job duration p95 (s)",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(somework_pi_job_duration_seconds_bucket[1h])))",
+          "legendFormat": "{{status}}{{kind}}{{tool}}{{decision}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

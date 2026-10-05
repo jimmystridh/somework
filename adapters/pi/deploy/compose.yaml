@@ -1,0 +1,124 @@
+# Pi agent on the agent Docker host (VM102): harness, sandbox and egress proxy, isolated from each other.
+# - `sandbox-net` is internal: containers on it have no route out. The sandbox is only on it.
+# - The egress proxy is the sandbox's single way out (host allowlist, private ranges refused).
+# - The harness holds the credentials and talks to the sandbox over `sandbox-net`; it also reaches the domain and the model API.
+name: somework-pi
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  privileged: false
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+networks:
+  sandbox-net:
+    internal: true
+  outside: {}
+
+services:
+  agent:
+    <<: *hardened
+    image: somework-pi-agent:${PI_VERSION:?set PI_VERSION to the built image tag}
+    user: "10001:10001"
+    group_add: ["10010"]          # reads the shared sandbox token
+    networks: [sandbox-net, outside]
+    environment:
+      SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
+      SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
+      SOMEWORK_CA_FILE: /run/somework/ca.pem
+      SOMEWORK_REQUIRE_TLS: "1"
+      SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
+      PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
+      PI_MODEL: ${PI_MODEL:-gpt-5.5}
+      PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
+      PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}
+      PI_AUTH_FILE: /run/secrets/pi/auth.json
+      PI_STATE_DIR: /state
+      PI_CONCURRENCY: ${PI_CONCURRENCY:-2}
+      SANDBOX_URL: http://sandbox:7070
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_WORKSPACES: /workspace
+      GIT_TOKEN_FILE: /run/secrets/git-token
+      GIT_PR_DRAFT: ${GIT_PR_DRAFT:-1}
+      BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-2000000}
+      BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-60}
+      DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-10000000}
+      HEALTH_PORT: "8081"
+    volumes:
+      - ${AGENT_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
+      - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - ./secrets/git-token:/run/secrets/git-token:ro       # fine-grained PAT, one repository: Contents + Pull requests write
+      - state:/state
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    ports: ["127.0.0.1:8081:8081"]                          # health and metrics for the host's agent (Alloy)
+    depends_on:
+      sandbox: {condition: service_healthy}
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  sandbox:
+    <<: *hardened
+    image: somework-pi-sandbox:${PI_VERSION:?set PI_VERSION}
+    user: "10002:10002"
+    group_add: ["10010"]
+    networks: [sandbox-net]
+    environment:
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_ROOT: /workspace
+      SANDBOX_PORT: "7070"
+      HTTPS_PROXY: http://egress:8888
+      HTTP_PROXY: http://egress:8888
+      NO_PROXY: sandbox,localhost,127.0.0.1
+    volumes:
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - workspace:/workspace
+    tmpfs: ["/tmp:size=512m,nosuid"]
+    mem_limit: ${SANDBOX_MEMORY:-3g}
+    cpus: ${SANDBOX_CPUS:-1.5}
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7070/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  egress:
+    <<: *hardened
+    image: somework-pi-egress:${PI_VERSION:?set PI_VERSION}
+    user: "10003:10003"
+    networks: [sandbox-net, outside]
+    environment:
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,pypi.org,files.pythonhosted.org,crates.io,static.crates.io,index.crates.io}
+      EGRESS_PORTS: "443,80"
+    mem_limit: 128m
+    pids_limit: 64
+
+  # One-shot: named volumes start root-owned but each service runs as its own uid.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    image: somework-pi-agent:${PI_VERSION:?set PI_VERSION}
+    profiles: ["init"]
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 10001:10001 /state && chown 10002:10002 /workspace"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - state:/state
+      - workspace:/workspace
+
+volumes:
+  state:
+  workspace:

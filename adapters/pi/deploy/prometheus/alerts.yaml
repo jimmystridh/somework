@@ -1,0 +1,39 @@
+# Prometheus alert rules for the Pi agent. Load them into the central Prometheus/Mimir ruler once the metrics are scraped
+# (see alloy-metrics.alloy). Metric names come from adapters/pi/src/service.ts; not yet loaded into the central stack.
+groups:
+  - name: somework-pi
+    rules:
+      - alert: PiAgentNotReady
+        expr: up{job="somework-pi-agent"} == 0
+        for: 3m
+        labels: {severity: page}
+        annotations: {summary: "The Pi agent's metrics endpoint is down (process or container not running)"}
+
+      - alert: PiJobStuck
+        # a job that has been running for a long time with no job finishing: compare against the capability timeout (3600 s)
+        expr: somework_pi_active_jobs > 0 and increase(somework_pi_jobs_total[45m]) == 0
+        for: 15m
+        labels: {severity: ticket}
+        annotations: {summary: "Pi jobs have been active for 45+ minutes without any job finishing"}
+
+      - alert: PiBudgetBurn
+        # the daily token cap is DAILY_TOKEN_LIMIT; this fires when the 6 h burn rate would exhaust 10M tokens in a day
+        expr: sum(increase(somework_pi_tokens_total[6h])) > 2500000
+        labels: {severity: ticket}
+        annotations: {summary: "Pi used more than 2.5M tokens in 6 hours (daily cap is 10M by default)"}
+
+      - alert: PiBudgetRefusals
+        expr: increase(somework_pi_jobs_total{status=~"budget_exhausted|budget_exceeded"}[1h]) > 0
+        labels: {severity: info}
+        annotations: {summary: "Pi refused or stopped jobs on budget grounds in the last hour"}
+
+      - alert: PiErrorRatioHigh
+        expr: sum(increase(somework_pi_jobs_total{status=~"error|unanswered"}[1h])) / clamp_min(sum(increase(somework_pi_jobs_total[1h])), 1) > 0.3
+        for: 30m
+        labels: {severity: ticket}
+        annotations: {summary: "More than 30% of Pi jobs failed with infrastructure or model errors in the last hour"}
+
+      - alert: PiApprovalsWaiting
+        expr: sum(increase(somework_pi_approvals_total[1h])) > 20
+        labels: {severity: info}
+        annotations: {summary: "Unusually many approval requests: the agent may be attempting risky commands repeatedly"}

@@ -1,0 +1,32 @@
+# Loki ruler rules for the Pi agent (same format as Prometheus rules, LogQL expressions). Everything is derived from the agent's
+# structured logs, which Alloy already ships to the central Loki; no metrics pipeline is involved.
+# The agent logs only when something happens, so there is deliberately no "agent silent" alert: use the container health check
+# (`docker ps` health, /ready) or a Datadog/uptime check for liveness.
+groups:
+  - name: somework-pi
+    rules:
+      - alert: PiJobsFailing
+        expr: sum(count_over_time({source="docker", container=~"somework-pi-agent-.*", event="job_failed"}[1h])) > 3
+        labels: {severity: ticket}
+        annotations: {summary: "More than 3 Pi jobs failed with infrastructure errors in the last hour"}
+
+      - alert: PiBudgetBurn
+        # DAILY_TOKEN_LIMIT is 500k on the pilot; adjust to a quarter of whatever the daily limit is
+        expr: sum(sum_over_time({source="docker", container=~"somework-pi-agent-.*", event="job_finished"} | json | unwrap totalTokens [6h])) > 250000
+        labels: {severity: ticket}
+        annotations: {summary: "Pi used more than 250k tokens in 6 hours (pilot daily cap is 500k)"}
+
+      - alert: PiBudgetRefusals
+        expr: sum(count_over_time({source="docker", container=~"somework-pi-agent-.*", event="job_refused"}[1h])) > 0
+        labels: {severity: info}
+        annotations: {summary: "Pi refused jobs because the daily token budget is exhausted"}
+
+      - alert: PiApprovalsFlood
+        expr: sum(count_over_time({source="docker", container=~"somework-pi-agent-.*", event="approval_requested"}[1h])) > 20
+        labels: {severity: info}
+        annotations: {summary: "Unusually many approval requests: the agent may be attempting risky commands repeatedly"}
+
+      - alert: PiLongJob
+        expr: max(quantile_over_time(0.95, {source="docker", container=~"somework-pi-agent-.*", event="job_finished"} | json | unwrap durationMs [6h])) > 2400000
+        labels: {severity: info}
+        annotations: {summary: "Pi jobs are taking more than 40 minutes (p95 over 6 h)"}

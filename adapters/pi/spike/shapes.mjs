@@ -1,0 +1,17 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ctx, open } from "./lib.mjs";
+const dir = mkdtempSync(join(tmpdir(), "pi-shapes-"));
+const { harness, modelChoice } = await open({ db: join(dir, "s.sqlite"), marker: join(dir, "m.log"), tool: "slow_read", toolMs: 50 });
+const root = await harness.root(ctx, { agent: { model: modelChoice } });
+const sub = await root.submit({ type: "input", content: "go", requestId: "r" }, ctx);
+const settled = await sub.wait(ctx);
+console.log("settled:", JSON.stringify(settled).slice(0, 500));
+const view = await root.viewState(ctx);
+const entries = view.value.entries;
+console.log("last entry:", JSON.stringify(entries.at(-1)).slice(0, 600));
+console.log("docs:", Object.keys(view.value.docs ?? {}).join(","));
+console.log("usage doc:", JSON.stringify(view.value.docs?.["pi.usage"]).slice(0, 400));
+console.log("harness.usage:", JSON.stringify(await harness.usage(ctx)).slice(0, 400));
+await harness.close(ctx);

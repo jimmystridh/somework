@@ -1,0 +1,23 @@
+{
+  "name": "@somework/pi-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pi coding agent as an independent SomeWork worker: Pi Durable harness, remote sandbox, git workflow.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "start": "node src/main.ts",
+    "sandbox": "node src/sandbox/main.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.3",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-durable": "1.0.3",
+    "@somework/sdk": "file:../../sdk/typescript",
+    "jiti": "2.7.0",
+    "pi-antigravity": "0.9.0"
+  }
+}

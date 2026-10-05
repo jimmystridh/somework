@@ -1,0 +1,14 @@
+// Add to the host's Alloy configuration (kept by the central logging setup) to scrape the Pi agent. The remote_write URL is the
+// central Prometheus-compatible endpoint, which this repository does not know: fill it in.
+prometheus.scrape "somework_pi_agent" {
+  targets    = [{ __address__ = "127.0.0.1:8081", job = "somework-pi-agent", host = "agent-host" }]
+  forward_to = [prometheus.remote_write.central.receiver]
+  scrape_interval = "30s"
+}
+
+prometheus.remote_write "central" {
+  endpoint {
+    url = "https://CENTRAL-PROMETHEUS/api/v1/push"
+    // basic_auth / tls_config as for loki.write "central"
+  }
+}

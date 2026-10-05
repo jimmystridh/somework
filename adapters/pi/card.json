@@ -1,0 +1,60 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/pi-agent",
+  "domainId": "development",
+  "displayName": "Pi coding agent",
+  "description": "Runs a coding agent (Pi Durable) on a repository checkout in an isolated sandbox. Changes go to a branch named agent/<taskId> and a pull request; merge and deploy stay with humans.",
+  "owner": { "team": "platform" },
+  "interfaces": [{ "protocol": "mcp" }],
+  "capabilities": [
+    {
+      "id": "code.agent",
+      "version": "1",
+      "name": "Coding agent",
+      "description": "Give an instruction and a repository (url + ref). The agent works in its own checkout, then the service pushes branch agent/<taskId> and opens a pull request. A budget (maxTokens, maxMinutes) is required: a job without one is rejected. Optional agentKey continues an earlier conversation on the same repository. The agent may ask the requester for approval before risky commands (the task shows input_required; answer with {approved: true|false, reason?}).",
+      "tags": ["contract:idempotent", "coding"],
+      "sideEffects": "write",
+      "timeoutSeconds": 3600,
+      "inputSchema": {
+        "type": "object",
+        "required": ["repository", "instruction", "budget"],
+        "additionalProperties": false,
+        "properties": {
+          "agentKey": { "type": "string", "maxLength": 200, "description": "stable key that selects the conversation; default: repository + the task's conversation" },
+          "repository": {
+            "type": "object",
+            "required": ["url", "ref"],
+            "additionalProperties": false,
+            "properties": { "url": { "type": "string", "maxLength": 500 }, "ref": { "type": "string", "maxLength": 200, "description": "base branch" } }
+          },
+          "instruction": { "type": "string", "minLength": 1, "maxLength": 20000 },
+          "model": {
+            "type": "object",
+            "required": ["provider", "id"],
+            "additionalProperties": false,
+            "description": "optional model for a new conversation; must be enabled on the agent (PI_ALLOWED_MODELS), otherwise the task fails with model_not_allowed. Default: the agent's own model.",
+            "properties": { "provider": { "type": "string", "maxLength": 100 }, "id": { "type": "string", "maxLength": 200 } }
+          },
+          "budget": {
+            "type": "object",
+            "required": ["maxTokens", "maxMinutes"],
+            "additionalProperties": false,
+            "properties": { "maxTokens": { "type": "integer", "minimum": 1000 }, "maxMinutes": { "type": "integer", "minimum": 1 } }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": ["status", "summary", "branch"],
+        "properties": {
+          "status": { "enum": ["completed", "no_changes"] },
+          "summary": { "type": "string" },
+          "branch": { "type": "string" },
+          "commits": { "type": "array", "items": { "type": "string" } },
+          "prUrl": { "type": "string" },
+          "usage": { "type": "object", "properties": { "totalTokens": { "type": "integer" }, "costUsd": { "type": "number" } } }
+        }
+      }
+    }
+  ]
+}
