@@ -1,0 +1,265 @@
+TODO / KNOWN GAPS                                                        last updated 2026-10-05
+=====================================================================================
+Everything below is known, not yet done. Kept generic on purpose (no hosts, addresses, ticket
+keys or secrets). [DECISION] marks items that wait for a person, not for work.
+
+--------------------------------------------------------------------------------------
+1. FLEET DASHBOARD (SomeWork section)
+--------------------------------------------------------------------------------------
+- Principal enabled/disabled state and side-effect level are not shown. They need the
+  `principal.manage` permission, which would also allow changes. Either add a read-only
+  permission to the domain or leave it as "unknown".
+- Database size and backup age are not shown. The domain API does not expose them.
+- Domain version and uptime are not shown. The domain API does not expose them.
+- JetStream storage use is not shown. Only consumer lag is available (from /metrics); the broker
+  monitoring port is deliberately closed.
+- The manager has no registered runtime, so its liveness is "unknown". Either let it register a
+  runtime or show requesters without a liveness column.
+- No per-agent log links (the central log stack exists; the links are not wired).
+- Old content-hashed asset files remain in the dashboard bundle directory on its host (harmless).
+- The two failed tasks in the 24 h window are history from deployment debugging; they will age out.
+
+--------------------------------------------------------------------------------------
+2. QA AGENT (qa.verify)                                   status: being built, NOT deployed
+--------------------------------------------------------------------------------------
+- Local mode needs the product's own back-end server running unattended on the QA machine. Today
+  it connects to SQL Server and then exits after about 30 s with no output when started from an
+  SSH or background session. Probably a GUI process that wants an interactive desktop. Under
+  investigation. Until this works the QA agent cannot verify anything end to end.
+- `bun` is not installed on the QA machine; the web app's scripts need it (or an equivalent plan).
+- The pre-built back-end on the machine is from one fixed commit. Frontend tickets are verified
+  against that back-end revision, not the ticket's. The result must report both revisions.
+- Local mode covers the practice companies only, not the shared test back-end's data. Fixtures must
+  be built by the agent. This is weaker than the original skill's "all companies" coverage.
+- Deploy steps still open: enroll the identity, register the card, its OWN model login, the Jira
+  certificate/password/token files on the machine, firewall allow-list (incl. the Jira host),
+  skill overlay file (kept outside the repository), start as SYSTEM helper task.
+- [DECISION] The Jira token belongs to a person's account, so every Jira action by the agent
+  appears as that person. A dedicated service account would be better.
+- [DECISION] The Jira client certificate in use is the person's/jirast one. A dedicated
+  certificate for the QA agent is cleaner and survives that person's rotation.
+- The Jira personal access token expires after 90 days (early January 2027). Rotate or revoke.
+- The company-specific QA skill overlay lives outside the repository; back it up (password
+  manager) and keep it out of any public remote.
+- Browser tool: the Playwright backend (Edge, headless, video) can only be exercised on the real
+  machine; the unit tests use a fake backend.
+
+--------------------------------------------------------------------------------------
+3. WINDOWS DEVELOPER AGENT (code.windows)                 status: live, not useful yet
+--------------------------------------------------------------------------------------
+- No git token yet (empty placeholder file): it cannot push or open pull requests. Needs its own
+  fine-grained token for one repository (contents + pull requests write). Creating a token needs a
+  passkey check in the person's browser ("sudo mode").
+- Only a tooling-check build profile exists. The real product build needs a package-restore
+  credential that the service account can read. [DECISION] where that credential lives.
+- The sandbox is a local unprivileged account plus firewall rules: a weaker boundary than the
+  container sandbox. [DECISION] throwaway VM or container if the code on that machine must not
+  reach its other data.
+- The service task belongs to the service account, so even an administrator cannot start or stop
+  it directly; a SYSTEM helper task is needed (documented).
+- Leftover-process cleanup after a timeout requires one job at a time (PI_CONCURRENCY=1) and an
+  account that runs nothing else during a job.
+- Firewall rules match addresses, not names (shared CDN addresses admit sibling sites); a refresh
+  task re-resolves every 30 min.
+- Never tested against a real full build or a real push (only the smoke test and unit tests).
+
+--------------------------------------------------------------------------------------
+4. REVIEWER AGENT (code.review v3)                        status: live
+--------------------------------------------------------------------------------------
+- No review has been run on the real model yet (only the canned test model); no real review of a
+  private repository.
+- No read-only repository token yet, so private repositories cannot be cloned or their pull
+  request context read. Needs a fine-grained read-only token (contents + pull requests read).
+- The repository skills it should use are configured by name only; whether they behave well when
+  loaded as "index + open on demand" is untested.
+- The demo reviewer (code.review v1/v2) is still enrolled next to the real one. Retire it when no
+  requester uses it.
+- Its sandbox reaches the code host through an allow-listed proxy because the kit clones through
+  the sandbox. A design that clones in the harness (no sandbox egress at all) would be tighter.
+
+--------------------------------------------------------------------------------------
+5. DEVELOPER AGENT (code.agent)
+--------------------------------------------------------------------------------------
+- The running stack is still the previous image generation; the refactored images are built but
+  not switched over (and the switch has not been tested against the real model).
+- The two extra model providers are wired but not credentialed or enabled. [DECISION] one
+  runs under a personal account and the other routes to third-party model hosts: opt-in only.
+- Its repository token expires in early November 2026.
+- The one real pull request path was exercised once (a draft PR, since closed). No CI interplay
+  was observed.
+
+--------------------------------------------------------------------------------------
+6. MANAGER AGENT (Telegram)
+--------------------------------------------------------------------------------------
+- Never proven through real Telegram yet: /status, /agents, the catalog tool inside the container,
+  and a write approval round trip are untested. The extension was only tested against a stub of
+  the tool-registration API.
+- The new systemd unit is not enabled; the old bridge unit is still enabled and conflicts with it.
+  After a host reboot the old bridge would start. Decide, then enable/disable accordingly.
+- The gateway binds to the Docker bridge address of the Pi network and a firewall rule allows
+  only that subnet. If the network is recreated with another subnet, both must be updated.
+- Requesters get no push for their own tasks: the domain only wakes the assignee. The manager
+  polls in-flight tasks every few seconds. A domain change (publish task events to the requester's
+  inbox) would give true push.
+- Approvals live in memory: a restart means "denied".
+- The manager has no capability card, so it is not in the catalog.
+
+--------------------------------------------------------------------------------------
+7. DOMAIN / PLATFORM
+--------------------------------------------------------------------------------------
+- The operator console is not enabled on the pilot domain (it needs an OIDC login; a dev-token
+  login is not safe on this network). Until then the fleet dashboard and per-agent health
+  endpoints are the only views. [DECISION]
+- The operator API cannot report: database size, backup age, version, uptime, principal state.
+  Add read-only endpoints (see section 1).
+- The locally built `dist/somework` binary in a developer checkout is older than the deployed
+  server (it lacks newer admin subcommands). Rebuild before relying on it.
+- Pi Durable and its companion packages are pinned to a version younger than the supply-chain
+  minimum-age policy (an explicit, scoped override by the owner). Re-check once the age passes;
+  a transitive telemetry package came with it.
+- No distributed tracing; logs and the fleet dashboard are the observability story.
+- Loki dashboard and alert rules for the agents exist in the repository but are not loaded into
+  the central stack. The optional metrics-based variants are unused.
+
+--------------------------------------------------------------------------------------
+8. INFRASTRUCTURE / OPERATIONS
+--------------------------------------------------------------------------------------
+- Backups: the nightly VM backup job covers the original six VMs only. The Windows template and
+  both clones (and any future ones) are not in it. There is no off-host copy and no restore drill.
+- The private CA key and the domain master key exist only on the workstation and in the password
+  manager (plus the domain host for the master key). No tested recovery procedure.
+- The golden Windows template must never be booted. If it is, it is no longer a clean source.
+  Rebuilding it from scratch is not scripted: the installed image is the recipe (the product
+  installer needs the documented manual workaround).
+- Windows images are evaluation builds; all copies expire on the same date. Accepted for now.
+- Every new Windows clone needs by hand: a Tailscale auth key, its own agent identity and its own
+  model login. A script for the identity part would remove most of the manual work.
+- Clone creation of the full VM (not from a template) needs the source powered off for the whole
+  copy (EFI + TPM + ZFS restriction). Use the template.
+- The Proxmox API token for the fleet has no expiry set. Rotate periodically. Creating tokens,
+  users and ACLs needs a root session (today: the owner sharing a browser tab).
+- Disk of the original Windows VM was doubled; its recovery partition was removed and the
+  Windows recovery environment is disabled.
+- Tailscale on the clones was joined with single-use keys; the nodes' own node-key expiry applies
+  (about six months) and needs re-authentication.
+- Model logins: every agent holds its own OAuth login (they rotate on use). If an agent is idle for
+  very long the refresh token may expire and need a new device-code login.
+
+--------------------------------------------------------------------------------------
+9. REPOSITORIES / PROCESS
+--------------------------------------------------------------------------------------
+- Two remotes: the public personal repository only has the first commits; the private
+  organisation repository has everything. [DECISION] what, if anything, goes to the public one
+  (company-specific text must not).
+- Uncommitted work at the time of writing: the fleet dashboard integration note, this file, and
+  the QA role in progress. Commit after review.
+- No LICENSE file in the repository.
+- The fleet dashboard's own source tree is not under version control (a safety copy exists).
+  Put it in a repository.
+- The GitHub fine-grained tokens are created in the owner's browser only after a passkey check;
+  nothing automates their rotation (30-day expiry).
+- Each agent's host-side files (keys, auth.json, .env, compose files) are not in the repository
+  or in any backup other than the password manager entries listed in the memory notes.
+
+--------------------------------------------------------------------------------------
+10. PLANNED: SLACK FOR THE MANAGER ("AdministrationCloudManager")
+--------------------------------------------------------------------------------------
+Goal: the manager agent chats with the owner over Slack as well as Telegram, same policy, same
+approvals, same task notifications.
+- Create a new Slack app/bot integration for it (a bot user named AdministrationCloudManager).
+  Prefer Socket Mode (the app opens the connection outbound; no public webhook, same shape as the
+  Telegram long poll) so nothing needs to be exposed on the network.
+- Request the install in the company Slack workspace (the workspace's app-approval / admin request
+  process). Expect a security or data-handling review: say what it reads (direct messages to the bot
+  and mentions only), what it can post, and that it never reads channel history it is not part of.
+  Find out whether the workspace needs an admin approval, an Enterprise Grid org-level approval, or
+  an allow-listed app directory entry.
+- Minimal scopes to start with: chat:write, im:history, im:read, im:write, app_mentions:read,
+  users:read (to resolve the owner), commands only if slash commands are wanted. Nothing else.
+  Review before adding anything (files:write for evidence uploads is a later, separate request).
+- Tokens: a bot token and an app-level token (Socket Mode). Store them as 0600 files outside any
+  mounted container path, plus an entry in the password manager. Never in the repository, logs or
+  chat. Plan their rotation.
+- Owner pairing, as for Telegram: only the paired Slack user id may talk to it, only in a direct
+  message (ignore everything else), pairing by a one-time code that expires.
+- Approvals: use interactive buttons (Approve / Deny with the capability, a redacted input summary
+  and the budget) instead of /approve commands; same rules (write needs approval, default deny,
+  expiry, in-memory so a restart means denied). Task results, questions and agent messages go to
+  the same thread as the request.
+- Refactor the manager so the chat side is a channel interface (Telegram and Slack implement it);
+  the gateway, policy, rate limits, notifier and state stay shared. Keep the redaction rules
+  (tokens and long strings never posted).
+- Behaviour to decide: one thread per task, how long-running tasks report progress, how much of a
+  result is posted (summaries and links, never raw task content), and whether the bot may be added
+  to a team channel for read-only status.
+- Tests: a fake Slack (Socket Mode events + Web API) in the test suite, pairing and DM-only
+  enforcement, button approval round trip, no-leak checks. Then a real smoke test in a private
+  test channel before DMs.
+- Data governance: messages pass through a third-party service. Decide what the manager may say in
+  Slack (identifiers, states, short summaries) and keep source code and secrets out.
+
+--------------------------------------------------------------------------------------
+11. PLANNED: EVENT HUB (triggers for the agents)
+--------------------------------------------------------------------------------------
+Working name: "event hub" / "trigger router". It is not just a scheduler: it ingests events from
+outside and inside, decides what they mean, and tells the right agent to do something. The
+domain only moves tasks and messages that something else submits; today nothing watches the world.
+What it does:
+- Time triggers: cron-style schedules with a time zone, jitter, and a missed-run policy (skip,
+  run once, run all). Example: nightly review of open pull requests, a daily health check.
+- External events in: webhooks from code hosting (pull request opened/updated/merged, push, check
+  failed), the issue tracker (ticket moved to a status, label added, comment), chat (Slack/Telegram
+  events), monitoring (alert fired/resolved from the log/metrics stack), the hypervisor and
+  anything with a webhook. Plus polling adapters for sources that cannot call out.
+- Internal events in: SomeWork task events (finished, failed, waiting for input), agent liveness
+  changes, approvals pending too long, budget limits reached, new commits on a watched branch.
+- Output: submit a task to a capability (with a budget), send a message to an agent or to the
+  manager, start a chain (developer -> reviewer -> QA), or just notify the owner. Every output is an
+  ordinary SomeWork task/message under the hub's own identity, so policy, approvals, budgets and
+  the audit trail apply unchanged.
+Design points to settle:
+- Where it lives: a new role/service (own package on the agent kit, own identity, own card or none)
+  versus a feature of the domain. Prefer a separate service so the domain stays small.
+- Ingestion edge: a small HTTP receiver. Nothing on the private network should be exposed publicly:
+  decide between a tunnel/reverse proxy with an allow-listed path, a relay that the hub polls, or a
+  provider-side queue. Each source gets its own secret/signature verification (HMAC or signed
+  headers), replay protection (timestamp window + delivery id), size limits and rate limits.
+- Event model: normalise everything to one envelope (id, source, type, subject, time, data, trace)
+  such as CloudEvents; keep the raw payload only briefly and never log bodies that may contain
+  code, customer data or secrets. Redact before storage.
+- Durability: persist accepted events before acknowledging them (the domain outbox pattern or a
+  JetStream stream); at-least-once delivery with a stable idempotency key per event so a retried
+  webhook never creates a second task. Dead-letter queue and a way to replay.
+- Rules: declarative, versioned, reviewable (files in a repository, not clicked together). A rule
+  = match (source, type, filters on fields, schedule) + action (capability, input template, budget,
+  target agent) + guards (rate limit per rule and per subject, dedupe window, quiet hours,
+  daily budget, require owner approval before the first run).
+- Loop protection: events caused by the agents themselves (a pull request the developer agent
+  opened, a ticket comment the QA agent wrote) must not trigger the same agents again. Tag
+  outputs, ignore own events, cap chain depth.
+- Safety: the hub's identity may invoke only an explicit allow-list of capabilities; write
+  capabilities stay behind the manager's approval path; untrusted event text is data, never
+  instructions (it is passed to agents as quoted context, with the source marked untrusted).
+- Operations: health endpoint, metrics, structured logs, a section in the fleet dashboard (events
+  in, rules fired, dropped/deduped, dead letters, oldest pending), and a kill switch per rule and
+  per source.
+- Testing: a fake webhook sender with recorded real payloads, signature failure cases, replay and
+  duplicate deliveries, clock skew, a rule that would loop, and a real end-to-end chain on the pilot.
+- First useful rules to ship: pull request opened -> reviewer task; ticket enters the testing
+  status -> QA task (approval-gated writes); alert fired -> message to the manager; nightly
+  schedule -> status digest to the owner.
+
+--------------------------------------------------------------------------------------
+12. DECISIONS WAITING FOR THE OWNER (summary)
+--------------------------------------------------------------------------------------
+- Service account vs personal account and certificate for the QA agent's Jira access.
+- Where the package-restore credential for the Windows build lives.
+- Container/VM isolation for the Windows developer agent.
+- Whether to enable the operator console (and how it logs in).
+- Whether to enable the new manager unit and retire the old bridge unit.
+- Whether to retire the demo reviewer.
+- What goes to the public repository.
+- Whether the two optional model providers are ever enabled (data-governance).
+- Slack: which workspace, who approves the app install, and what the bot may post (section 10).
+- Event hub: where it lives, how external webhooks reach it without exposing the private network, and
+  which rules may run without a human approving them (section 11).

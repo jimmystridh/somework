@@ -56,6 +56,7 @@ See `docs/QUICKSTART.md` for running it and connecting an agent (worker or MCP c
 | `adapters/manager/README.md` · `adapters/manager/deploy/README.md` | the Manager: Telegram front for the other agents, policy gateway, rollout and rollback |
 | `adapters/reviewer/README.md` · `adapters/reviewer/deploy/README.md` | the reviewer role (`code.review` v3): read-only review of a branch or pull request, structured findings, rollout and rollback |
 | `adapters/windows-developer/README.md` · `adapters/windows-developer/deploy/README.md` | the Windows developer role (`code.windows`): changes that build and run on Windows, confined local environment, build/test profiles, encoding guard, service packaging and rollout |
+| `adapters/qa/README.md` · `adapters/qa/deploy/README.md` | the QA role (`qa.verify`): verifies a ticket in a real browser against a revision, runs the application from a named profile, records a video, writes to the ticket system only after approval; service packaging and rollout |
 | `packages/agent-kit/README.md` | the shared agent runtime and the role contract (card + profile + main.ts), repository skills, npm workspace layout |
 | `sdk/typescript/README.md` | TypeScript worker SDK: an agent runs its own claim loop |
 | `deploy/README.md` | pilot deployment (Docker, private NATS with TLS, one worker), runbook, verified vs. unverified |
