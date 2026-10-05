@@ -1,0 +1,14 @@
+{
+  "name": "somework-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Playwright end-to-end tests for the SomeWork operations console",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "devstack": "cargo run -q -p somework-testkit --bin devstack"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.2"
+  }
+}
