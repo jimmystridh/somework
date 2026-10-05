@@ -1,0 +1,25 @@
+name: pr-review-opened
+description: Review every pull request that is opened ready for review.
+owner: automation/pr-review
+selector: github.pull_request.opened
+where:
+  - path: /data/draft
+    equals: false
+wake: false
+reaction:
+  capability:
+    id: code.review
+    version: 3
+  input:
+    repository:
+      url: ${/data/repository/cloneUrl}
+      ref: refs/pull/${/data/number}/head
+    pullRequest: ${/data/number}
+    budget:
+      maxTokens: 200000
+      maxMinutes: 20
+  budget:
+    maxTokens: 200000
+    maxMinutes: 20
+  maxDepth: 3
+  maxFiringsPerHour: 20

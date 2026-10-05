@@ -1,0 +1,21 @@
+{
+  "name": "@somework/rules-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "somework-rules: validate, plan and apply the rule files in rules/ against the domain.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "somework-rules": "./src/main.ts"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@somework/sdk": "0.1.0",
+    "yaml": "2.8.4"
+  }
+}

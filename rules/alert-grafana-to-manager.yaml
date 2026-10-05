@@ -1,0 +1,5 @@
+name: alert-grafana-to-manager
+description: A firing alert from the log stack wakes the manager, which decides whether and how to tell the owner.
+owner: agent/manager
+selector: grafana.alert.firing
+wake: true

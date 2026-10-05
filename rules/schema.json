@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Shape of one rule file (rules/<name>.yaml). The checks that need more than a schema (ownership conventions, pointer roots, limits, capability cards) are in packages/rules-cli.",
+  "type": "object",
+  "required": ["name", "owner", "selector", "wake"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$", "description": "Must equal the file name without extension." },
+    "description": { "type": "string", "maxLength": 500 },
+    "owner": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*/[a-z0-9][a-z0-9._-]*$", "description": "The principal that owns the subscription: automation/<name> for a rule with a reaction, the agent for an agent subscription." },
+    "selector": { "type": "string", "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.*]*$", "maxLength": 200, "description": "Glob over the topic; * matches any run of characters including dots." },
+    "where": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["path", "equals"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "pattern": "^/", "description": "JSON pointer into the event payload (/data/..., /topic, /source, /key, /classification, /verified, /depth)." },
+          "equals": { "type": ["string", "number", "boolean", "null"] }
+        }
+      }
+    },
+    "wake": { "type": "boolean", "description": "Stated explicitly on every rule: whether a match wakes the owner." },
+    "reaction": {
+      "type": "object",
+      "required": ["capability", "input", "budget"],
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "type": "object",
+          "required": ["id", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z0-9_-]+)+$" },
+            "version": { "type": ["integer", "string"] }
+          }
+        },
+        "input": { "type": "object", "description": "Task input. Strings may contain ${/json/pointer} references into the event payload." },
+        "budget": {
+          "type": "object",
+          "required": ["maxTokens", "maxMinutes"],
+          "additionalProperties": false,
+          "properties": {
+            "maxTokens": { "type": "integer", "minimum": 1 },
+            "maxMinutes": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "maxDepth": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "maxFiringsPerHour": { "type": "integer", "minimum": 1, "maximum": 1000 }
+      }
+    },
+    "status": { "type": "string", "enum": ["active", "paused"], "description": "Leave out to keep whatever the domain has; see rules/README.md." }
+  }
+}

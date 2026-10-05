@@ -1,0 +1,26 @@
+{
+  "topic": "jira.issue.transitioned",
+  "source": "jira",
+  "key": "jira:12345:1759660000000",
+  "data": {
+    "issue": {
+      "key": "PROJ-123",
+      "summary": "Rounding differs between the invoice and the report",
+      "url": "https://jira.example.test/browse/PROJ-123",
+      "type": "Bug",
+      "project": "PROJ"
+    },
+    "from": "In Progress",
+    "to": "Testing",
+    "actor": "j.doe",
+    "repository": {
+      "cloneUrl": "https://github.com/example-org/example-repo.git",
+      "ref": "refs/heads/feature/PROJ-123-rounding"
+    }
+  },
+  "classification": "internal",
+  "verified": true,
+  "depth": 0,
+  "causedByTask": null,
+  "publishedBy": "producer/jira"
+}

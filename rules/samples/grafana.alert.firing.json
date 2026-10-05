@@ -1,0 +1,17 @@
+{
+  "topic": "grafana.alert.firing",
+  "source": "grafana",
+  "key": "grafana:somework-jobs-failing:1759660000",
+  "data": {
+    "alert": "SomeWork jobs failing with infrastructure errors",
+    "uid": "somework-jobs-failing",
+    "severity": "ticket",
+    "summary": "More than 3 agent jobs failed with errors in the last hour",
+    "url": "https://grafana.example.test/alerting/grafana/somework-jobs-failing/view"
+  },
+  "classification": "internal",
+  "verified": true,
+  "depth": 0,
+  "causedByTask": null,
+  "publishedBy": "producer/grafana"
+}

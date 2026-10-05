@@ -1,0 +1,5 @@
+# Whatever changes what unattended automation does, or how it is deployed, needs the owner's review.
+/rules/            @jimmystridh
+/.woodpecker/      @jimmystridh
+/docs/adr/         @jimmystridh
+/CONTEXT.md        @jimmystridh

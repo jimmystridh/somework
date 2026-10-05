@@ -1,0 +1,5 @@
+name: nightly-digest
+description: Wake the manager every night so it can post a status digest to the owner.
+owner: agent/manager
+selector: clock.nightly_digest.tick
+wake: true

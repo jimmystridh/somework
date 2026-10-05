@@ -1,0 +1,14 @@
+{
+  "topic": "clock.nightly_digest.tick",
+  "source": "clock",
+  "key": "clock.nightly_digest:2026-10-05T23:00",
+  "data": {
+    "name": "nightly_digest",
+    "scheduledFor": "2026-10-05T23:00:00+02:00"
+  },
+  "classification": "public",
+  "verified": true,
+  "depth": 0,
+  "causedByTask": null,
+  "publishedBy": "producer/clock"
+}

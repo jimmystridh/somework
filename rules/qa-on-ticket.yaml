@@ -1,0 +1,25 @@
+name: qa-on-ticket
+description: Verify a ticket in a browser when it enters Testing. qa.verify writes to the ticket system, so every firing waits for approval.
+owner: automation/qa-on-ticket
+selector: jira.issue.transitioned
+where:
+  - path: /data/to
+    equals: Testing
+wake: false
+reaction:
+  capability:
+    id: qa.verify
+    version: 1
+  input:
+    ticket: ${/data/issue/key}
+    repository:
+      url: ${/data/repository/cloneUrl}
+      ref: ${/data/repository/ref}
+    budget:
+      maxTokens: 400000
+      maxMinutes: 45
+  budget:
+    maxTokens: 400000
+    maxMinutes: 45
+  maxDepth: 2
+  maxFiringsPerHour: 10

@@ -1,0 +1,21 @@
+{
+  "topic": "datadog.monitor.alert",
+  "source": "datadog",
+  "key": "datadog:9876543:Alert:1759660000",
+  "data": {
+    "monitorId": 9876543,
+    "monitor": "Error rate on the web API",
+    "transition": "Alert",
+    "priority": "P2",
+    "tags": [
+      "team:administration",
+      "env:prod"
+    ],
+    "url": "https://datadog.example.test/monitors/9876543"
+  },
+  "classification": "internal",
+  "verified": true,
+  "depth": 0,
+  "causedByTask": null,
+  "publishedBy": "producer/datadog"
+}

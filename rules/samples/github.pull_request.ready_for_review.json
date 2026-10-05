@@ -1,0 +1,26 @@
+{
+  "topic": "github.pull_request.ready_for_review",
+  "source": "github",
+  "key": "github:delivery:5b1f0c1e-0000-4000-8000-000000000002",
+  "data": {
+    "action": "ready_for_review",
+    "number": 42,
+    "draft": false,
+    "title": "Fix rounding in invoice totals",
+    "author": "octocat",
+    "headSha": "0123456789abcdef0123456789abcdef01234567",
+    "headRef": "feature/PROJ-123-rounding",
+    "baseRef": "main",
+    "htmlUrl": "https://github.com/example-org/example-repo/pull/42",
+    "repository": {
+      "fullName": "example-org/example-repo",
+      "cloneUrl": "https://github.com/example-org/example-repo.git",
+      "htmlUrl": "https://github.com/example-org/example-repo"
+    }
+  },
+  "classification": "internal",
+  "verified": true,
+  "depth": 0,
+  "causedByTask": null,
+  "publishedBy": "producer/github"
+}
