@@ -1,0 +1,18 @@
+{
+  "name": "@somework/qa",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The QA role: verifies a ticket against a revision in a real browser (qa.verify). A card, a profile and a main.ts on top of @somework/agent-kit.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@somework/agent-kit": "0.1.0",
+    "@somework/sdk": "0.1.0"
+  }
+}

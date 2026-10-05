@@ -26,12 +26,19 @@ ops admin --config /etc/somework/somework.toml enroll-agent --id agent/manager -
 
 ## 2. Files on VM102
 ```bash
-mkdir -p ~/somework-manager/{adapters,sdk}
-# from the repository root on the workstation:
-rsync -a --exclude node_modules adapters/manager ~/somework-manager/adapters/    # target: agent-host:somework-manager/adapters/
-rsync -a --exclude node_modules sdk/typescript   ~/somework-manager/sdk/
-# on VM102 (Node 22.22 is installed):
-(cd ~/somework-manager/sdk/typescript && npm ci) && (cd ~/somework-manager/adapters/manager && npm ci)
+mkdir -p ~/somework-manager
+# from the repository root on the workstation: the workspace skeleton (root manifest, the one lockfile, .npmrc, the other workspaces'
+# manifests: `npm ci` checks the lockfile against all of them) plus the two packages the Manager runs
+rsync -aR --exclude node_modules package.json package-lock.json .npmrc sdk/typescript adapters/manager \
+  packages/agent-kit/package.json adapters/pi/package.json  agent-host:somework-manager/
+# on VM102: the distro Node there is built without TypeScript support (`process.features.typescript` is false), so install the
+# official tarball next to the code and use it for npm and for the unit:
+#   curl -fsSLO https://nodejs.org/dist/v22.22.1/node-v22.22.1-linux-x64.tar.xz   # verify against SHASUMS256.txt, then
+#   mkdir -p ~/somework-manager/node && tar -xJf node-v22.22.1-linux-x64.tar.xz -C ~/somework-manager/node --strip-components=1
+export PATH=$HOME/somework-manager/node/bin:$PATH
+# first redeploy after the move to one workspace lockfile: drop the old per-package installs and lockfiles
+rm -rf ~/somework-manager/sdk/typescript/{node_modules,package-lock.json} ~/somework-manager/adapters/manager/{node_modules,package-lock.json}
+(cd ~/somework-manager && npm ci --omit=dev --ignore-scripts -w @somework/manager)
 cp ~/somework-manager/adapters/manager/deploy/manager.env.example ~/.config/agent-cluster-telegram/manager.env
 chmod 600 ~/.config/agent-cluster-telegram/manager.env        # then check the paths and the gateway address
 docker network inspect agent-cluster-pi_default --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'   # MANAGER_GATEWAY_BIND/URL
@@ -52,7 +59,8 @@ Do not `enable` the new unit until it has proven itself; disable the old one at 
 
 Check, in this order:
 1. The container reaches the gateway: `docker exec pi-demo node -e "fetch(process.env.MANAGER_GATEWAY_URL+'/healthz').then(r=>console.log(r.status))"` prints 200.
-   If not, check the host firewall for the Pi compose network to the gateway address and port.
+   If not, the host firewall is the usual cause (ufw denies incoming by default). The one rule needed, scoped to the Pi compose
+   network and the gateway address only: `sudo ufw allow from 172.18.0.0/16 to 172.18.0.1 port 7079 proto tcp comment 'Manager gateway: Pi compose network only'`.
 2. In Telegram: `/status`, `/agents` (lists the catalog), then ask "which agents can review code?" (uses `somework_catalog`: proves the extension loaded).
 3. Ask it to run something read-only, then something that writes: the approval prompt must arrive and nothing may exist in the domain
    until `/approve`.

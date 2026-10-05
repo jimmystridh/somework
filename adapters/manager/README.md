@@ -51,5 +51,5 @@ decides *when* to look; `TaskTracker` and `InboxReader` decide *what* changed, s
 (and a real nats-server) from `sdk/typescript/test/harness.ts`; Telegram and Pi are faked, no model or network calls.
 
 ```bash
-npm install && npm test
+npm ci && npm test -w @somework/manager      # from the repository root (npm workspace)
 ```

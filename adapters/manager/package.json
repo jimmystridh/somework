@@ -12,6 +12,6 @@
     "start": "node src/main.ts"
   },
   "dependencies": {
-    "@somework/sdk": "file:../../sdk/typescript"
+    "@somework/sdk": "0.1.0"
   }
 }

@@ -8,7 +8,8 @@ Conflicts=pi-telegram.service
 Type=simple
 WorkingDirectory=/home/js/somework-manager/adapters/manager
 EnvironmentFile=/home/js/.config/agent-cluster-telegram/manager.env
-ExecStart=/usr/bin/node src/main.ts
+# the distro Node on the host is built without TypeScript support: use the official tarball (see README, step 2)
+ExecStart=/home/js/somework-manager/node/bin/node src/main.ts
 ExecStopPost=-/usr/bin/docker stop --timeout 15 pi-demo
 Restart=on-failure
 RestartSec=15
