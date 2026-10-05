@@ -72,8 +72,11 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
   request context read. Needs a fine-grained read-only token (contents + pull requests read).
 - The repository skills it should use are configured by name only; whether they behave well when
   loaded as "index + open on demand" is untested.
-- The demo reviewer (code.review v1/v2) is still enrolled next to the real one. Retire it when no
-  requester uses it.
+- The demo reviewer (code.review v1/v2) was retired on 2026-10-05: the agent is disabled and its card was
+  re-registered with no capabilities (the catalog had kept offering a disabled agent, so tasks would
+  have queued forever). Its original card is kept on the domain host as `pilot-reviewer.original.json`.
+  Lesson: disabling an agent does not remove it from the catalog; withdraw its card as well. There is
+  no admin command for withdrawing a card; consider adding one.
 - Its sandbox reaches the code host through an allow-listed proxy because the kit clones through
   the sandbox. A design that clones in the harness (no sandbox egress at all) would be tighter.
 
@@ -103,6 +106,28 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
   inbox) would give true push.
 - Approvals live in memory: a restart means "denied".
 - The manager has no capability card, so it is not in the catalog.
+
+--------------------------------------------------------------------------------------
+6b. CHATTING WITH AGENTS (messages to an agent are never answered)
+--------------------------------------------------------------------------------------
+Found 2026-10-05 from telemetry: a message sent to an agent through the manager was delivered (it sits
+in that agent's inbox, 2 unread at the time) but nothing replied. Every agent role only claims and runs
+tasks; none has a message handler. The manager polled the inbox several times and got nothing.
+- Decide what "chat with an agent" means. Options: (a) a short, bounded model turn with the agent's
+  own persona and read-only context, answered in the same conversation; (b) route the message to a
+  task ("answer this question") so budgets and approvals apply as usual; (c) say plainly "I take
+  tasks, not chat" automatically so the sender is not left waiting.
+- Whatever is chosen belongs in the kit once (message wake -> handler -> reply), switched on per role.
+- Needs guards: only answer allow-listed senders, rate limit and a token budget per sender and per
+  day, no replying to automated senders in a loop (two agents answering each other), never act on
+  instructions in a message without the normal approval path, and no tools beyond read-only.
+- Until then the manager should not offer "message an agent" as if a reply would come, and a message
+  with no reader should time out visibly instead of being polled silently.
+- Requester inboxes are never read and just grow (one requester shows 92 unread, another 30: old task
+  events). Decide a retention or consume-and-discard policy for requesters that do not read them.
+- The manager chose code.review@2 (the demo stub) because it was listed first and its input shape was
+  easy to satisfy. Make the manager prefer the highest version and read the capability's description
+  and required fields; report refusals instead of retrying a different capability silently.
 
 --------------------------------------------------------------------------------------
 7. DOMAIN / PLATFORM
