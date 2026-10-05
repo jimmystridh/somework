@@ -1,9 +1,9 @@
 # Reviewer on the agent Docker host: the harness and a sandbox, isolated from each other, in their own compose project.
-# - `sandbox-net` is internal: nothing on it has a route out. The reviewer's bash is read-only inspection, so its sandbox needs no network
-#   at all, and there is deliberately no egress proxy here (the developer role's compose project has one).
+# - `sandbox-net` is internal: nothing on it has a route out except the egress proxy. The kit runs the clone through the sandbox, so the
+#   sandbox needs the code host; the proxy admits only that (default github.com), private ranges are always refused.
 # - The harness holds the credentials (its OWN SomeWork key, its OWN model login, an optional READ-ONLY git token), talks to the sandbox over
-#   `sandbox-net`, and reaches the domain, the model API and the code host over `outside`. The clone happens in the harness: the sandbox
-#   only ever sees the checked-out files.
+#   `sandbox-net`, and reaches the domain, the model API and the code host over `outside`. The git token is handed to a git command only
+#   while it runs (and only for GIT_TOKEN_HOSTS), never to the model's tools.
 # - The sandbox image is the developer role's `somework-pi-sandbox` (a role-agnostic daemon); only the harness image is the reviewer's.
 name: somework-reviewer
 
@@ -86,6 +86,9 @@ services:
       SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
       SANDBOX_ROOT: /workspace
       SANDBOX_PORT: "7070"
+      HTTPS_PROXY: http://egress:8888
+      HTTP_PROXY: http://egress:8888
+      NO_PROXY: sandbox,localhost,127.0.0.1
     volumes:
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - workspace:/workspace
@@ -98,6 +101,18 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
+
+  # The sandbox's only way out: the code host (git clone/fetch), nothing else.
+  egress:
+    <<: *hardened
+    image: somework-pi-egress:${SANDBOX_VERSION:?set SANDBOX_VERSION}
+    user: "10003:10003"
+    networks: [sandbox-net, outside]
+    environment:
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com}
+      EGRESS_PORTS: "443,80"
+    mem_limit: 128m
+    pids_limit: 64
 
   # One-shot: named volumes start root-owned but each service runs as its own uid.
   #   docker compose --profile init run --rm init-volumes

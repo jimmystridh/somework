@@ -6,13 +6,14 @@ Two containers in their own compose project (`deploy/compose.yaml`, project `som
 * **Own everything.** Own SomeWork identity (`agent/reviewer`), own model login, own sandbox volume and token, own state volume, own health
   port (`127.0.0.1:8082`). Nothing is shared with the developer role except the *image* of the sandbox daemon, which is role-agnostic (the
   read-only policy lives in the harness).
-* **No egress proxy.** The reviewer's bash is read-only inspection (see "What the model may run" in `../README.md`), so its sandbox sits on an
-  internal network with no route out at all. The clone, the model API and the code host are reached by the harness, never by a tool.
+* **A narrow egress proxy.** The reviewer's bash is read-only inspection (see "What the model may run" in `../README.md`), but the kit runs
+  `git clone` and `git fetch` through the sandbox, so the sandbox reaches the code host through an allow-listed proxy (default `github.com`
+  and its content hosts, `EGRESS_ALLOW` in `.env` to change; private ranges are always refused). The model API is reached by the harness only.
 * **No write token.** The only code-host credential is an optional read-only token (below). The role never pushes, never opens a pull
   request and never posts a comment.
 
 Prerequisites: the domain with its TLS proxy and private CA (root `deploy/README.md`), Docker on the host, the developer role's sandbox
-image (`somework-pi-sandbox:<tag>`, built from `adapters/pi/Dockerfile --target sandbox`; or build it as in step 3).
+and egress images (`somework-pi-sandbox:<tag>` and `somework-pi-egress:<tag>`, built from `adapters/pi/Dockerfile`; or build them as in step 3).
 
 ## 1. Identity and card (on the domain host)
 ```bash
@@ -69,6 +70,7 @@ read from the checked-out ref; empty or unset means none. Overlays that adapt a 
 docker build -f adapters/reviewer/Dockerfile --target agent -t somework-reviewer:<tag> .
 # and, if the host does not have it yet, the developer role's sandbox image
 docker build -f adapters/pi/Dockerfile --target sandbox -t somework-pi-sandbox:<tag> .
+docker build -f adapters/pi/Dockerfile --target egress -t somework-pi-egress:<tag> .
 
 cd adapters/reviewer/deploy            # or wherever compose.yaml and .env live on the host
 docker compose --profile init run --rm -T init-volumes </dev/null
