@@ -1,0 +1,36 @@
+# VM102 (agent Docker host): one SomeWork worker in its own container, next to (and isolated from) other agents.
+# No Docker socket, no host mounts other than the read-only config and key directory, nothing published.
+name: somework-worker
+
+services:
+  worker:
+    image: somework-worker:${SOMEWORK_VERSION:?set SOMEWORK_VERSION to the built image tag}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    privileged: false
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["run", "--mode", "worker"]
+    environment:
+      SOMEWORK_SIDECAR_CONFIG: /etc/somework/worker.toml
+      SOMEWORK_DOMAIN_URL: ${SOMEWORK_DOMAIN_URL:?https URL of the domain proxy}
+      SOMEWORK_KEY_FILE: /run/somework/keys/worker.key.json
+    volumes:
+      - ./config/worker.toml:/etc/somework/worker.toml:ro
+      - ./config/ca.pem:/etc/somework/ca.pem:ro
+      - ${WORKER_KEY_DIR:?directory holding worker.key.json, owned by uid 10001, mode 0700}:/run/somework/keys:ro
+      - workspace:/workspace
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    stop_grace_period: 30s   # the sidecar waits up to 10 s for in-flight work after SIGTERM
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+volumes:
+  workspace:

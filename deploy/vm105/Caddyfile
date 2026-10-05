@@ -1,0 +1,12 @@
+# Terminates TLS for the domain's REST API. Certificates come from deploy/scripts/make-private-ca.sh.
+{
+	admin off
+	auto_https off
+}
+
+:8443 {
+	tls /certs/domain.pem /certs/domain.key
+	reverse_proxy domain:8080 {
+		flush_interval -1
+	}
+}

@@ -1,0 +1,27 @@
+# Copy to vm105/config/somework.toml (mode 0600) and fill in the CHANGE_ME values. Secrets live only in this file.
+[domain]
+id = "development"
+db = "/data/somework.db"
+listen = "0.0.0.0:8080"                      # reachable only from the proxy on the compose network
+public_url = "https://somework.internal:8443" # what clients and workers use: must match the proxy certificate
+master_key = "CHANGE_ME"                      # base64url of 32 random bytes: openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
+                                              # derives per-agent broker credentials. Back it up separately.
+
+[objects]
+dir = "/data/objects"
+
+[nats]
+url = "tls://nats:4222"                      # how the domain reaches the broker (certificate must list the name `nats`)
+client_url = "tls://nats.internal:4222"      # how workers reach it (certificate must list this name or the private IP)
+user = "somework-domain"
+password = "CHANGE_ME"                       # the domain's own broker login; render-nats-conf reads it from here
+users_file = "/etc/nats/users.conf"
+# no reload_command: the nats-reloader service signals the broker when users.conf changes
+tls_required = true
+tls_ca_file = "/etc/somework/ca.pem"
+work_max_age_days = 7
+inbox_max_age_days = 14
+events_max_age_days = 7
+subscriptions_max_age_days = 7
+
+# Leave [ui] out of a pilot unless an OIDC login is configured. `dev_token_login` is for local development only.

@@ -1,0 +1,20 @@
+# Copy to vm102/config/worker.toml. domain_url and key_file come from the environment in compose.yaml.
+mode = "worker"
+
+[tls]
+required = true                      # refuse a plaintext domain URL or broker
+ca_file = "/etc/somework/ca.pem"     # the pilot CA; only it is trusted
+
+[worker]
+wake = "nats"                        # use "poll" to roll back to HTTP long-poll only
+concurrency = 1
+lease_seconds = 30
+reconcile_seconds = 25               # HTTP sweep for queued tasks next to NATS
+
+# Trusted, allowlisted, read-only/idempotent executors only: the executor runs as the same user and can read the key
+# file. It starts with an empty environment plus PATH, LANG, LC_ALL, LC_CTYPE, TZ, TMPDIR and what is listed here.
+[worker.adapter]
+kind = "exec"
+command = ["/opt/executors/run"]
+env_allow = []
+env = {}

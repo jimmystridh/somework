@@ -1,0 +1,145 @@
+# VM105 (private services): the SomeWork domain, a private NATS + JetStream broker, and a TLS-terminating proxy.
+# Memory limits are sized for a 2 GB host that also runs other services (nats 256m + domain 512m + proxy 96m).
+# Nothing here is published beyond PRIVATE_IP. See deploy/README.md for the order of operations.
+name: somework-domain
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  privileged: false
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+services:
+  nats:
+    <<: *hardened
+    image: nats:2.15-alpine@sha256:ac8f88a6494bffc2c2a5289a0ca61cb28a9145c11ba5677cf24265d07f46d8d4
+    user: "10001:10001"
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    ports:
+      - "${PRIVATE_IP:?set PRIVATE_IP to the VM's private address}:4222:4222"
+    volumes:
+      - nats-conf:/etc/nats          # nats-server.conf + users.conf, rendered by `somework admin render-nats-conf`
+      - nats-data:/data/jetstream
+      - ./certs/nats.pem:/certs/nats.pem:ro
+      - ./certs/nats.key:/certs/nats.key:ro
+    mem_limit: 256m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 4222"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # Reloads the broker when the domain rewrites users.conf (enrolling an agent). It shares the broker's PID namespace, not
+  # the domain: a shared namespace dies with its init process, so sharing it with the domain would take the domain down
+  # whenever the broker stops. This container dies with the broker and comes back with it.
+  nats-reloader:
+    <<: *hardened
+    image: nats:2.15-alpine@sha256:ac8f88a6494bffc2c2a5289a0ca61cb28a9145c11ba5677cf24265d07f46d8d4
+    user: "10001:10001"
+    pid: "service:nats"
+    depends_on:
+      nats: {condition: service_healthy}
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        last=""
+        while true; do
+          cur=$$(md5sum /etc/nats/users.conf 2>/dev/null | cut -d" " -f1)
+          if [ -n "$$last" ] && [ "$$cur" != "$$last" ]; then kill -HUP 1 && echo "users.conf changed: broker reloaded"; fi
+          last=$$cur
+          sleep 1
+        done
+    volumes:
+      - nats-conf:/etc/nats:ro
+    mem_limit: 16m
+    pids_limit: 16
+
+  domain:
+    <<: *hardened
+    image: somework-server:${SOMEWORK_VERSION:?set SOMEWORK_VERSION to the built image tag}
+    user: "10001:10001"
+    depends_on:
+      nats: {condition: service_healthy}
+    command: ["serve", "--config", "/etc/somework/somework.toml"]
+    volumes:
+      - ./config/somework.toml:/etc/somework/somework.toml:ro
+      - ./certs/ca.pem:/etc/somework/ca.pem:ro
+      - domain-data:/data
+      - nats-conf:/etc/nats
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 512
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+
+  # One-shot: named volumes start out root-owned, but every service here runs as uid 10001.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    image: somework-server:${SOMEWORK_VERSION:?set SOMEWORK_VERSION to the built image tag}
+    profiles: ["init"]
+    user: "0:0"
+    entrypoint: ["chown", "-R", "10001:10001", "/etc/nats", "/data/jetstream", "/data/domain"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - nats-conf:/etc/nats
+      - nats-data:/data/jetstream
+      - domain-data:/data/domain
+
+  # One-off administration (render-nats-conf, bootstrap, enroll-agent, register-card, backup, ...). Separate from `domain`
+  # because `domain` shares the broker's PID namespace and cannot start before the broker exists.
+  #   docker compose --profile tools run --rm ops <somework arguments>
+  ops:
+    image: somework-server:${SOMEWORK_VERSION:?set SOMEWORK_VERSION to the built image tag}
+    profiles: ["tools"]
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./config/somework.toml:/etc/somework/somework.toml:ro
+      - ./certs/ca.pem:/etc/somework/ca.pem:ro
+      - domain-data:/data
+      - nats-conf:/etc/nats
+      - ./cards:/cards:ro
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+
+  proxy:
+    <<: *hardened
+    image: caddy:2.11-alpine@sha256:881bbc60f9986d5ab8e7cfd6cf7e4ef3c9c0439fef2429d035d065577882f028
+    user: "10001:10001"
+    # the caddy binary carries a file capability (cap_net_bind_service); with every capability dropped and
+    # no-new-privileges it cannot even exec. It listens on 8443, so this is the only capability it gets.
+    cap_add: [NET_BIND_SERVICE]
+    depends_on:
+      domain: {condition: service_healthy}
+    environment:
+      XDG_DATA_HOME: /tmp/caddy-data
+      XDG_CONFIG_HOME: /tmp/caddy-config
+    ports:
+      - "${PRIVATE_IP}:8443:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./certs/domain.pem:/certs/domain.pem:ro
+      - ./certs/domain.key:/certs/domain.key:ro
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    mem_limit: 96m
+    pids_limit: 128
+
+volumes:
+  nats-conf:
+  nats-data:
+  domain-data:
