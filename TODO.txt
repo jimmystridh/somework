@@ -4,6 +4,43 @@ Everything below is known, not yet done. Kept generic on purpose (no hosts, addr
 keys or secrets). [DECISION] marks items that wait for a person, not for work.
 
 --------------------------------------------------------------------------------------
+0. FINDINGS FROM THE LOG REVIEW (central Grafana/Loki), 2026-10-05
+--------------------------------------------------------------------------------------
+Fixed in this pass:
+- The Windows clones shipped their logs as the original machine (same host label, VM id and write
+  account) and their Alloy had a corrupt write-ahead log and replayed old events that Loki rejected.
+  Each clone now has its own write account, host label and VM id, a clean write-ahead log, and ships
+  the agent's own JSON log files. Script: deploy/windows/set-log-identity.ps1 (run it on every new
+  clone, after clone-personalize.ps1; the central side needs a matching write account first).
+- A new clone re-sends the original's old build logs once (about 36k lines). Cosmetic; a blunt
+  "tail from end" setting would drop the start of every fresh build log, so it is left alone.
+- Dashboard + alerts for all agents, runtime registration for the manager, boot persistence for the
+  manager, developer on the refactored images (see the sections below).
+Not a problem (checked):
+- Proxy "lookup domain ... server misbehaving" (50 lines): one burst at first deployment, when the
+  proxy started three minutes before the domain container existed. Resolution works.
+- Windows "Task Start Failed" (hundreds): built-in Windows Update tasks that cannot run on the
+  evaluation image. Windows TPM/BitLocker driver events: normal on a VM.
+- Linux "networkd-dispatcher: Interface vethXXXX not found" (hundreds): Docker interfaces that vanish
+  before the dispatcher script runs. Harmless noise; filter it if it bothers anyone.
+- NATS-TLS warnings and failed jobs on the agents VM: from the bugs fixed on deployment day.
+Still open (needs a decision or access I do not have):
+- HYPERVISOR EXPOSURE: about 470 failed root logins per day against the public web UI (one source
+  address) plus constant ssh probing. The UI and ssh are reachable from the internet. Options, in
+  order of value: two-factor for the root account; restrict the UI/ssh to the tailnet or known
+  addresses (the owner uses the UI from outside the tailnet, so this needs care); a ban-on-failure
+  tool on the host. All need root on the hypervisor. An alert (>50 failures/hour) now exists.
+- BACKUP SPACE: the backup storage is about 76% full (roughly 78 GB free of 322). The Windows template and
+  the two clones are not in the nightly job; each has a 400 GB disk, so adding them needs more backup
+  space or exclusions (never back up the clones' reproducible state, back up the template once).
+  [DECISION]
+- The QA app on the QA machine cannot create a session: the web back end needs the product's WEB
+  database schema, which the installed (desktop) product does not have. The repository's own route
+  restores it from two backup files in a cloud blob container. That needs an interactive `az login`
+  by the owner (conditional access); until then QA local mode cannot verify a ticket. The exact
+  command: az login --tenant <tenant id from the repository's scripts> --scope https://storage.azure.com/.default
+
+--------------------------------------------------------------------------------------
 1. FLEET DASHBOARD (SomeWork section)
 --------------------------------------------------------------------------------------
 - Principal enabled/disabled state and side-effect level are not shown. They need the
@@ -13,8 +50,8 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
 - Domain version and uptime are not shown. The domain API does not expose them.
 - JetStream storage use is not shown. Only consumer lag is available (from /metrics); the broker
   monitoring port is deliberately closed.
-- The manager has no registered runtime, so its liveness is "unknown". Either let it register a
-  runtime or show requesters without a liveness column.
+- (resolved 2026-10-05) The manager now has a capability-less card and registers a runtime with a heartbeat,
+  so the dashboard shows it alive.
 - No per-agent log links (the central log stack exists; the links are not wired).
 - Old content-hashed asset files remain in the dashboard bundle directory on its host (harmless).
 - The two failed tasks in the 24 h window are history from deployment debugging; they will age out.
@@ -22,11 +59,16 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
 --------------------------------------------------------------------------------------
 2. QA AGENT (qa.verify)                                   status: being built, NOT deployed
 --------------------------------------------------------------------------------------
-- Local mode needs the product's own back-end server running unattended on the QA machine. Today
-  it connects to SQL Server and then exits after about 30 s with no output when started from an
-  SSH or background session. Probably a GUI process that wants an interactive desktop. Under
-  investigation. Until this works the QA agent cannot verify anything end to end.
-- `bun` is not installed on the QA machine; the web app's scripts need it (or an equivalent plan).
+- (done) The product's back-end server now runs unattended on the QA machine (as a hidden SYSTEM task,
+  no desktop, no autologon, no stored credential). The exit was a missing config.json (it holds the port
+  and the database connection); the file must be UTF-8 WITHOUT a byte-order mark, or the server hangs
+  silently. `bun` is installed (checksum verified) and the web app runs in auth-less local mode as an
+  unprivileged user. Start/stop scripts are idempotent. It does NOT start by itself at boot (by design;
+  first start after boot takes about 3 minutes because the database starts late).
+- BLOCKER: the web database schema is missing (see section 0). Nothing can be verified until it is
+  restored. Everything after that is mechanical (the QA machine report lists the steps).
+- Not tested: starting and stopping the app as the future unprivileged QA service account (a helper
+  that grants it the run right on the two tasks is written and parse-checked, never run).
 - The pre-built back-end on the machine is from one fixed commit. Frontend tickets are verified
   against that back-end revision, not the ticket's. The result must report both revisions.
 - Local mode covers the practice companies only, not the shared test back-end's data. Fixtures must
@@ -83,8 +125,8 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
 --------------------------------------------------------------------------------------
 5. DEVELOPER AGENT (code.agent)
 --------------------------------------------------------------------------------------
-- The running stack is still the previous image generation; the refactored images are built but
-  not switched over (and the switch has not been tested against the real model).
+- (resolved 2026-10-05) The refactored images are running and a real task (file edit on the demo repository)
+  succeeded on them.
 - The two extra model providers are wired but not credentialed or enabled. [DECISION] one
   runs under a personal account and the other routes to third-party model hosts: opt-in only.
 - Its repository token expires in early November 2026.
@@ -97,8 +139,8 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
 - Never proven through real Telegram yet: /status, /agents, the catalog tool inside the container,
   and a write approval round trip are untested. The extension was only tested against a stub of
   the tool-registration API.
-- The new systemd unit is not enabled; the old bridge unit is still enabled and conflicts with it.
-  After a host reboot the old bridge would start. Decide, then enable/disable accordingly.
+- (resolved 2026-10-05) The new unit is enabled and the old bridge unit disabled, so a host reboot brings the
+  manager back (lingering is on).
 - The gateway binds to the Docker bridge address of the Pi network and a firewall rule allows
   only that subnet. If the network is recreated with another subnet, both must be updated.
 - Requesters get no push for their own tasks: the domain only wakes the assignee. The manager
@@ -143,8 +185,9 @@ tasks; none has a message handler. The manager polled the inbox several times an
   minimum-age policy (an explicit, scoped override by the owner). Re-check once the age passes;
   a transitive telemetry package came with it.
 - No distributed tracing; logs and the fleet dashboard are the observability story.
-- Loki dashboard and alert rules for the agents exist in the repository but are not loaded into
-  the central stack. The optional metrics-based variants are unused.
+- (resolved 2026-10-05) A "SomeWork Agents" dashboard and seven log-derived alert rules are loaded into the
+  central Grafana by deploy/grafana/provision.py (idempotent; re-run after changes). There is still no
+  notification target: alert state is only visible in Grafana. The metrics-based variants are unused.
 
 --------------------------------------------------------------------------------------
 8. INFRASTRUCTURE / OPERATIONS

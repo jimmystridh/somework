@@ -24,7 +24,11 @@ would deregister the original. The script therefore refuses to run while a netwo
    (the instance is whatever the golden image's SQL Server instance is called; the roots are optional lists of installed-software folders and
    registry keys to scan for the old name)
    It waits for the delayed SQL start, repoints `@@SERVERNAME`, and reports (never rewrites) leftovers that still mention the old name.
-5. Per machine, not done by the script: join Tailscale with an auth key if wanted, enroll its own SomeWork agent identity and give it
+5. Log identity (needs the central log side first): create a write-only account for the clone on the log gateway, then run
+   `set-log-identity.ps1 -HostLabel <name> -VmId <id> [-AgentLogService <role>]` on the clone with the account's password on STANDARD INPUT.
+   Without this the clone ships its logs as the machine it was cloned from, its log shipper complains about a corrupt write-ahead log, and
+   old events are rejected. It also adds the agent's own JSON log files as a source. A clone re-sends the original's old build log once.
+6. Per machine, not done by the scripts: join Tailscale with an auth key if wanted, enroll its own SomeWork agent identity and give it
    its own model login. Licensing is the image's: an evaluation image expires everywhere on the same date.
 
 PowerShell 5.1 notes: no `&&`; write `"${name}:"` instead of `"$name:"` inside strings.
