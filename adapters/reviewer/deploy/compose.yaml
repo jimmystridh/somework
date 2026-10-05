@@ -1,0 +1,117 @@
+# Reviewer on the agent Docker host: the harness and a sandbox, isolated from each other, in their own compose project.
+# - `sandbox-net` is internal: nothing on it has a route out. The reviewer's bash is read-only inspection, so its sandbox needs no network
+#   at all, and there is deliberately no egress proxy here (the developer role's compose project has one).
+# - The harness holds the credentials (its OWN SomeWork key, its OWN model login, an optional READ-ONLY git token), talks to the sandbox over
+#   `sandbox-net`, and reaches the domain, the model API and the code host over `outside`. The clone happens in the harness: the sandbox
+#   only ever sees the checked-out files.
+# - The sandbox image is the developer role's `somework-pi-sandbox` (a role-agnostic daemon); only the harness image is the reviewer's.
+name: somework-reviewer
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  privileged: false
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+networks:
+  sandbox-net:
+    internal: true
+  outside: {}
+
+services:
+  agent:
+    <<: *hardened
+    image: somework-reviewer:${REVIEWER_VERSION:?set REVIEWER_VERSION to the built image tag}
+    user: "10001:10001"
+    group_add: ["10010"]          # reads the shared sandbox token
+    networks: [sandbox-net, outside]
+    environment:
+      SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
+      SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
+      SOMEWORK_CA_FILE: /run/somework/ca.pem
+      SOMEWORK_REQUIRE_TLS: "1"
+      SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
+      PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
+      PI_MODEL: ${PI_MODEL:-gpt-5.5}
+      PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
+      PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}
+      PI_AUTH_FILE: /run/secrets/pi/auth.json
+      PI_STATE_DIR: /state
+      PI_CONCURRENCY: ${PI_CONCURRENCY:-2}
+      SANDBOX_URL: http://sandbox:7070
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_WORKSPACES: /workspace
+      GIT_TOKEN_FILE: /run/secrets/git-token                # optional, READ-ONLY: clone of private repositories and the pull request context
+      GIT_TOKEN_HOSTS: ${GIT_TOKEN_HOSTS:-github.com}       # the only hosts the token may ever be sent to
+      GITHUB_API: ${GITHUB_API:-}                           # only for a GitHub Enterprise API
+      SKILLS_ALLOW: ${SKILLS_ALLOW:-}                       # comma separated skill names of the repository the role may use; empty = none
+      SKILLS_OVERLAY_DIR: ${SKILLS_OVERLAY_DIR:-}
+      BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-1000000}
+      BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-30}
+      DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-5000000}
+      HEALTH_PORT: "8081"
+    volumes:
+      - ${REVIEWER_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
+      - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - ./secrets/git-token:/run/secrets/git-token:ro       # fine-grained, read-only (Contents and Pull requests: read). Must exist: create an empty file to run without one.
+      - ./skills-overlay:/run/skills-overlay:ro             # <skill>.md overlays (only used with SKILLS_OVERLAY_DIR)
+      - state:/state
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    ports: ["127.0.0.1:8082:8081"]                          # health and metrics for the host's agent (8081 belongs to the developer role)
+    depends_on:
+      sandbox: {condition: service_healthy}
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  sandbox:
+    <<: *hardened
+    image: somework-pi-sandbox:${SANDBOX_VERSION:?set SANDBOX_VERSION to the developer role's sandbox image tag}
+    user: "10002:10002"
+    group_add: ["10010"]
+    networks: [sandbox-net]
+    environment:
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_ROOT: /workspace
+      SANDBOX_PORT: "7070"
+    volumes:
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - workspace:/workspace
+    tmpfs: ["/tmp:size=256m,nosuid"]
+    mem_limit: ${SANDBOX_MEMORY:-2g}
+    cpus: ${SANDBOX_CPUS:-1}
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7070/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # One-shot: named volumes start root-owned but each service runs as its own uid.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    image: somework-reviewer:${REVIEWER_VERSION:?set REVIEWER_VERSION}
+    profiles: ["init"]
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 10001:10001 /state && chown 10002:10002 /workspace"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - state:/state
+      - workspace:/workspace
+
+volumes:
+  state:
+  workspace:

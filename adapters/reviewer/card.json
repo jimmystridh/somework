@@ -1,0 +1,235 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/reviewer",
+  "domainId": "development",
+  "displayName": "Reviewer",
+  "description": "Read-only review of a pull request or branch: checks the change from the outside in (intent, claim, diff, review history, runtime behaviour, regression surface) and returns findings by severity. It never pushes, comments or changes anything; drafted comments are returned to the requester.",
+  "owner": {
+    "team": "platform"
+  },
+  "interfaces": [
+    {
+      "protocol": "mcp"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "code.review",
+      "version": "3",
+      "name": "Code review",
+      "description": "Give a repository (url + ref: the branch to review, as it exists on the remote) and optionally a pull request number, a ticket key and a focus. The agent reviews in its own read-only checkout and returns {verdict, summary, findings[], openQuestions[], checked[], residualRisk?, draftComments?}; the full report is attached as a Markdown artifact. Nothing is posted anywhere: posting a drafted comment is a separate, approved action by the requester. A budget (maxTokens, maxMinutes) is required. Commands outside plain read-only inspection (git diff/log/show, search, cat, ls) wait for the requester's approval (the task shows input_required; answer with {approved: true|false, reason?}); mutating commands are refused.",
+      "tags": [
+        "contract:idempotent",
+        "review"
+      ],
+      "sideEffects": "read",
+      "timeoutSeconds": 1800,
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "repository",
+          "budget"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "type": "object",
+            "required": [
+              "url",
+              "ref"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "ref": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "what to review: a branch, a tag, a commit SHA (name the full resolved SHA when handing work over) or refs/pull/<n>/head"
+              }
+            }
+          },
+          "pullRequest": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pull request number: enables the PR context (description, files, checks, review threads) when the agent has a read-only token"
+          },
+          "ticket": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "ticket key the change belongs to, for the intent check"
+          },
+          "focus": {
+            "type": "string",
+            "maxLength": 4000,
+            "description": "what the requester wants looked at first"
+          },
+          "agentKey": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "stable key that selects the conversation; default: repository + the task's conversation"
+          },
+          "model": {
+            "type": "object",
+            "required": [
+              "provider",
+              "id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "description": "optional model, checked against the agent's allowlist"
+          },
+          "budget": {
+            "type": "object",
+            "required": [
+              "maxTokens",
+              "maxMinutes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "maxMinutes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "verdict",
+          "summary",
+          "findings"
+        ],
+        "properties": {
+          "verdict": {
+            "enum": [
+              "approve",
+              "request_changes",
+              "needs_clarification"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "severity",
+                "title",
+                "detail"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "severity": {
+                  "enum": [
+                    "P0",
+                    "P1",
+                    "P2",
+                    "P3"
+                  ],
+                  "description": "P0 blocks release, P1 must be fixed before merge, P2 should be fixed, P3 minor"
+                },
+                "file": {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                "line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                },
+                "detail": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4000,
+                  "description": "the concrete failure mode and why it matters"
+                },
+                "suggestion": {
+                  "type": "string",
+                  "maxLength": 2000
+                }
+              }
+            }
+          },
+          "openQuestions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "checked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "residualRisk": {
+            "type": "string"
+          },
+          "draftComments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "file",
+                "line",
+                "body"
+              ],
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "body": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "true when findings or text were cut to the size limits; the report artifact has the same cut"
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "totalTokens": {
+                "type": "integer"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            }
+          },
+          "baseSha": {
+            "type": "string",
+            "description": "the full commit SHA that was reviewed"
+          }
+        }
+      }
+    }
+  ]
+}
