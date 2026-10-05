@@ -53,6 +53,26 @@ Compact EdDSA JWS, header `{"alg":"EdDSA","typ":"somework+assertion","kid":"<kin
 `aud` = `["somework:<domainId>"]`, `iat`, `exp` = `iat + 120`, random `jti`, sent as `Authorization: Bearer …`. The dashboard's signer is tested
 against an assertion produced by this repository's TypeScript SDK (identical bytes for identical claims).
 
+## Events and reactions
+
+The SomeWork section ends with an Events part (design: `docs/EVENTS.md`). It shows metadata only: no event data, no task input, no
+handler source and no error text from an agent. Rule names, owners, topic selectors, capability ids, counters, short task ids and fixed reason
+codes pass through the same restricted-alphabet readers as everything else; free text (firing details, a handler's last error, the wording of
+a disabled reason) is never read.
+
+| What it shows | Where it comes from | Identity / config |
+|---|---|---|
+| Rules: owner, kind (reaction or agent subscription), selector, capability, active or paused, last fired, fired and skipped by reason, the last five firings | `GET /v1/rules` and `GET /v1/rules/{name}/firings?limit=5` (firings are read again only when a rule's counters moved) | `ops.read`, which the existing `agent/fleet-reader` already holds: the rules routes accept `rules.manage` **or** `ops.read` for reads (`require_rules_read` in the domain). Nothing new to grant. An older domain answers 404 and the rules stay "unknown". |
+| Events published and duplicates, reactions fired and skipped by reason | domain `/metrics`: `somework_events_published_total`, `somework_events_duplicate_total`, `somework_reactions_fired_total`, `somework_reactions_skipped_total{reason}` | unauthenticated, as before |
+| Awaiting approval | `pendingApprovals` of `GET /v1/admin/overview` | `ops.read`; the approvals list itself is not read (it would need another action) |
+| Hub and receiver: per source received, published, duplicate, dropped, dead letters, failures, forwarded, paused; clock schedules with ticks, missed runs and next run; receiver queue, oldest queued age, reachability | the hub's `/metrics` (`hub_*`) and, when `hub-admin-token` exists, its `GET /admin/stats` (paused flags and next runs; shape `{sources: [{name, paused}], schedules: [{name, nextRunAt}], receiver: {queued, oldestAgeSeconds}}`). Without the route or the token those two stay "unknown". | `HUB_URL` (https with `hub-ca.pem`, or plain http only in preview mode); optional secrets-directory file `hub-admin-token` |
+| Per agent: handlers (name, version, enabled, runs, errors, drops, wakes, reason code when disabled) and the events token pool (used, limit, throttled, stopped) next to the tasks pool | each agent's `/status` endpoint (kit health port) | secrets-directory file `agents-health.json`: `[{"id": "agent/x", "url": "http://host:port/status"}]`, plain or TLS URLs without credentials or query |
+
+Alerts (computed on the server, fixed wording): a stopped or throttled events pool, a disabled handler, dead letters above zero, the hub
+losing the receiver, the oldest queued webhook older than 5 minutes, a reaction rule whose last three firings were all skipped, an unreachable
+agent status endpoint or hub. Everything is read by the single 10 second collector; viewers only read the cached sample. Tests feed
+every reader responses stuffed with content-bearing fields and assert none of it reaches the output.
+
 ## Rolling back
 
 1. The dashboard: retag the previous image and recreate the container (`docker tag <fleet image>-prev <fleet image>` then

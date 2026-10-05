@@ -6,12 +6,14 @@ approval_requested, service_started, NATS fallback warnings), so it works for ev
 agents' JSON files and the manager's journal. No notification target is configured (alert state is visible in Grafana only), like the
 existing storage alert.
 
-  python3 deploy/grafana/provision.py --url https://grafana.example --datasource loki-uid --folder "Agent Cluster"
+  python3 deploy/grafana/provision.py --url https://grafana.example --datasource loki-uid --folder "Agent Cluster" \\
+      [--hub-url-file hub-url.txt --hub-ca-file ca.pem]   # also route the SomeWork alerts to the event hub (webhook contact point + policy route)
 
 Authentication is whatever the Grafana front end gives the caller (here: the Tailscale identity); pass --token for a service account token.
 """
 import argparse
 import json
+import pathlib
 import urllib.error
 import urllib.request
 
@@ -103,6 +105,24 @@ def rules(ds, folder):
     ]
 
 
+CONTACT_POINT_UID = "somework-hub"
+ROUTE_MATCHER = ["system", "=", "somework"]
+
+
+def contact_point(hub_url, ca_pem):
+    settings = {"url": hub_url, "httpMethod": "POST", "maxAlerts": 20}
+    if ca_pem:
+        settings["tlsConfig"] = {"caCertificate": ca_pem, "insecureSkipVerify": False}
+    return {"uid": CONTACT_POINT_UID, "name": CONTACT_POINT_UID, "type": "webhook", "settings": settings, "disableResolveMessage": False}
+
+
+def with_hub_route(tree):
+    """The notification policy tree with exactly one route sending the SomeWork alerts to the hub; everything else in the tree is kept."""
+    routes = [r for r in (tree.get("routes") or []) if r.get("receiver") != CONTACT_POINT_UID]
+    routes.append({"receiver": CONTACT_POINT_UID, "object_matchers": [ROUTE_MATCHER], "group_by": ["alertname"], "group_wait": "10s", "group_interval": "1m", "repeat_interval": "6h"})
+    return {**tree, "routes": routes}
+
+
 class Api:
     def __init__(self, base, token=None):
         self.base, self.token = base.rstrip("/"), token
@@ -124,6 +144,8 @@ def main():
     ap.add_argument("--datasource", required=True, help="uid of the Loki data source")
     ap.add_argument("--folder", default="Agent Cluster", help="title of an existing folder")
     ap.add_argument("--token")
+    ap.add_argument("--hub-url-file", help="file holding the hub's internal listener URL for source grafana (it contains a secret); creates the webhook contact point and the policy route")
+    ap.add_argument("--hub-ca-file", help="PEM file of the CA that signed the hub's TLS certificate (for https hub URLs)")
     a = ap.parse_args()
     api = Api(a.url, a.token)
 
@@ -134,6 +156,20 @@ def main():
 
     status, body = api.call("POST", "/api/dashboards/db", {"dashboard": dashboard(a.datasource), "folderUid": folder, "overwrite": True, "message": "provision.py"})
     print("dashboard:", status, (body or {}).get("url") if isinstance(body, dict) else body)
+
+    if a.hub_url_file:
+        hub_url = pathlib.Path(a.hub_url_file).read_text().strip()
+        ca_pem = pathlib.Path(a.hub_ca_file).read_text() if a.hub_ca_file else None
+        headers = {"X-Disable-Provenance": "true"}
+        cp = contact_point(hub_url, ca_pem)
+        status, body = api.call("PUT", f"/api/v1/provisioning/contact-points/{CONTACT_POINT_UID}", cp, headers)
+        if status == 404:
+            status, body = api.call("POST", "/api/v1/provisioning/contact-points", cp, headers)
+        print("contact point", CONTACT_POINT_UID, status, "" if status < 300 else body)
+        status, tree = api.call("GET", "/api/v1/provisioning/policies")
+        if status == 200:
+            status, body = api.call("PUT", "/api/v1/provisioning/policies", with_hub_route(tree), headers)
+            print("notification policy", status, "" if status < 300 else body)
 
     for r in rules(a.datasource, folder):
         headers = {"X-Disable-Provenance": "true"}
