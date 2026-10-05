@@ -1,0 +1,21 @@
+[Unit]
+Description=Manager agent: Telegram front, Pi brain, SomeWork gateway
+After=default.target
+# both units start the container named pi-demo: never run them together
+Conflicts=pi-telegram.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/js/somework-manager/adapters/manager
+EnvironmentFile=/home/js/.config/agent-cluster-telegram/manager.env
+ExecStart=/usr/bin/node src/main.ts
+ExecStopPost=-/usr/bin/docker stop --timeout 15 pi-demo
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,6 @@
+# Override for ~/agent-cluster-pi/compose.pi.yaml (listed after it in MANAGER_COMPOSE_FILES). It only adds the Manager's Pi extension.
+# The gateway URL and token reach the container as `-e` variables from the bridge process; no SomeWork key is mounted here.
+services:
+  pi:
+    volumes:
+      - /home/js/somework-manager/adapters/manager/extension:/opt/manager:ro

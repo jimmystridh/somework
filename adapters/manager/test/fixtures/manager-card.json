@@ -1,0 +1,80 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/ts-worker",
+  "domainId": "development",
+  "displayName": "Manager test target",
+  "description": "Echoes text (read) and applies a change (write); used by the Manager end-to-end tests",
+  "owner": {
+    "team": "platform"
+  },
+  "capabilities": [
+    {
+      "id": "code.echo",
+      "version": "1",
+      "name": "Echo",
+      "description": "Echo the given text back",
+      "sideEffects": "read",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "echo": {
+            "type": "string"
+          }
+        }
+      },
+      "timeoutSeconds": 120
+    },
+    {
+      "id": "code.change",
+      "version": "1",
+      "name": "Apply change",
+      "description": "Apply a change to a target (writes)",
+      "sideEffects": "write",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string"
+          },
+          "secretToken": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "summary": {
+            "type": "string"
+          },
+          "prUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "timeoutSeconds": 120,
+      "tags": [
+        "contract:idempotent"
+      ]
+    }
+  ],
+  "interfaces": [
+    {
+      "protocol": "mcp"
+    }
+  ]
+}

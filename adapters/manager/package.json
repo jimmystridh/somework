@@ -1,0 +1,17 @@
+{
+  "name": "@somework/manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram-fronted Manager agent: a Pi brain that talks to the other SomeWork agents through a policy-enforcing local gateway.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@somework/sdk": "file:../../sdk/typescript"
+  }
+}
