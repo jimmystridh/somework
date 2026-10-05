@@ -371,3 +371,83 @@ describe("role hooks around the handler", () => {
 		assert.equal(requests.length, 0);
 	});
 });
+
+describe("beforeRun and afterRun", () => {
+	const readOnly = base({ git: { push: false, pullRequest: false, branchPrefix: "agent" } });
+
+	function setup(hooks: RoleHooks, execute: AgentRuntime["execute"]) {
+		const { remote } = makeRemote();
+		const workspaceRoot = join(tmp(), "workspaces");
+		const env = new NodeExecutionEnv({ cwd: workspaceRoot });
+		const logs: { event: string; fields: any }[] = [];
+		const runtime: AgentRuntime = { start: async () => {}, health: () => ({ ready: true }), close: async () => {}, execute };
+		const handler = createHandler({
+			runtime,
+			session: { env, identity: { name: "Kit", email: "kit@test.invalid" } },
+			host: new FakeHost(),
+			workspaceRoot,
+			client: { uploadArtifact: async () => ({ artifactId: "art_1" }) } as never,
+			limits: { maxTokensCap: 10_000, maxMinutesCap: 5 },
+			log: (_level, event, fields) => logs.push({ event, fields }),
+			metrics: new Metrics(),
+			profile: readOnly,
+			hooks,
+		});
+		const run = () =>
+			handler({ taskId: "task_1", task: {}, input: { repository: { url: remote, ref: "main" }, instruction: "x", budget: { maxTokens: 5000, maxMinutes: 1 } }, capability: { id: "code.agent", version: "1" } } as unknown as Job, { signal: new AbortController().signal, progress() {} } as unknown as JobControl) as Promise<any>;
+		return { run, logs };
+	}
+
+	it("runs before the model with the workspace ready, and after it, in that order", async () => {
+		const order: string[] = [];
+		const { run } = setup(
+			{
+				beforeRun: async (ctx) => void order.push(`before:${ctx.taskId}:${/^[0-9a-f]{40}$/.test(ctx.baseSha)}:${ctx.signal.aborted}`),
+				afterRun: async (ctx) => void order.push(`after:${ctx.taskId}`),
+				result: (base) => (order.push("result"), { result: base }),
+			},
+			async () => (order.push("model"), { status: "done", answer: "ok", usage: emptyUsage() }),
+		);
+		assert.equal((await run()).type, "completed");
+		assert.deepEqual(order, ["before:task_1:true:false", "model", "result", "after:task_1"]);
+	});
+
+	it("a blocked beforeRun skips the model and spends nothing, and afterRun still runs", async () => {
+		const order: string[] = [];
+		let modelCalls = 0;
+		const { run, logs } = setup(
+			{
+				beforeRun: async () => ({ blocked: { reason: "the application did not start", details: { port: 3000 } } }),
+				afterRun: async () => void order.push("after"),
+				result: (base, ctx) => ({ result: { ...base, why: ctx.blocked!.reason, answer: ctx.answer, tokens: ctx.usage.totalTokens } }),
+			},
+			async () => (modelCalls++, { status: "done", answer: "ok", usage: emptyUsage() }),
+		);
+		const outcome = await run();
+		assert.equal(modelCalls, 0);
+		assert.deepEqual([outcome.result.status, outcome.result.why, outcome.result.answer, outcome.result.tokens], ["blocked", "the application did not start", "", 0]);
+		assert.deepEqual(order, ["after"]);
+		assert.ok(logs.some((l) => l.event === "job_blocked" && l.fields.before === "run"));
+	});
+
+	it("afterRun runs when beforeRun throws, when the model fails and when the run detaches", async () => {
+		for (const [name, hooks, execute] of [
+			["beforeRun throws", { beforeRun: async () => { throw new Error("cannot start"); } }, async () => ({ status: "done", answer: "", usage: emptyUsage() })],
+			["the model throws", {}, async () => { throw new Error("model down"); }],
+			["the run detaches", {}, async () => ({ status: "detached" })],
+		] as const) {
+			let afterCalls = 0;
+			const { run } = setup({ ...hooks, afterRun: async () => void afterCalls++ }, execute as AgentRuntime["execute"]);
+			const outcome = await run();
+			assert.equal(afterCalls, 1, name);
+			if (name !== "the run detaches") assert.equal(outcome.failure.code, "job_error", name);
+			else assert.equal(outcome.type, "detach", name);
+		}
+	});
+
+	it("an afterRun that throws is logged and changes nothing", async () => {
+		const { run, logs } = setup({ afterRun: async () => { throw new Error("stop failed"); } }, async () => ({ status: "done", answer: "ok", usage: emptyUsage() }));
+		assert.equal((await run()).type, "completed");
+		assert.ok(logs.some((l) => l.event === "after_run_failed"));
+	});
+});

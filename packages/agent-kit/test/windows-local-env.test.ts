@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, afterEach, before, describe, it } from "node:test";
 import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
-import { ConfinedExecutionEnv } from "../src/local-env.ts";
+import { ConfinedExecutionEnv } from "../src/windows/local-env.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const hostTmp = tmpdir();

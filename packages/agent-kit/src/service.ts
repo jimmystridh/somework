@@ -76,7 +76,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				models,
 				model,
 				env: envFor,
-				policy: approvalPolicy(config.approvalPatterns, profile.approvalPatterns),
+				policy: approvalPolicy(config.approvalPatterns, profile.approvalPatterns, profile.toolApprovals),
 				instructions: profile.systemPrompt,
 				allowedTools: profile.allowedTools,
 				extensions,

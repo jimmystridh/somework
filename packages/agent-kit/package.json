@@ -32,7 +32,8 @@
     "./service": "./src/service.ts",
     "./shards": "./src/shards.ts",
     "./skills": "./src/skills.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./windows": "./src/windows/index.ts"
   },
   "scripts": {
     "test": "node --test --test-concurrency=1 test/*.test.ts",

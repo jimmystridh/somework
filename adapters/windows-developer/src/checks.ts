@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { checkEncodingPreserved, expectationFor } from "./encoding.ts";
 import type { CommandProfile, Profiles, Selection } from "./profiles.ts";
-import { redactLog } from "./redact.ts";
+import { redactLog } from "@somework/agent-kit/windows";
 
 export interface StepResult {
 	name: string;

@@ -3,7 +3,8 @@ import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCal
 /**
  * A deterministic, credential-free model for tests and smoke drills (opt-in: `PI_PROVIDER=faux`, never a default). The plan is a list of steps; the model decides which one to take from the number of tool results
  * already in the current run, so it behaves identically after a crash and restart (no queue position to lose).
- *   bash:<command>   write:<path>:<content>   read:<path>   final:<text>
+ *   bash:<command>   write:<path>:<content>   read:<path>   call:<tool>:<json arguments>   final:<text>
+ * `call` is for a role's own tools.
  */
 export function scriptedModels(plan: string[], observe?: (context: unknown) => void) {
 	const faux = fauxProvider();
@@ -19,6 +20,7 @@ export function scriptedModels(plan: string[], observe?: (context: unknown) => v
 		if (kind === "final") return fauxAssistantMessage([fauxText(rest.join(":"))]);
 		if (kind === "bash") return fauxAssistantMessage([fauxToolCall("bash", { command: rest.join(":") })], { stopReason: "toolUse" });
 		if (kind === "write") return fauxAssistantMessage([fauxToolCall("write", { path: rest[0]!, content: rest.slice(1).join(":") })], { stopReason: "toolUse" });
+		if (kind === "call") return fauxAssistantMessage([fauxToolCall(rest[0]!, JSON.parse(rest.slice(1).join(":")))], { stopReason: "toolUse" });
 		if (kind === "read") return fauxAssistantMessage([fauxToolCall("read", { path: rest.join(":") })], { stopReason: "toolUse" });
 		throw new Error(`unknown plan step ${entry}`);
 	};

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConfinementError, isInside, resolveInside } from "../src/paths.ts";
+import { ConfinementError, isInside, resolveInside } from "../src/windows/paths.ts";
 
 const ROOT = "C:\\somework\\ws";
 const win = (path: string, cwd?: string) => resolveInside(ROOT, path, { flavour: "win32", cwd });

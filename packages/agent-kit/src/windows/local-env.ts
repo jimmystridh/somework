@@ -248,6 +248,15 @@ export class ConfinedExecutionEnv implements ExecutionEnv {
 		return result;
 	}
 
+	/**
+	 * Stops every process of the sweep account that started at or after `sinceMs` (a role that started something in the background and is
+	 * done with it). Returns how many were stopped; 0 when no sweep account is configured.
+	 */
+	async sweepSince(sinceMs: number): Promise<number> {
+		if (!this.#sweepUser) return 0;
+		return this.#sweep({ user: this.#sweepUser, sinceMs, protectPids: [process.pid, process.ppid] });
+	}
+
 	cleanup(context: Context): Promise<void> {
 		return this.#inner.cleanup(context);
 	}

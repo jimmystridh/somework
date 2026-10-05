@@ -37,6 +37,10 @@ import { profile } from "./profile.ts";
 runAgentService({ profile /*, hooks */ });
 ```
 
+A profile can also name tools other than `bash` that wait for a human (`toolApprovals`: tool name to a function from the call's arguments to
+a summary, or `undefined` for no approval), so a role's own tools with side effects (a ticket system, a deployment) go through the same
+`input_required` path as a risky command.
+
 `hooks` (`RoleHooks`) is where a role has code instead of data. All members are optional, and `hooks` may also be a function that
 receives the service being composed (`ServiceContext`: env, config, log, SomeWork client, git token) and returns them. Without hooks the
 handler is the developer's: `input.instruction`, `{repository: {url, ref}, budget}` in, branch `agent/<task>` and a pull request out.
@@ -47,6 +51,8 @@ handler is the developer's: `input.instruction`, `{repository: {url, ref}, budge
 | `instruction(input, {taskId})` | turn the input into the model's instruction. Throw `InvalidInput` to refuse |
 | `envFactory(cwd)` | the role's own `ExecutionEnv` for the model's tools and the git steps instead of the container sandbox (no sandbox token needed, no sandbox health check) |
 | `healthBind` | interface of the health endpoint (default `0.0.0.0`) |
+| `beforeRun(ctx)` | once the workspace is ready, before the model runs (start the application under test, prepare fixtures); `ctx.signal` stops it. Return `{ blocked: {reason, details?} }` to skip the model: the task completes with `status: "blocked"` without spending a token. Throwing fails the job as a retryable `job_error` |
+| `afterRun(ctx)` | after the model run, whatever happened (answer, failure, stop, detach, blocked, a throwing `beforeRun`): stop what `beforeRun` started. Called once per attempt as soon as the workspace was ready; an error it throws is logged (`after_run_failed`) and never changes the outcome |
 | `wrapRuntime(runtime)` | wrap the `AgentRuntime` once (repair turns, output validation) |
 | `beforeFinalize(ctx)` | after the model, before commit/push, for every role. Return `{ blocked: {reason, details?} }` to keep the work in the workspace: the task completes with `status: "blocked"` (metrics label `blocked`, log `job_blocked`, never counted as unanswered) |
 | `pullRequest(input, {taskId, instruction})` | title and body of the pull request (called after `beforeFinalize`) |
@@ -84,10 +90,11 @@ code it moves here.
 | `service` | `createAgentService`, `runAgentService`: composes a role into a running service |
 | `handler` | the repository-task handler: validate, capability check, budget clamp, ledger, shard, model allowlist, workspace, run, finalize, artifact, metrics |
 | `runtime`, `pi-runtime` | `AgentRuntime` (what everything depends on) and the Pi Durable implementation (the only file that knows Pi); `allowedTools`, `instructions` |
-| `providers`, `providers/allowlist`, `providers/antigravity`, `providers/faux` | `openai-codex`, `openai`, `opencode-go`, `antigravity`; the model allowlist; the credential-free scripted model for tests |
+| `providers`, `providers/allowlist`, `providers/antigravity`, `providers/faux` | `openai-codex`, `openai`, `opencode-go`, `antigravity`; the model allowlist; the credential-free scripted model for tests (`bash:`, `write:`, `read:`, `call:<tool>:<json>` for a role's own tools, `final:`) |
 | `git`, `githost` | idempotent clone / branch / commit / push / PR steps run by our code, the host-restricted credential helper, `GitHubHost` |
 | `sandbox/server`, `sandbox/remote-env`, `egress/proxy` | the sandbox daemon, Pi's `ExecutionEnv` over HTTP, the egress allowlist proxy (their `main.ts` files are the container entry points) |
 | `policy`, `ledger`, `shards`, `metrics`, `log`, `credentials`, `config`, `health` | approvals, daily token ledger, shard table, Prometheus metrics, redacted JSON logs, `auth.json` store, env config, `/live` `/ready` `/metrics` |
+| `windows` | what every role that runs on a Windows machine needs: the confined local `ExecutionEnv` (Git Bash, path confinement, environment allow-list, sweep of the service account's leftover processes), log redaction, the machine settings (`WINDOWS_*`) and `windowsExecutionHooks(settings)` that wires them into a service |
 | `skills` | the repository knowledge loader (below) |
 | `testing` | `makeRemote` (a local bare repository), `FakeHost`, `sh`: for role tests |
 

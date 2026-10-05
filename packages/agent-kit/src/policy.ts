@@ -11,10 +11,12 @@ export const DEFAULT_APPROVAL_PATTERNS: [RegExp, string][] = [
 ];
 
 /** `base` is the role's own pattern list (default: the built-in one); `extra` are deployment additions (`APPROVAL_PATTERNS`). */
-export function approvalPolicy(extra: string[] = [], base: [RegExp, string][] = DEFAULT_APPROVAL_PATTERNS): ApprovalPolicy {
+export function approvalPolicy(extra: string[] = [], base: [RegExp, string][] = DEFAULT_APPROVAL_PATTERNS, toolApprovals: Record<string, (args: Record<string, unknown>) => string | undefined> = {}): ApprovalPolicy {
 	const patterns: [RegExp, string][] = [...base, ...extra.map((p): [RegExp, string] => [new RegExp(p), `a command matching ${p}`])];
 	return {
 		needsApproval(tool, args) {
+			const own = Object.hasOwn(toolApprovals, tool) ? toolApprovals[tool] : undefined;
+			if (own) return own(args);
 			if (tool !== "bash") return undefined;
 			const command = String(args.command ?? "");
 			const hit = patterns.find(([pattern]) => pattern.test(command));

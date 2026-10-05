@@ -10,11 +10,10 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { approvalPolicy, createHandler, Metrics, PiDurableRuntime } from "@somework/agent-kit";
 import { scriptedModels } from "@somework/agent-kit/providers/faux";
 import { FakeHost, makeRemote, sh } from "@somework/agent-kit/testing";
-import { localEnvFactory } from "../src/local-env.ts";
 import { profile } from "../src/profile.ts";
 import { parseProfiles } from "../src/profiles.ts";
 import { createRole } from "../src/role.ts";
-import { baseEnvironment, bashCandidates, chooseBash } from "../src/shell.ts";
+import { baseEnvironment, bashCandidates, chooseBash, localEnvFactory } from "@somework/agent-kit/windows";
 
 const windows = process.platform === "win32";
 const results: { name: string; ok: boolean; detail: string }[] = [];

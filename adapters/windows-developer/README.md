@@ -47,13 +47,12 @@ claim (SDK worker) -> hooks.instruction: validate build/tests against the profil
 | File | |
 |---|---|
 | `card.json`, `src/profile.ts`, `src/main.ts` | the role: contract, standing orders (the system prompt tells the model about encodings and CRLF), extra approval patterns for commands that change the machine, no default skills (the deployment names the repository's own skills with `SKILLS_ALLOW`; they are loaded at the task's ref by the kit; a deployment can replace the list with `SKILLS_ALLOW`) |
-| `src/paths.ts` | `resolveInside(root, path)`: the pure, Windows-semantics path confinement (also unit-tested on any OS) |
-| `src/local-env.ts` | `ConfinedExecutionEnv`: pi-durable's `NodeExecutionEnv` confined to the workspace root |
-| `src/shell.ts`, `src/settings.ts` | Git for Windows bash selection (never the WSL launcher), the command environment, the per-service git configuration, the `WINDOWS_*` settings |
+| `src/settings.ts` | this role's settings: the kit's `WINDOWS_*` machine settings plus `WINDOWS_PROFILES_FILE` |
 | `src/profiles.ts`, `src/checks.ts` | build/test profiles and how they run; the encoding check over the modified files; log capture and redaction |
-| `src/encoding.ts`, `src/redact.ts` | `checkEncodingPreserved(before, after)` and `redactLog` (pure) |
+| `src/encoding.ts` | `checkEncodingPreserved(before, after)` (pure) |
 | `src/role.ts` | the hooks described above (`createRole`) |
-| `src/service.ts` | the settings and the hook factory handed to the kit's `runAgentService` (local environment, loopback health, readiness checks) |
+| `src/service.ts` | the settings and the hook factory handed to the kit's `runAgentService`, on top of `windowsExecutionHooks` |
+| `@somework/agent-kit/windows` | the confined local environment this role runs in, shared with the QA role: path confinement (`resolveInside`, `ConfinedExecutionEnv`), Git Bash selection and the command environment, the sweep of the account's leftover processes, `redactLog`, the `WINDOWS_*` settings. Its documentation lives in the kit |
 | `deploy/` | `install-service.ps1`, `run-agent.ps1`, `firewall.ps1`, `uninstall.ps1`, `smoke.ps1` + `smoke.ts`, `keygen.ts`, `agent.env.example`, `profiles.example.json`, `firewall-allow.example.txt`, `README.md` |
 
 ## The execution environment, and how far it can be trusted
@@ -62,7 +61,7 @@ The kit's other roles run tools in a container: no credentials, no route out exc
 the model's tools and the kit's git steps run in the agent's own process tree on the host, as a dedicated unprivileged account. That is a
 **weaker boundary**, and it is documented as one:
 
-* **Enforced by the agent** (`ConfinedExecutionEnv`): the file tools and git steps can only name paths inside the workspace root, by name
+* **Enforced by the agent** (`ConfinedExecutionEnv`, in the kit): the file tools and git steps can only name paths inside the workspace root, by name
   (no `..`, UNC, `\\?\`, drive-relative paths, alternate data streams, trailing dots, device names, 8.3 short names, `~`, `file:`) and by
   real path (a junction or symbolic link that leads outside is refused, also for files that do not exist yet). Commands start in a
   confined directory with `inheritEnv: false`: they get a fixed `PATH`, a home and temp directory *inside* the root, and nothing from the
@@ -102,9 +101,10 @@ encoding), `utf8Globs`, and `blockPush` (default true). Unknown keys are errors.
 
 ## Verified here, and what only the machine can verify
 
-Tests (`npm test`, 73 of them): confinement with Windows semantics on any OS, the same confinement against a real directory with
-symbolic links, commands (environment isolation, output cap, timeout and process-tree kill), encoding rules (including Swedish
-characters in Windows-1252), profiles, shell and settings logic, redaction, the key generator, an end-to-end suite through a real domain
+Tests (`npm test`, 39 of them here; the 44 for the shared execution environment live in the kit's `windows-*.test.ts`: confinement with
+Windows semantics on any OS, the same confinement against a real directory with symbolic links, commands (environment isolation, output
+cap, timeout and process-tree kill, the sweep). Here: encoding rules (including Swedish
+characters in Windows-1252), profiles, settings, the key generator, an end-to-end suite through a real domain
 (success with build and tests, blocking build, non-blocking failure, arbitrary command refused, unknown profile, legacy file rewritten as
 UTF-8 blocked, byte-preserving edit pushed), the packaging scripts (ASCII, PowerShell 5.1 syntax lint, parsed with the real parser,
 firewall range arithmetic) and the smoke test.

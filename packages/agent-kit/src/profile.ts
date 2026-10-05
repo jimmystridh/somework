@@ -21,6 +21,11 @@ export interface AgentProfile {
 	allowedTools?: string[];
 	/** Commands that wait for a human, as `[pattern, reason]`. Start from `DEFAULT_APPROVAL_PATTERNS` and add to it. */
 	approvalPatterns: [RegExp, string][];
+	/**
+	 * Tools other than `bash` that wait for a human, by tool name: given the call's arguments, a summary of what is about to happen, or
+	 * `undefined` when this call needs no approval. A role's own tools (a ticket system, a deployment) use this for their side effects.
+	 */
+	toolApprovals?: Record<string, (args: Record<string, unknown>) => string | undefined>;
 	/** Used when a job brings no budget and `requireBudget` is false. */
 	defaultBudget: Budget;
 	/** Default true: a job without a budget is rejected (the card should then also require one). */
@@ -62,6 +67,11 @@ export interface JobContext {
 	envFor(cwd?: string): ExecutionEnv;
 	client: Pick<SomeWorkClient, "uploadArtifact">;
 	log: Log;
+}
+
+/** Before the model runs: the job as prepared, with the signal that stops it. */
+export interface RunContext extends JobContext {
+	signal: AbortSignal;
 }
 
 /** After the model finished, before anything is committed. */
@@ -121,6 +131,18 @@ export interface RoleHooks {
 	envFactory?(cwd: string | undefined): ExecutionEnv;
 	/** Interface the health endpoint listens on. Default `0.0.0.0`. */
 	healthBind?: string;
+	/**
+	 * After the workspace is ready and before the model runs (start the application under test, prepare fixtures). Return `{ blocked }` to
+	 * skip the model: the task completes with `status: "blocked"` without spending a token (the `result` hook says why). Throwing fails the
+	 * job as a retryable `job_error`. `afterRun` is always called after this has been called, whatever it returned.
+	 */
+	beforeRun?(context: RunContext): Promise<void | { blocked: Blocked }>;
+	/**
+	 * After the model run, whatever happened (answer, failure, stop, detach, blocked, a throwing `beforeRun`): stop what `beforeRun` started.
+	 * Called once per attempt as soon as the workspace was ready (not when the ref could not be resolved); an error it throws is logged and
+	 * never changes the outcome.
+	 */
+	afterRun?(context: JobContext): Promise<void>;
 	/**
 	 * Between "the model finished" and commit/push, for every role (read-only ones too). Return `{ blocked }` to stop the work from leaving
 	 * the workspace: the task completes with `status: "blocked"` (metrics label `blocked`, log event `job_blocked`) and the `result` hook

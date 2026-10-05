@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { redactLog } from "../src/redact.ts";
+import { redactLog } from "../src/windows/redact.ts";
 
 describe("redactLog", () => {
 	it("removes token-like text and the service's own secrets", () => {

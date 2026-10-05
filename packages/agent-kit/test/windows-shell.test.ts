@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { baseEnvironment, bashCandidates, chooseBash, defaultPathDirectories, GIT_CONFIG, isWslLauncher } from "../src/shell.ts";
-import { loadWindowsSettings } from "../src/settings.ts";
+import { baseEnvironment, bashCandidates, chooseBash, defaultPathDirectories, GIT_CONFIG, isWslLauncher } from "../src/windows/shell.ts";
+import { loadWindowsEnvSettings as loadWindowsSettings } from "../src/windows/settings.ts";
 
 const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
 

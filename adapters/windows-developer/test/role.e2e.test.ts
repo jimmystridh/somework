@@ -8,7 +8,7 @@ import { scriptedModels } from "@somework/agent-kit/providers/faux";
 import { FakeHost, makeRemote, sh } from "@somework/agent-kit/testing";
 import { Worker, type SomeWorkClient } from "@somework/sdk";
 import { startDomain, type Domain } from "../../../sdk/typescript/test/harness.ts";
-import { localEnvFactory } from "../src/local-env.ts";
+import { localEnvFactory } from "@somework/agent-kit/windows";
 import { profile } from "../src/profile.ts";
 import { parseProfiles } from "../src/profiles.ts";
 import { createRole } from "../src/role.ts";

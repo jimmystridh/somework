@@ -138,6 +138,7 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		m.active.add(1);
 		const workspace = workspaceFor(deps.workspaceRoot, agentKey);
 		const fields = { taskId, agentKey };
+		let runStarted: JobContext | undefined;
 		try {
 			let base;
 			try {
@@ -151,6 +152,22 @@ function createJobHandler(deps: HandlerDeps): Handler {
 				throw error;
 			}
 			log("info", "workspace_ready", { ...fields, ref: repository.ref, refKind: base.refKind, baseSha: base.baseSha, baseBranch: base.baseBranch });
+			const jobContext: JobContext = { taskId, input: prepared, instruction, workspace, baseSha: base.baseSha, baseBranch: base.baseBranch, envFor, client: deps.client, log };
+			const settled = async (result: Record<string, unknown>, artifacts: unknown[], answer: string, usage: Usage, extra: Partial<ResultContext>): Promise<Outcome> => {
+				const patch = await hooks?.result?.(result, { ...jobContext, answer, usage, ...extra });
+				if (patch?.failure) return { type: "failed", failure: patch.failure };
+				return { type: "completed", result: patch?.result ?? result, artifacts: [...artifacts, ...(patch?.artifacts ?? [])] };
+			};
+			runStarted = jobContext;
+			if (hooks?.beforeRun) {
+				const gate = await hooks.beforeRun({ ...jobContext, signal: control.signal });
+				if (gate && "blocked" in gate) {
+					m.duration((Date.now() - started) / 1000, { status: "blocked" });
+					m.jobs({ status: "blocked" });
+					log("info", "job_blocked", { ...fields, reason: gate.blocked.reason.slice(0, 200), before: "run" });
+					return await settled({ status: "blocked", summary: "", usage: { totalTokens: 0, costUsd: 0 } }, [], "", emptyUsageValue(), { blocked: gate.blocked });
+				}
+			}
 			const outcome: AgentOutcome = await deps.runtime.execute(
 				{ requestId: `somework:${taskId}`, agentKey, instruction, workspace, budget, ...(model ? { model } : {}) },
 				{
@@ -187,26 +204,20 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			}
 
 			const usage = { totalTokens: outcome.usage.totalTokens, costUsd: outcome.usage.costUsd };
-			const jobContext: JobContext = { taskId, input: prepared, instruction, workspace, baseSha: base.baseSha, baseBranch: base.baseBranch, envFor, client: deps.client, log };
-			const settled = async (result: Record<string, unknown>, artifacts: unknown[], extra: Partial<ResultContext>): Promise<Outcome> => {
-				const patch = await hooks?.result?.(result, { ...jobContext, answer: outcome.answer, usage: outcome.usage, ...extra });
-				if (patch?.failure) return { type: "failed", failure: patch.failure };
-				return { type: "completed", result: patch?.result ?? result, artifacts: [...artifacts, ...(patch?.artifacts ?? [])] };
-			};
 
 			const gate = await hooks?.beforeFinalize?.({ ...jobContext, answer: outcome.answer, usage: outcome.usage, signal: control.signal, onProgress: (update) => control.progress(update) });
 			if (gate && "blocked" in gate) {
 				m.duration((Date.now() - started) / 1000, { status: "blocked" });
 				m.jobs({ status: "blocked" });
 				log("info", "job_blocked", { ...fields, reason: gate.blocked.reason.slice(0, 200) });
-				return await settled({ status: "blocked", summary: outcome.answer.slice(0, 4000), usage }, [], { blocked: gate.blocked });
+				return await settled({ status: "blocked", summary: outcome.answer.slice(0, 4000), usage }, [], outcome.answer, outcome.usage, { blocked: gate.blocked });
 			}
 			m.duration((Date.now() - started) / 1000, { status: "done" });
 			m.jobs({ status: "done" });
 
 			if (!git.push) {
 				log("info", "job_done", { ...fields, status: "completed", commits: 0 });
-				return await settled({ status: "completed", summary: outcome.answer.slice(0, 4000), usage }, [], {});
+				return await settled({ status: "completed", summary: outcome.answer.slice(0, 4000), usage }, [], outcome.answer, outcome.usage, {});
 			}
 			const pullRequest = hooks?.pullRequest?.(prepared, { taskId, instruction }) ?? { title: instruction.split("\n")[0]!.slice(0, 72), body: `Opened by the SomeWork Pi agent for task ${taskId}.` };
 			const done: FinalizeResult = await finalizeWorkspace(deps.session, host, { repoUrl: repository.url, ref: repository.ref, baseSha: base.baseSha, baseBranch: base.baseBranch, taskId, workspace, title: pullRequest.title, body: pullRequest.body, branchPrefix: git.branchPrefix });
@@ -216,6 +227,8 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			return await settled(
 				{ status: done.status, summary: outcome.answer.slice(0, 4000), branch: done.branch, commits: done.commits, ...(done.prUrl ? { prUrl: done.prUrl } : {}), usage },
 				artifacts,
+				outcome.answer,
+				outcome.usage,
 				{ finalize: done },
 			);
 		} catch (error) {
@@ -225,9 +238,18 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			return fail("job_error", error instanceof Error ? error.message.slice(0, 500) : "unknown error", true);
 		} finally {
 			m.active.add(-1);
+			if (runStarted && hooks?.afterRun) {
+				try {
+					await hooks.afterRun(runStarted);
+				} catch (error) {
+					log("warn", "after_run_failed", { ...fields, error: error instanceof Error ? error.message.slice(0, 300) : String(error) });
+				}
+			}
 		}
 	};
 }
+
+const emptyUsageValue = (): Usage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 });
 
 function recordUsage(usage: Usage, deps: HandlerDeps, m: ReturnType<typeof createServiceMetrics>): void {
 	m.tokens({ kind: "input" }, usage.inputTokens);

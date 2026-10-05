@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { ConfinedExecutionEnv } from "../src/local-env.ts";
-import { loadWindowsSettings } from "../src/settings.ts";
-import { buildSweepScript, sweepLeftovers, type SweepOptions } from "../src/sweep.ts";
+import { ConfinedExecutionEnv } from "../src/windows/local-env.ts";
+import { loadWindowsEnvSettings as loadWindowsSettings } from "../src/windows/settings.ts";
+import { buildSweepScript, sweepLeftovers, type SweepOptions } from "../src/windows/sweep.ts";
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), "windev-sweep-")));
 const root = join(dir, "ws");
@@ -53,6 +53,14 @@ describe("when the confined environment sweeps", () => {
 		const failing = await env.exec("exit 3", {}, BACKGROUND_CONTEXT);
 		assert.ok(failing.ok && failing.value.exitCode === 3);
 		assert.equal(calls.length, 0);
+	});
+
+	it("sweepSince sweeps on demand for the configured account only", async () => {
+		const calls: SweepOptions[] = [];
+		assert.equal(await make(async (options) => (calls.push(options), 2)).sweepSince(1_790_000_000_000), 2);
+		assert.deepEqual(calls.map((c) => [c.user, c.sinceMs]), [["svc-somework", 1_790_000_000_000]]);
+		const without = new ConfinedExecutionEnv({ root, baseEnv: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root }, flavour: "posix", sweep: async () => assert.fail("no sweep account") });
+		assert.equal(await without.sweepSince(1_790_000_000_000), 0);
 	});
 
 	it("does not sweep when no account is configured", async () => {
