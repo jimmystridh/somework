@@ -23,6 +23,8 @@ pub mod objects_s3;
 pub mod ops;
 pub mod outbox;
 pub mod policy;
+pub mod publish;
+pub mod rules;
 pub mod runtimes;
 pub mod sealed;
 pub mod secrets;

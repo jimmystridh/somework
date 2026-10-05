@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use somework_domain::subscriptions::CreateSubscription;
+use somework_domain::{publish::PublishEvent, subscriptions::CreateSubscription};
 
 use crate::{http::*, state::AppState};
 
@@ -20,6 +20,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/events", get(events))
         .route("/v1/events/ack", post(ack))
+        .route("/v1/events/publish", post(publish))
         .route("/v1/subscriptions", post(create_subscription).get(list_subscriptions))
         .route("/v1/subscriptions/{id}", delete(delete_subscription))
 }
@@ -90,4 +91,10 @@ async fn list_subscriptions(State(s): State<AppState>, Auth(ctx): Auth) -> ApiRe
 async fn delete_subscription(State(s): State<AppState>, Auth(ctx): Auth, Path(id): Path<String>) -> ApiResult {
     s.domain.delete_subscription(&ctx, &id).await?;
     no_content()
+}
+
+/// `POST /v1/events/publish`: a producer publishes an event under a topic it holds a grant for.
+async fn publish(State(s): State<AppState>, Auth(ctx): Auth, Body(req): Body<PublishEvent>) -> ApiResult {
+    let out = s.domain.publish_event(&ctx, req).await?;
+    if out.duplicate { ok(out) } else { created(out) }
 }

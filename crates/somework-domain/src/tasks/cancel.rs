@@ -402,6 +402,7 @@ impl Domain {
                             },
                         )
                         .await?;
+                        this.reaction_approval_closed(conn, &row, "denied").await?;
                     }
                     this.audit_task(
                         conn,

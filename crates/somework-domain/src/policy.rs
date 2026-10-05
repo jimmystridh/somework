@@ -21,7 +21,11 @@ pub const ADMIN_ACTIONS: &[&str] = &[
     "message.read.any",
     "federation.manage",
     "domain.admin",
+    "rules.manage",
+    "rules.control",
 ];
+
+pub const EVENTS_PUBLISH_PREFIX: &str = "events.publish:";
 
 pub fn is_admin_action(action: &str) -> bool {
     ADMIN_ACTIONS.contains(&action)
@@ -119,7 +123,16 @@ impl Permissions {
         self.roles.iter().any(|r| r == role)
     }
 
+    /// Publishing events needs an explicit `events.publish:<glob over the topic>` grant (or the admin role); the
+    /// wildcard `*` action deliberately does not cover it.
+    pub fn allows_publish(&self, topic: &str) -> bool {
+        self.has_role("admin") || self.actions.iter().filter_map(|a| a.strip_prefix(EVENTS_PUBLISH_PREFIX)).any(|pattern| glob_match(pattern, topic))
+    }
+
     pub fn allows_action(&self, action: &str) -> bool {
+        if action == "events.publish" {
+            return self.has_role("admin") || self.actions.iter().any(|a| a.starts_with(EVENTS_PUBLISH_PREFIX));
+        }
         if is_admin_action(action) {
             return self.has_role("admin")
                 || self.actions.iter().any(|a| a == action)
@@ -260,6 +273,9 @@ pub struct AuthzRequest {
     pub classification: Option<String>,
     pub task_id: Option<String>,
     pub delegation_remaining: Option<u32>,
+    /// Invocations at or above this side-effect class need a structured approval regardless of the policy document
+    /// (set for tasks that start without a human in the loop, such as reactions).
+    pub force_approval_at_least: Option<SideEffects>,
 }
 
 impl AuthzRequest {
@@ -352,7 +368,7 @@ pub fn evaluate(policy: &PolicyDocument, actor_label: &str, perms: &Permissions,
     if reasons.is_empty()
         && let (Some(cap), Some(se)) = (&req.capability, req.side_effects)
         && matches!(req.action.as_str(), "task.submit" | "capability.invoke")
-        && policy.approval_required(cap, se)
+        && (policy.approval_required(cap, se) || req.force_approval_at_least.is_some_and(|min| se >= min))
     {
         obligations.push(OBLIGATION_REQUIRE_APPROVAL.to_string());
     }

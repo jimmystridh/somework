@@ -5,6 +5,7 @@ mod context;
 mod events;
 mod federation_admin;
 mod messages;
+mod rules;
 mod runtimes;
 mod sealed;
 mod system;
@@ -24,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .merge(context::routes())
         .merge(artifacts::routes())
         .merge(events::routes())
+        .merge(rules::routes())
         .merge(runtimes::routes())
         .merge(sealed::routes())
         .merge(admin::routes())

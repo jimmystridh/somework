@@ -12,6 +12,7 @@ pub mod jws;
 pub mod schema;
 pub mod subjects;
 pub mod taxonomy;
+pub mod template;
 pub mod trace;
 
 pub use error::{Error, ErrorCode, Result};

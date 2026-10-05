@@ -832,6 +832,7 @@ impl Domain {
             deadline_at: None,
             idempotency_key: None,
             constraints: None,
+            caused_by_event: None,
         };
         let resp = self.submit_task_in_tx(conn, &sender_ctx, req).await?;
         Ok(resp.task)

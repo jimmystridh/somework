@@ -76,6 +76,8 @@ pub struct TaskRow {
     pub updated_at: String,
     pub deadline_at: Option<String>,
     pub completed_at: Option<String>,
+    /// Where the task came from when no person submitted it: `{kind:"reaction", rule, eventId, depth}`.
+    pub origin: Option<Value>,
 }
 
 impl TaskRow {
@@ -119,6 +121,7 @@ impl TaskRow {
             updated_at: scol(r, "updated_at"),
             deadline_at: scol_opt(r, "deadline_at"),
             completed_at: scol_opt(r, "completed_at"),
+            origin: jcol_opt(r, "origin"),
         })
     }
 
@@ -189,6 +192,8 @@ pub struct TaskView {
     pub side_effects: SideEffects,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_authority: Option<EffectiveAuthority>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +262,7 @@ impl Domain {
             cancel_late,
             side_effects: row.side_effects,
             effective_authority: row.effective_authority.clone(),
+            origin: row.origin.clone(),
         })
     }
 
@@ -407,7 +413,11 @@ impl Domain {
             "attempt": row.attempt,
         });
         let kind = format!("task.{}", event_type.trim_start_matches("task."));
-        let mut spec = EventSpec::new(&kind, base.clone()).task(&row.task_id, row.revision).conversation(row.conversation_id.clone()).matrix();
+        let mut event_payload = base.clone();
+        if let (Some(depth), Some(obj)) = (row.origin.as_ref().and_then(|o| o.get("depth")), event_payload.as_object_mut()) {
+            obj.insert("originDepth".into(), depth.clone());
+        }
+        let mut spec = EventSpec::new(&kind, event_payload).task(&row.task_id, row.revision).conversation(row.conversation_id.clone()).matrix();
         spec.capability_id = Some(row.capability_id.clone());
         spec = spec.nats(subjects::event_task(&row.task_id), base.clone());
         spec = spec.recipient(row.requester_principal_id.clone(), td.notify_requester_wake);

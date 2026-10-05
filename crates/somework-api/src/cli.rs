@@ -111,6 +111,44 @@ pub enum AdminCommand {
         #[arg(long)]
         public_key: Option<String>,
     },
+    /// Enrol a producer: a service principal that may publish events under the given topic globs (for example
+    /// `github.*`) and nothing else. Generate its key here (`--key-out`) or register one made on its host (`--public-key`).
+    EnrollProducer {
+        #[arg(long)]
+        id: String,
+        /// Topic globs the producer may publish under; repeat or separate with commas.
+        #[arg(long = "publish", value_delimiter = ',', required = true)]
+        publish: Vec<String>,
+        /// Highest classification the producer may attach to its events.
+        #[arg(long, default_value = "internal")]
+        clearance: String,
+        #[arg(long, conflicts_with = "public_key", required_unless_present = "public_key")]
+        key_out: Option<PathBuf>,
+        #[arg(long)]
+        public_key: Option<String>,
+    },
+    /// Replace the topic globs and clearance of an enrolled producer (the key stays).
+    SetPublishPermissions {
+        #[arg(long)]
+        id: String,
+        #[arg(long = "publish", value_delimiter = ',', required = true)]
+        publish: Vec<String>,
+        #[arg(long, default_value = "internal")]
+        clearance: String,
+    },
+    /// Enrol a service principal with explicit actions, for example the rules deployer (`--action rules.manage`).
+    EnrollService {
+        #[arg(long)]
+        id: String,
+        #[arg(long = "action", value_delimiter = ',', required = true)]
+        actions: Vec<String>,
+        #[arg(long, default_value = "internal")]
+        clearance: String,
+        #[arg(long, conflicts_with = "public_key", required_unless_present = "public_key")]
+        key_out: Option<PathBuf>,
+        #[arg(long)]
+        public_key: Option<String>,
+    },
     /// Replace an agent's registered public key (rotation): stop the worker, run this, start it with the new key.
     /// The old key stops working immediately.
     RotateAgentKey {
@@ -289,6 +327,54 @@ fn render_nats_conf(cfg: &ServerConfig, command: AdminCommand) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn enroll_service(
+    domain: &Domain,
+    ctx: &somework_domain::Ctx,
+    domain_id: &str,
+    id: &str,
+    actions: Vec<String>,
+    clearance: String,
+    key_out: Option<PathBuf>,
+    public_key: Option<String>,
+    what: &str,
+) -> Result<()> {
+    let generated = match (&public_key, key_out) {
+        (None, Some(out)) => Some((KeyFile::generate("service", id, domain_id), out)),
+        (Some(_), None) => None,
+        _ => anyhow::bail!("give exactly one of --key-out (generate the key here) or --public-key (generated on the host that will use it)"),
+    };
+    let public_key = match (&generated, public_key) {
+        (Some((key, _)), _) => key.public_key.clone(),
+        (None, Some(provided)) => provided,
+        (None, None) => unreachable!("one of the two is always present"),
+    };
+    let perms = Permissions { actions, classification_max: Some(clearance), ..Default::default() };
+    domain
+        .create_principal(
+            ctx,
+            CreatePrincipal {
+                kind: ActorKind::Service,
+                id: id.to_string(),
+                display_name: Some(id.to_string()),
+                permissions: Some(perms),
+                public_key: Some(public_key),
+                matrix_user_id: None,
+                oidc_issuer: None,
+                oidc_subject: None,
+            },
+        )
+        .await?;
+    match generated {
+        Some((key, out)) => {
+            key.write(&out)?;
+            println!("{what} {id} enrolled; key written to {}", out.display());
+        }
+        None => println!("{what} {id} enrolled with the provided public key"),
+    }
+    Ok(())
+}
+
 pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
     let cfg = ServerConfig::load(config)?;
     let command = match command {
@@ -342,6 +428,22 @@ pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
                 }
                 None => println!("agent {id} enrolled with the provided public key"),
             }
+        }
+        AdminCommand::EnrollProducer { id, publish, clearance, key_out, public_key } => {
+            let actions = publish.iter().map(|glob| format!("{}{glob}", somework_domain::policy::EVENTS_PUBLISH_PREFIX)).collect();
+            enroll_service(&domain, &ctx, &domain_id, &id, actions, clearance, key_out, public_key, "producer").await?;
+        }
+        AdminCommand::SetPublishPermissions { id, publish, clearance } => {
+            let perms = Permissions {
+                actions: publish.iter().map(|glob| format!("{}{glob}", somework_domain::policy::EVENTS_PUBLISH_PREFIX)).collect(),
+                classification_max: Some(clearance),
+                ..Default::default()
+            };
+            domain.update_principal(&ctx, ActorKind::Service, &id, Some(perms), None, None).await?;
+            println!("producer {id}: publish grants replaced with {}", publish.join(", "));
+        }
+        AdminCommand::EnrollService { id, actions, clearance, key_out, public_key } => {
+            enroll_service(&domain, &ctx, &domain_id, &id, actions, clearance, key_out, public_key, "service").await?;
         }
         AdminCommand::RotateAgentKey { id, public_key } => {
             domain.update_principal(&ctx, ActorKind::Agent, &id, None, None, Some(public_key)).await?;

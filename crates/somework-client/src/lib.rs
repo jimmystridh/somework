@@ -82,6 +82,9 @@ pub struct TaskInfo {
     pub pending_approval: Option<Value>,
     #[serde(default)]
     pub trace_id: Option<String>,
+    /// Set when a reaction or an event-driven agent submitted the task: `{kind, rule?, eventId, depth}`.
+    #[serde(default)]
+    pub origin: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -271,6 +274,14 @@ impl Client {
         self.typed(v).await
     }
 
+    /// Submits a task that reacts to `event_id`, an event this principal received. The domain verifies the event and records
+    /// it (with its depth) as the task's origin.
+    pub async fn submit_task_for_event(&self, event_id: &str, req: &Value, idempotency_key: Option<&str>) -> Result<TaskInfo> {
+        let mut body = req.clone();
+        body["causedByEvent"] = json!(event_id);
+        self.submit_task(&body, idempotency_key).await
+    }
+
     pub async fn get_task(&self, task_id: &str) -> Result<TaskInfo> {
         let v = self.get(&format!("/v1/tasks/{task_id}")).await?;
         self.typed(v).await
@@ -345,6 +356,37 @@ impl Client {
 
     pub async fn ack_events(&self, cursor: i64) -> Result<()> {
         self.post("/v1/events/ack", &json!({"cursor": cursor})).await.map(|_| ())
+    }
+
+    // ---- events and rules ---------------------------------------------------------------------------------------------
+    /// Publishes an event (`topic`, `key`, `data`, ...); a repeat of the same `key` answers `duplicate: true`.
+    pub async fn publish_event(&self, event: &Value) -> Result<Value> {
+        self.post("/v1/events/publish", event).await
+    }
+
+    pub async fn list_rules(&self) -> Result<Vec<Value>> {
+        let v = self.get("/v1/rules").await?;
+        Ok(v["rules"].as_array().cloned().unwrap_or_default())
+    }
+
+    pub async fn get_rule(&self, name: &str) -> Result<Value> {
+        self.get(&format!("/v1/rules/{name}")).await
+    }
+
+    pub async fn put_rule(&self, name: &str, rule: &Value) -> Result<Value> {
+        self.put(&format!("/v1/rules/{name}"), rule).await
+    }
+
+    pub async fn delete_rule(&self, name: &str) -> Result<()> {
+        self.raw(Method::DELETE, &format!("/v1/rules/{name}"), None, None, None).await.map(|_| ())
+    }
+
+    pub async fn pause_rule(&self, name: &str) -> Result<Value> {
+        self.post(&format!("/v1/rules/{name}/pause"), &json!({})).await
+    }
+
+    pub async fn resume_rule(&self, name: &str) -> Result<Value> {
+        self.post(&format!("/v1/rules/{name}/resume"), &json!({})).await
     }
 
     // ---- artifacts ----------------------------------------------------------------------------------------------------

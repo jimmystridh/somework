@@ -239,6 +239,7 @@ impl Domain {
                             },
                         )
                         .await?;
+                        this.reaction_approval_closed(conn, &row, "expired").await?;
                     }
                     Ok(())
                 })
@@ -254,22 +255,24 @@ impl Domain {
     pub async fn purge_retention(&self) -> Result<u64, Error> {
         let msg_cutoff = somework_core::clock::ts(self.now() - chrono::Duration::days(self.cfg.message_retention_days));
         let audit_cutoff = somework_core::clock::ts(self.now() - chrono::Duration::days(self.cfg.audit_retention_days));
-        self.write(move |tx| {
-            Box::pin(async move {
-                sqlx::query("UPDATE maintenance_flags SET enabled = 1 WHERE name = 'retention_purge'").execute(&mut **tx).await.db()?;
-                let d1 = sqlx::query("DELETE FROM message_deliveries WHERE message_id IN (SELECT message_id FROM messages WHERE created_at < ?)")
-                    .bind(&msg_cutoff)
-                    .execute(&mut **tx)
-                    .await
-                    .db()?
-                    .rows_affected();
-                let d2 = sqlx::query("DELETE FROM messages WHERE created_at < ?").bind(&msg_cutoff).execute(&mut **tx).await.db()?.rows_affected();
-                let d3 = sqlx::query("DELETE FROM audit_events WHERE occurred_at < ?").bind(&audit_cutoff).execute(&mut **tx).await.db()?.rows_affected();
-                sqlx::query("UPDATE maintenance_flags SET enabled = 0 WHERE name = 'retention_purge'").execute(&mut **tx).await.db()?;
-                Ok(d1 + d2 + d3)
+        let purged = self
+            .write(move |tx| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE maintenance_flags SET enabled = 1 WHERE name = 'retention_purge'").execute(&mut **tx).await.db()?;
+                    let d1 = sqlx::query("DELETE FROM message_deliveries WHERE message_id IN (SELECT message_id FROM messages WHERE created_at < ?)")
+                        .bind(&msg_cutoff)
+                        .execute(&mut **tx)
+                        .await
+                        .db()?
+                        .rows_affected();
+                    let d2 = sqlx::query("DELETE FROM messages WHERE created_at < ?").bind(&msg_cutoff).execute(&mut **tx).await.db()?.rows_affected();
+                    let d3 = sqlx::query("DELETE FROM audit_events WHERE occurred_at < ?").bind(&audit_cutoff).execute(&mut **tx).await.db()?.rows_affected();
+                    sqlx::query("UPDATE maintenance_flags SET enabled = 0 WHERE name = 'retention_purge'").execute(&mut **tx).await.db()?;
+                    Ok(d1 + d2 + d3)
+                })
             })
-        })
-        .await
+            .await?;
+        Ok(purged + self.purge_published_events().await?)
     }
 }
 

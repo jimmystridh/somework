@@ -217,6 +217,23 @@ impl pb::event_service_server::EventService for Events {
         self.0.domain.ack_events(&ctx, r.cursor).await.map_err(|e| fail(&ctx, e))?;
         Ok(respond(&ctx, pb::AckEventsResponse { cursor: r.cursor, trace_id: tid(&ctx) }))
     }
+
+    async fn publish(&self, req: Request<pb::PublishEventRequest>) -> Result<Response<pb::PublishEventResponse>, Status> {
+        let ctx = call_ctx(&self.0, req.metadata()).await?;
+        let r = req.into_inner();
+        let doc = Doc::new()
+            .str("topic", &r.topic)
+            .str("key", &r.key)
+            .str("source", &r.source)
+            .structure("data", r.data)
+            .str("classification", &r.classification)
+            .opt_bool("verified", r.verified)
+            .str("causedByTask", &r.caused_by_task)
+            .str("occurredAt", &r.occurred_at)
+            .build();
+        let out = self.0.domain.publish_event(&ctx, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
+        Ok(respond(&ctx, pb::PublishEventResponse { seq: out.seq, event_id: out.event_id, duplicate: out.duplicate, trace_id: tid(&ctx) }))
+    }
 }
 
 // ---- tasks ----------------------------------------------------------------------------------------------------------
@@ -251,6 +268,7 @@ impl pb::task_service_server::TaskService for Tasks {
             .raw("contextRefs", c::context_refs(r.context_refs))
             .str("deadlineAt", &r.deadline_at)
             .structure("constraints", r.constraints)
+            .str("causedByEvent", &r.caused_by_event)
             .build();
         let out = self.0.domain.submit_task(&ctx, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
         let v = to_json(&ctx, &out)?;

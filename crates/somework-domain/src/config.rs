@@ -97,3 +97,5 @@ impl DomainConfig {
 pub const SINK_NATS: &str = "nats";
 pub const SINK_MATRIX: &str = "matrix";
 pub const SINK_GATEWAY: &str = "gateway";
+/// Always on: reactions are rows of the outbox so task creation is retried and exactly-once.
+pub const SINK_REACTION: &str = "reaction";

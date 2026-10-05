@@ -219,9 +219,28 @@ message AckEventsResponse {
   string trace_id = 2;
 }
 
+message PublishEventRequest {
+  string topic = 1;
+  string key = 2; // stable per-producer key; a repeat within 30 days is a no-op
+  string source = 3;
+  google.protobuf.Struct data = 4;
+  string classification = 5;
+  optional bool verified = 6;
+  string caused_by_task = 7;
+  string occurred_at = 8;
+}
+
+message PublishEventResponse {
+  int64 seq = 1;
+  string event_id = 2;
+  bool duplicate = 3;
+  string trace_id = 4;
+}
+
 service EventService {
   rpc Watch(WatchEventsRequest) returns (stream Event);
   rpc Ack(AckEventsRequest) returns (AckEventsResponse);
+  rpc Publish(PublishEventRequest) returns (PublishEventResponse);
 }
 
 // ---- TaskService --------------------------------------------------------------------------------------------------------
@@ -236,6 +255,7 @@ message SubmitTaskRequest {
   repeated ContextRef context_refs = 7;
   string deadline_at = 8;
   google.protobuf.Struct constraints = 9;
+  string caused_by_event = 10; // event id (addressed to the caller) this task reacts to; verified by the domain
 }
 
 message SubmitTaskResponse {

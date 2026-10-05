@@ -42,6 +42,10 @@ pub struct Metrics {
     pub agent_runtime_restarts: IntCounter,
     pub api_requests: IntCounterVec,
     pub api_latency: HistogramVec,
+    pub events_published: IntCounter,
+    pub events_duplicate: IntCounter,
+    pub reactions_fired: IntCounter,
+    pub reactions_skipped: IntCounterVec,
 }
 
 fn counter(registry: &Registry, name: &str, help: &str) -> IntCounter {
@@ -95,7 +99,15 @@ impl Metrics {
             HistogramVec::new(HistogramOpts::new("somework_api_latency_seconds", "API latency").buckets(LATENCY.to_vec()), &["route"]).expect("valid");
         r.register(Box::new(api_latency.clone())).expect("register");
 
+        let reactions_skipped =
+            IntCounterVec::new(Opts::new("somework_reactions_skipped_total", "Rule firings that did not create a task"), &["reason"]).expect("valid");
+        r.register(Box::new(reactions_skipped.clone())).expect("register");
+
         Self {
+            events_published: counter(&r, "somework_events_published_total", "Events accepted from producers"),
+            events_duplicate: counter(&r, "somework_events_duplicate_total", "Producer publications ignored as duplicates"),
+            reactions_fired: counter(&r, "somework_reactions_fired_total", "Tasks created by reactions"),
+            reactions_skipped,
             catalog_search_latency: histogram(&r, "somework_catalog_search_latency_seconds", "catalog.search latency", LATENCY.to_vec()),
             catalog_searches: counter(&r, "somework_catalog_searches_total", "catalog.search calls"),
             catalog_no_match: counter(&r, "somework_catalog_no_match_total", "catalog.search calls without matches"),

@@ -8,7 +8,7 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::{
     config::{SINK_GATEWAY, SINK_MATRIX, SINK_NATS},
-    db::{DbResultExt, icol, jcol, scol, scol_opt},
+    db::{DbResultExt, icol, jcol, jcol_opt, scol, scol_opt},
     domain::{Ctx, Domain},
     policy::{AuthzRequest, Decision},
 };
@@ -37,6 +37,8 @@ pub struct EventSpec {
     /// Topics for `topic` subscriptions (event kind is always included).
     pub topics: Vec<String>,
     pub capability_id: Option<String>,
+    /// A producer never receives its own events through subscriptions.
+    pub exclude_principal: Option<String>,
 }
 
 impl EventSpec {
@@ -132,7 +134,7 @@ impl Domain {
         .await
         .db()?;
 
-        self.match_subscriptions(conn, &mut spec, &payload).await?;
+        self.match_subscriptions(conn, &mut spec, seq, &event_id, &payload).await?;
 
         for (principal_id, wake) in &spec.recipients {
             sqlx::query("INSERT INTO event_recipients(event_seq, principal_id, wake) VALUES (?, ?, ?) ON CONFLICT(event_seq, principal_id) DO UPDATE SET wake = MAX(wake, excluded.wake)")
@@ -172,7 +174,7 @@ impl Domain {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn insert_outbox(
+    pub(crate) async fn insert_outbox(
         &self,
         conn: &mut SqliteConnection,
         event_seq: i64,
@@ -203,13 +205,18 @@ impl Domain {
     }
 
     /// Fan an event out to matching durable subscriptions (SUB-01/02). The `wake` flag is the subscriber's explicit
-    /// choice; loop protection on top of that is enforced by the message taxonomy for message events.
-    async fn match_subscriptions(&self, conn: &mut SqliteConnection, spec: &mut EventSpec, payload: &Value) -> Result<(), Error> {
-        let rows = sqlx::query("SELECT subscription_id, principal_id, kind, selector, wake FROM subscriptions WHERE domain_id = ? AND status = 'active'")
-            .bind(&self.cfg.domain_id)
-            .fetch_all(&mut *conn)
-            .await
-            .db()?;
+    /// choice; loop protection on top of that is enforced by the message taxonomy for message events. Rules add a
+    /// status, payload filters and, for reactions, a ledger row plus an outbox row for the reaction worker.
+    async fn match_subscriptions(&self, conn: &mut SqliteConnection, spec: &mut EventSpec, seq: i64, event_id: &str, payload: &Value) -> Result<(), Error> {
+        let rows = sqlx::query(
+            "SELECT s.subscription_id, s.principal_id, s.kind, s.selector, s.wake, r.rule_name, r.status AS rule_status, r.where_filters, r.reaction
+             FROM subscriptions s LEFT JOIN rules r ON r.subscription_id = s.subscription_id
+             WHERE s.domain_id = ? AND s.status = 'active'",
+        )
+        .bind(&self.cfg.domain_id)
+        .fetch_all(&mut *conn)
+        .await
+        .db()?;
         for row in rows {
             let kind = scol(&row, "kind");
             let selector = scol(&row, "selector");
@@ -226,11 +233,27 @@ impl Domain {
                 continue;
             }
             let owner = scol(&row, "principal_id");
+            if spec.exclude_principal.as_deref() == Some(owner.as_str()) {
+                continue;
+            }
             if matches!(kind.as_str(), "task" | "conversation") && !self.can_observe(conn, &owner, spec).await? {
                 continue;
             }
             let wake = icol(&row, "wake") != 0;
             let sub_id = scol(&row, "subscription_id");
+            let mut routed = true;
+            if let Some(rule_name) = scol_opt(&row, "rule_name") {
+                if scol(&row, "rule_status") != "active" || !crate::rules::filters_hold(&jcol(&row, "where_filters"), payload) {
+                    continue;
+                }
+                if jcol_opt(&row, "reaction").is_some() && !spec.kind.starts_with("reaction.") {
+                    self.queue_reaction(conn, &rule_name, seq, event_id, Self::event_depth(spec, payload)).await?;
+                    routed = wake;
+                }
+            }
+            if !routed {
+                continue;
+            }
             let mut body = payload.clone();
             if let Some(obj) = body.as_object_mut() {
                 obj.insert("subscriptionId".into(), json!(sub_id));
@@ -244,6 +267,10 @@ impl Domain {
             }
         }
         Ok(())
+    }
+
+    fn event_depth(spec: &EventSpec, payload: &Value) -> i64 {
+        crate::rules::stored_event_depth(spec.task_id.is_some(), payload)
     }
 
     /// Whether `principal_id` may still observe the task/conversation of `spec` (re-checked at match time).

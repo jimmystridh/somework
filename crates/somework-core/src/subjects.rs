@@ -32,6 +32,11 @@ pub fn event_task(task_id: &str) -> String {
     format!("somework.event.task.{}", subject_token(task_id))
 }
 
+/// Published events (producers): the topic is already restricted to `[a-z0-9_.]`, so it can only add subject levels.
+pub fn event_published(topic: &str) -> String {
+    format!("somework.event.published.{topic}")
+}
+
 pub fn event_conversation(conversation_id: &str) -> String {
     format!("somework.event.conversation.{}", subject_token(conversation_id))
 }

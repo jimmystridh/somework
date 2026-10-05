@@ -30,6 +30,9 @@ pub struct SubmitTask {
     pub idempotency_key: Option<String>,
     /// Task-specific narrowing, e.g. `{"sideEffectsAtMost": "read"}`.
     pub constraints: Option<Value>,
+    /// The event (addressed to the submitter) this task is a reaction to. Verified, then recorded as the task's origin so that
+    /// chains through agents keep their depth.
+    pub caused_by_event: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +144,14 @@ impl Domain {
             parent_authority = Some(authority);
             parent_row = Some(parent);
         }
+        let origin = match (&ctx.origin, &req.caused_by_event) {
+            (Some(reaction), _) => {
+                authz.force_approval_at_least = Some(SideEffects::Write);
+                Some(reaction.clone())
+            }
+            (None, Some(event_id)) => Some(this.verified_event_origin(conn, &ctx, event_id).await?),
+            (None, None) => None,
+        };
         let mut decision = this.enforce(conn, &ctx, authz.clone()).await?;
         if let (Some(authority), Some(parent)) = (&parent_authority, &parent_row) {
             let policy = this.active_policy(conn).await?;
@@ -225,8 +236,8 @@ impl Domain {
         };
         sqlx::query(
             "INSERT INTO tasks(task_id, domain_id, conversation_id, parent_task_id, capability_id, capability_version, side_effects, capability_snapshot, requester, requester_principal_id,
-               target_agent_id, pool_id, state, revision, attempt, input, context_refs, policy_decision_id, delegation_depth_remaining, idempotency_key, traceparent, created_at, updated_at, deadline_at, constraints)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+               target_agent_id, pool_id, state, revision, attempt, input, context_refs, policy_decision_id, delegation_depth_remaining, idempotency_key, traceparent, created_at, updated_at, deadline_at, constraints, origin)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'submitted', 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&task_id)
         .bind(&this.cfg.domain_id)
@@ -250,6 +261,7 @@ impl Domain {
         .bind(&now)
         .bind(&req.deadline_at)
         .bind(req.constraints.as_ref().map(Value::to_string))
+        .bind(origin.as_ref().map(|o| serde_json::to_string(o).unwrap_or_default()))
         .execute(&mut *conn)
         .await
         .map_err(|e| match crate::db::db_error(e) {

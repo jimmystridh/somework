@@ -113,11 +113,13 @@ pub struct Ctx {
     pub if_match: Option<u64>,
     pub transport: String,
     pub transport_event_id: Option<String>,
+    /// Set when the request is a reaction submitting a task on behalf of a rule.
+    pub origin: Option<crate::rules::TaskOrigin>,
 }
 
 impl Ctx {
     pub fn new(actor: Actor) -> Self {
-        Self { actor, trace: TraceContext::new_root(), idempotency_key: None, if_match: None, transport: "rest".into(), transport_event_id: None }
+        Self { actor, trace: TraceContext::new_root(), idempotency_key: None, if_match: None, transport: "rest".into(), transport_event_id: None, origin: None }
     }
 
     pub fn with_trace(mut self, trace: TraceContext) -> Self {
@@ -137,6 +139,11 @@ impl Ctx {
 
     pub fn with_transport_event(mut self, id: impl Into<String>) -> Self {
         self.transport_event_id = Some(id.into());
+        self
+    }
+
+    pub fn with_origin(mut self, origin: crate::rules::TaskOrigin) -> Self {
+        self.origin = Some(origin);
         self
     }
 
@@ -461,7 +468,7 @@ impl Domain {
         result
     }
 
-    async fn record_denial(&self, ctx: &Ctx, op: &str, err: &Error) -> Result<(), Error> {
+    pub(crate) async fn record_denial(&self, ctx: &Ctx, op: &str, err: &Error) -> Result<(), Error> {
         let Some(details) = &err.details else { return Ok(()) };
         let Ok(decision) = serde_json::from_value::<Decision>(details["decision"].clone()) else { return Ok(()) };
         let req = AuthzRequest {
