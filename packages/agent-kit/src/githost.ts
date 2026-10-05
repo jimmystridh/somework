@@ -20,6 +20,9 @@ export function parseGitHubRepo(repoUrl: string): { owner: string; repo: string 
 	return { owner: match[1]!, repo: match[2]! };
 }
 
+/** Other remotes still get the pushed branch; they just have no pull request to open. */
+export const isGitHubRepo = (repoUrl: string): boolean => /github\.com[/:][^/]+\/[^/]+?(?:\.git)?\/?$/.test(repoUrl);
+
 /** GitHub REST. Not exercised against the real API in this repository's tests (needs a token); unit-tested against a stand-in server. */
 export class GitHubHost implements GitHost {
 	readonly #token: string;
@@ -45,12 +48,14 @@ export class GitHubHost implements GitHost {
 	}
 
 	async findPullRequest(query: { repoUrl: string; head: string }): Promise<PullRequestRef | undefined> {
+		if (!isGitHubRepo(query.repoUrl)) return undefined;
 		const { owner, repo } = parseGitHubRepo(query.repoUrl);
 		const open = await this.#call("GET", `/repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${query.head}`)}`);
 		return open[0] ? { url: open[0].html_url } : undefined;
 	}
 
 	async createPullRequest(request: { repoUrl: string; head: string; base: string; title: string; body: string }): Promise<PullRequestRef | undefined> {
+		if (!isGitHubRepo(request.repoUrl)) return undefined;
 		const { owner, repo } = parseGitHubRepo(request.repoUrl);
 		const created = await this.#call("POST", `/repos/${owner}/${repo}/pulls`, { head: request.head, base: request.base, title: request.title, body: request.body, draft: this.#draft });
 		return { url: created.html_url };

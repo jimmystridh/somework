@@ -11,16 +11,22 @@ requester ─► domain ◄─ NATS wake / HTTPS ─ agent (harness)            
                                            └ git/PR steps ──RPC────► └ the workspace volume
 ```
 
-* `src/runtime.ts` `AgentRuntime`: the interface everything else depends on. `src/pi-runtime.ts` is the only file that knows Pi Durable.
-* `src/service.ts`: the job handler (validate, budgets, shard check, prepare workspace, run, finalize, upload patch) plus `/live`,
-  `/ready`, `/metrics`.
-* `src/git.ts`: deterministic, idempotent branch / commit / push / pull request steps run by **our code, not the model**. The git token
-  is handed to a single command at a time, while no model tool is running.
-* `src/sandbox/`: the sandbox daemon (wraps Pi's own `NodeExecutionEnv`) and `RemoteExecutionEnv`, Pi's `ExecutionEnv` over HTTP.
-* `src/egress/`: the allowlist proxy that is the sandbox network's only exit.
-* `src/policy.ts`: commands that wait for a human (sudo, pipe-to-shell, `rm -rf` outside the workspace, `git push`, publish, ...).
+This package is the **developer role**: `card.json` (the contract), `src/profile.ts` (the profile) and `src/main.ts` (one line: `runAgentService({ profile })`). The
+runtime itself is `@somework/agent-kit` (`packages/agent-kit`, see its README for the role contract and the module list):
+
+* `runtime` / `pi-runtime`: `AgentRuntime` is the interface everything else depends on; `pi-runtime` is the only file that knows Pi Durable.
+* `handler`: the job handler (validate, capability check, budgets, shard check, prepare workspace, run, finalize, upload patch); `health`:
+  `/live`, `/ready`, `/metrics`; `service`: composes it all into the running process.
+* `git`: deterministic, idempotent branch / commit / push / pull request steps run by **our code, not the model**. The git token is handed to
+  a single command at a time, while no model tool is running, and the credential helper answers only for the hosts in `GIT_TOKEN_HOSTS`.
+* `sandbox/`: the sandbox daemon (wraps Pi's own `NodeExecutionEnv`) and `RemoteExecutionEnv`, Pi's `ExecutionEnv` over HTTP.
+  `egress/`: the allowlist proxy that is the sandbox network's only exit.
+* `policy`: commands that wait for a human (sudo, pipe-to-shell, `rm -rf` outside the workspace, `git push`, publish, ...).
   The model's call blocks, the task shows `input_required`, and the requester answers `{approved, reason?}`.
-* `src/shards.ts`, `src/ledger.ts`, `src/metrics.ts`, `src/log.ts`, `src/credentials.ts`, `src/config.ts`, `src/main.ts`.
+* `shards`, `ledger`, `metrics`, `log`, `credentials`, `config`, `skills`.
+
+**Repository skills** are opt-in: `SKILLS_ALLOW=name,name` (and `SKILLS_OVERLAY_DIR`) make the agent read those skills and `AGENTS.md` from the
+checked-out repository; with neither set nothing changes. Details in the kit README.
 
 ## The `code.agent` capability (`card.json`)
 Input: `{repository: {url, ref}, instruction, budget: {maxTokens, maxMinutes}, agentKey?}`. **A job without a budget is rejected**
@@ -60,10 +66,11 @@ only for repositories whose owners accept that.
 | finished but outcome not committed | retry re-attaches, finalize finds the commit and the pull request: nothing is done twice |
 
 ## Tests
-`npm test` (needs `git`, and the domain binary `dist/somework` or `SOMEWORK_BIN`): sandbox (isolation, cancellation kills the process
+Most tests live with the code they test in `packages/agent-kit/test` (run `npm test` there); this package keeps the role-level ones (profile and card,
+the service end to end against a real domain, the crash matrix). `npm test` (needs `git`, and the domain binary `dist/somework` or `SOMEWORK_BIN`) covers: sandbox (isolation, cancellation kills the process
 tree), runtime (dedupe, abort, budget, detach, per-key serialization, approvals), git (local bare remote), units (shards, ledger,
 credentials, metrics, redaction, GitHub client), providers (allowlist, opencode-go, antigravity wiring and OAuth write-back, per-job model), egress proxy, service end to end against a **real domain** (budget, shard, approvals,
-cancel, lost outcome, metrics), and a crash matrix with **separate processes and `kill -9`**. The fake model (`src/fake-model.ts`,
+cancel, lost outcome, metrics), and a crash matrix with **separate processes and `kill -9`**. The fake model (`@somework/agent-kit/providers/faux`,
 `PI_PROVIDER=faux`) is stateless, so it behaves identically after a restart.
 
 Deployment on VM102 and its drills: `deploy/README.md`. Plan and rationale: `docs/PI_AGENT_PLAN.md`.

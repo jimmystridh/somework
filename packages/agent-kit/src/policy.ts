@@ -10,8 +10,9 @@ export const DEFAULT_APPROVAL_PATTERNS: [RegExp, string][] = [
 	[/\b(npm|pnpm|yarn)\s+publish\b|\bcargo\s+publish\b|\bdocker\s+push\b/, "publish an artifact"],
 ];
 
-export function approvalPolicy(extra: string[] = []): ApprovalPolicy {
-	const patterns: [RegExp, string][] = [...DEFAULT_APPROVAL_PATTERNS, ...extra.map((p): [RegExp, string] => [new RegExp(p), `a command matching ${p}`])];
+/** `base` is the role's own pattern list (default: the built-in one); `extra` are deployment additions (`APPROVAL_PATTERNS`). */
+export function approvalPolicy(extra: string[] = [], base: [RegExp, string][] = DEFAULT_APPROVAL_PATTERNS): ApprovalPolicy {
+	const patterns: [RegExp, string][] = [...base, ...extra.map((p): [RegExp, string] => [new RegExp(p), `a command matching ${p}`])];
 	return {
 		needsApproval(tool, args) {
 			if (tool !== "bash") return undefined;

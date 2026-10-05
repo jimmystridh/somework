@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { FileCredentialStore } from "../src/credentials.ts";
-import { GitHubHost, parseGitHubRepo } from "../src/githost.ts";
+import { GitHubHost, isGitHubRepo, parseGitHubRepo } from "../src/githost.ts";
+import { CREDENTIAL_HELPER_SCRIPT } from "../src/git.ts";
+import { spawnSync } from "node:child_process";
 import { DailyLedger } from "../src/ledger.ts";
 import { redact } from "../src/log.ts";
 import { Metrics } from "../src/metrics.ts";
@@ -175,5 +177,33 @@ describe("GitHub host", () => {
 		assert.deepEqual(parseGitHubRepo("https://github.com/acme/payments.git"), { owner: "acme", repo: "payments" });
 		assert.deepEqual(parseGitHubRepo("git@github.com:acme/payments.git"), { owner: "acme", repo: "payments" });
 		assert.throws(() => parseGitHubRepo("https://example.com/x/y"), /not a GitHub/);
+	});
+
+	describe("git credential helper", () => {
+		const ask = (request: string, hosts: string, action = "get") =>
+			spawnSync("sh", ["-c", `${CREDENTIAL_HELPER_SCRIPT} ${action}`], { input: request, env: { GIT_TOKEN: "tok-123", GIT_TOKEN_HOSTS: hosts, PATH: process.env.PATH }, encoding: "utf8" }).stdout;
+
+		it("answers for an allowed host", () => {
+			assert.equal(ask("protocol=https\nhost=github.com\n\n", "github.com"), "username=x-access-token\npassword=tok-123\n");
+		});
+
+		it("gives nothing to any other host, including look-alikes and redirect targets", () => {
+			for (const host of ["evil.example", "github.com.evil.example", "notgithub.com", "api.github.com"]) assert.equal(ask(`protocol=https\nhost=${host}\n\n`, "github.com"), "", host);
+			assert.equal(ask("protocol=https\n\n", "github.com"), "", "no host line");
+		});
+
+		it("supports several allowed hosts and ignores store/erase", () => {
+			assert.match(ask("host=git.example.org\n\n", "github.com git.example.org"), /password=tok-123/);
+			assert.equal(ask("host=github.com\n\n", "github.com", "store"), "");
+		});
+	});
+
+	it("opens no pull request for a remote that is not GitHub", async () => {
+		const host = new GitHubHost({ token: "tok", fetch: (() => assert.fail("must not call the API")) as unknown as typeof fetch });
+		assert.equal(isGitHubRepo("/workspace/remotes/demo.git"), false);
+		assert.equal(isGitHubRepo("https://git.example.org/o/r.git"), false);
+		assert.equal(isGitHubRepo("git@github.com:o/r.git"), true);
+		assert.equal(await host.findPullRequest({ repoUrl: "/workspace/remotes/demo.git", head: "agent/t" }), undefined);
+		assert.equal(await host.createPullRequest({ repoUrl: "https://git.example.org/o/r.git", head: "agent/t", base: "main", title: "t", body: "b" }), undefined);
 	});
 });

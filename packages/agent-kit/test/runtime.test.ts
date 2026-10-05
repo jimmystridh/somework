@@ -8,7 +8,7 @@ import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi
 import { sleep } from "@somework/sdk";
 import { PiDurableRuntime, type ApprovalPolicy } from "../src/pi-runtime.ts";
 import type { AgentRequest, RunHooks } from "../src/runtime.ts";
-import { scriptedModels } from "../src/fake-model.ts";
+import { scriptedModels } from "../src/providers/faux.ts";
 
 const open: PiDurableRuntime[] = [];
 afterEach(async () => {

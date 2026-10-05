@@ -1,5 +1,5 @@
 # Prometheus alert rules for the Pi agent. Load them into the central Prometheus/Mimir ruler once the metrics are scraped
-# (see alloy-metrics.alloy). Metric names come from adapters/pi/src/service.ts; not yet loaded into the central stack.
+# (see alloy-metrics.alloy). Metric names come from packages/agent-kit/src/handler.ts; not yet loaded into the central stack.
 groups:
   - name: somework-pi
     rules:

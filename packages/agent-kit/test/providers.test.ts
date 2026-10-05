@@ -12,8 +12,8 @@ import { antigravityProvider, loadAntigravity, type AntigravityImplementation } 
 import { loadProvider, registerProviders } from "../src/providers/index.ts";
 import { emptyUsage, type AgentRequest, type AgentRuntime } from "../src/runtime.ts";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { createHandler } from "../src/service.ts";
-import { FakeHost, makeRemote } from "./fakes.ts";
+import { createHandler } from "../src/handler.ts";
+import { FakeHost, makeRemote } from "../src/testing.ts";
 
 const tmp = () => mkdtempSync(join(tmpdir(), "pi-prov-"));
 const authFile = (content: unknown): string => {

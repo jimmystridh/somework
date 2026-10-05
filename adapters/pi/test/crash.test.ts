@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { sleep } from "@somework/sdk";
 import { freePort, startDomain } from "../../../sdk/typescript/test/harness.ts";
-import { makeRemote, sh } from "./fakes.ts";
+import { makeRemote, sh } from "@somework/agent-kit/testing";
 
 const here = new URL(".", import.meta.url).pathname;
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -36,7 +36,7 @@ async function world(plan: string[]) {
 	const tokenFile = join(dir, "sandbox-token");
 	writeFileSync(tokenFile, "s".repeat(48));
 	const sandboxPort = await freePort();
-	const sandbox = run("src/sandbox/main.ts", { SANDBOX_TOKEN_FILE: tokenFile, SANDBOX_ROOT: workspaces, SANDBOX_PORT: String(sandboxPort), SANDBOX_HOST: "127.0.0.1" });
+	const sandbox = run("../../packages/agent-kit/src/sandbox/main.ts", { SANDBOX_TOKEN_FILE: tokenFile, SANDBOX_ROOT: workspaces, SANDBOX_PORT: String(sandboxPort), SANDBOX_HOST: "127.0.0.1" });
 	cleanups.push(() => void sandbox.kill("SIGKILL"));
 	for (let i = 0; i < 100; i++) {
 		try {

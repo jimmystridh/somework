@@ -25,6 +25,10 @@ on it past the access token's expiry.
 
 `auth.json` may hold several providers (`openai-codex`, `opencode-go` as `{"type":"api_key","key":...}`, `antigravity` as the OAuth entry
 Pi wrote on a workstation). Copy a provider's entry only when it is meant to be used: `PI_PROVIDER`/`PI_MODEL` pick the default and
+**Repository skills** (optional): `SKILLS_ALLOW=review-skill,verify-skill` (comma separated names) lets the agent read those skills and `AGENTS.md` from the
+repository it works on; `SKILLS_OVERLAY_DIR=/run/skills-overlay` (the compose file mounts `./skills-overlay` there, read-only) holds
+`<name>.md` overlays that adjust a skill for this agent. Unset means the feature is off.
+
 `PI_ALLOWED_MODELS` (comma separated `provider/model-id`) lists what a job may request with `input.model`. Antigravity and OpenCode send
 the repository content to Google (a personal account's login) and to third-party model hosts respectively: keep them out of the default
 and off any repository whose owners have not agreed. Re-register `card.json` after upgrading (`input.model` is a new optional field).
@@ -34,6 +38,13 @@ and off any repository whose owners have not agreed. Re-register `card.json` aft
 docker build -f adapters/pi/Dockerfile --target agent   -t somework-pi-agent:<tag>   .     # from the repository root
 docker build -f adapters/pi/Dockerfile --target sandbox -t somework-pi-sandbox:<tag> .
 docker build -f adapters/pi/Dockerfile --target egress  -t somework-pi-egress:<tag>  .
+```
+The build context is the repository root: the images are built from the npm workspace (`package.json`, the one `package-lock.json`, `.npmrc`,
+`sdk/typescript`, `packages/agent-kit`, `adapters/pi`, and the other workspaces' `package.json` files, which `npm ci` checks the lockfile
+against). When building on the host, sync those paths (`rsync -aR --exclude node_modules package.json package-lock.json .npmrc sdk
+packages adapters/pi adapters/manager/package.json host:somework-pilot/src/`) before running the commands above. The build fails if the
+agent, the sandbox daemon or the egress proxy cannot import every module they run.
+```bash
 docker compose --profile init run --rm -T init-volumes </dev/null
 docker compose up -d && ./verify-sandbox.sh .
 ```

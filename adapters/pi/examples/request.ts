@@ -1,6 +1,6 @@
 // Submit a coding task to the Pi agent and follow it to the end.
 //   node examples/request.ts --url https://host:8443 --key requester.key.json --ca ca.pem \
-//        --repo https://github.com/acme/app.git --ref main --instruction "fix the failing test" [--approve ask|yes|no]
+//        --repo https://github.com/acme/app.git --ref main --instruction "fix the failing test" [--approve ask|yes|no] [--model provider/model-id]
 import { createInterface } from "node:readline/promises";
 import { Identity, SomeWorkClient, sleep } from "@somework/sdk";
 
@@ -9,13 +9,15 @@ for (let i = 2; i < process.argv.length; i += 2) args.set(process.argv[i]!.repla
 const need = (name: string): string => args.get(name) ?? (console.error(`missing --${name}`), process.exit(2));
 
 const client = new SomeWorkClient({ baseUrl: need("url"), identity: Identity.fromFile(need("key")), caFile: args.get("ca"), requireTls: args.has("ca") });
+const [modelProvider, ...modelRest] = (args.get("model") ?? "").split("/");
 const task = await client.submitTask({
-	capability: { id: "code.agent", version: "1" },
+	capability: { id: "code.agent", version: args.has("model") ? "2" : "1" },
 	input: {
 		repository: { url: need("repo"), ref: args.get("ref") ?? "main" },
 		instruction: need("instruction"),
 		budget: { maxTokens: Number(args.get("max-tokens") ?? 500_000), maxMinutes: Number(args.get("max-minutes") ?? 20) },
 		...(args.has("key-name") ? { agentKey: args.get("key-name") } : {}),
+		...(args.has("model") ? { model: { provider: modelProvider, id: modelRest.join("/") } } : {}),
 	},
 });
 console.error(`task ${task.taskId} submitted`);

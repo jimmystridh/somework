@@ -44,6 +44,9 @@ services:
       SANDBOX_WORKSPACES: /workspace
       GIT_TOKEN_FILE: /run/secrets/git-token
       GIT_PR_DRAFT: ${GIT_PR_DRAFT:-1}
+      GIT_TOKEN_HOSTS: ${GIT_TOKEN_HOSTS:-github.com}   # the only hosts the git token may ever be sent to
+      SKILLS_ALLOW: ${SKILLS_ALLOW:-}                   # repository skills this agent may use; empty = none
+      SKILLS_OVERLAY_DIR: ${SKILLS_OVERLAY_DIR:-}
       BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-2000000}
       BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-60}
       DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-10000000}
@@ -53,6 +56,7 @@ services:
       - ./config/ca.pem:/run/somework/ca.pem:ro
       - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - ./skills-overlay:/run/skills-overlay:ro               # <skill>.md overlays (only used with SKILLS_OVERLAY_DIR)
       - ./secrets/git-token:/run/secrets/git-token:ro       # fine-grained PAT, one repository: Contents + Pull requests write
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]

@@ -5,11 +5,12 @@ import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCal
  * already in the current run, so it behaves identically after a crash and restart (no queue position to lose).
  *   bash:<command>   write:<path>:<content>   read:<path>   final:<text>
  */
-export function scriptedModels(plan: string[]) {
+export function scriptedModels(plan: string[], observe?: (context: unknown) => void) {
 	const faux = fauxProvider();
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const step = (context: { messages: { role: string }[] }) => {
+		observe?.(context);
 		// only the tool results of the current run count: a later run in the same conversation starts the plan again
 		const lastUser = context.messages.map((m) => m.role).lastIndexOf("user");
 		const index = context.messages.slice(lastUser + 1).filter((m) => m.role === "toolResult").length;

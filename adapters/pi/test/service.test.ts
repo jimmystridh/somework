@@ -5,15 +5,11 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { sleep, Worker, type Handler, type SomeWorkClient } from "@somework/sdk";
-import { scriptedModels } from "../src/fake-model.ts";
-import { DailyLedger } from "../src/ledger.ts";
-import { Metrics } from "../src/metrics.ts";
-import { PiDurableRuntime } from "../src/pi-runtime.ts";
-import { approvalPolicy } from "../src/policy.ts";
-import { createHandler, type HandlerDeps } from "../src/service.ts";
-import { type ShardTable } from "../src/shards.ts";
+import { createHandler, DailyLedger, Metrics, PiDurableRuntime, approvalPolicy, type HandlerDeps, type ShardTable } from "@somework/agent-kit";
+import { scriptedModels } from "@somework/agent-kit/providers/faux";
 import { startDomain, type Domain } from "../../../sdk/typescript/test/harness.ts";
-import { FakeHost, makeRemote, sh } from "./fakes.ts";
+import { FakeHost, makeRemote, sh } from "@somework/agent-kit/testing";
+import { profile } from "../src/profile.ts";
 
 const here = new URL(".", import.meta.url).pathname;
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -56,6 +52,7 @@ async function stack(plan: string[], extra: Partial<HandlerDeps> = {}, wrap: (in
 		client: domain.worker(),
 		limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 },
 		metrics,
+		profile,
 		...extra,
 	}));
 	return {

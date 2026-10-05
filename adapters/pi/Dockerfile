@@ -8,15 +8,24 @@ FROM node:22.22.1-bookworm-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c357
 ENV NODE_ENV=production NODE_OPTIONS=--disable-warning=ExperimentalWarning
 WORKDIR /app
 
+# Dependencies come from the workspace's one lockfile. Only the workspaces' manifests are copied first, so this layer is cached
+# until a dependency changes. `-w` installs just this role's dependency tree (the SDK and the agent kit are linked, not downloaded).
 FROM base AS deps
-COPY sdk/typescript /app/sdk/typescript
-COPY adapters/pi/package.json adapters/pi/package-lock.json adapters/pi/.npmrc /app/adapters/pi/
-WORKDIR /app/adapters/pi
-RUN npm ci --omit=dev --ignore-scripts
+COPY package.json package-lock.json .npmrc /app/
+COPY sdk/typescript/package.json /app/sdk/typescript/
+COPY packages/agent-kit/package.json /app/packages/agent-kit/
+COPY adapters/pi/package.json /app/adapters/pi/
+COPY adapters/manager/package.json /app/adapters/manager/
+RUN npm ci --omit=dev --ignore-scripts -w @somework/pi-agent
 
 FROM deps AS app
+COPY sdk/typescript/src /app/sdk/typescript/src
+COPY packages/agent-kit/src /app/packages/agent-kit/src
 COPY adapters/pi/src /app/adapters/pi/src
 COPY adapters/pi/card.json /app/adapters/pi/card.json
+WORKDIR /app/adapters/pi
+# Everything the three images run must import at build time: a dependency that is missing from the lockfile fails here, not in production.
+RUN node --input-type=module -e "for (const name of ['@somework/sdk', '@somework/agent-kit', '@somework/agent-kit/sandbox/server', '@somework/agent-kit/egress/proxy', '@somework/agent-kit/providers/antigravity', './src/profile.ts']) await import(name)"
 
 # The harness: holds the SomeWork key and the model credentials, runs Pi Durable, never runs a tool itself.
 FROM app AS agent
@@ -38,7 +47,7 @@ USER 10002:10002
 ENV HOME=/workspace
 WORKDIR /app/adapters/pi
 EXPOSE 7070
-CMD ["node", "src/sandbox/main.ts"]
+CMD ["node", "/app/packages/agent-kit/src/sandbox/main.ts"]
 
 # The egress proxy: the sandbox network's only way out, with a host allowlist.
 FROM app AS egress
@@ -46,4 +55,4 @@ RUN groupadd --gid 10003 egress && useradd --uid 10003 --gid 10003 --no-create-h
 USER 10003:10003
 WORKDIR /app/adapters/pi
 EXPOSE 8888
-CMD ["node", "src/egress/main.ts"]
+CMD ["node", "/app/packages/agent-kit/src/egress/main.ts"]

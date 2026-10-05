@@ -1,7 +1,7 @@
 import { type Context } from "@earendil-works/chord";
 import { awaitWithContext, BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
-import { createRegistry, defineDoc, defineExtension, hook, Harness, ToolTask, watchEvents, type Conversation, type Extension } from "@earendil-works/pi-durable";
+import { createRegistry, defineDoc, defineExtension, hook, Harness, ToolTask, watchEvents, type Conversation, type Extension, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
@@ -27,6 +27,10 @@ export interface PiRuntimeOptions {
 	env: (cwd: string | undefined) => ExecutionEnv;
 	policy?: ApprovalPolicy;
 	extensions?: Extension<any>[];
+	/** Standing orders for every new conversation (the role's system prompt). */
+	instructions?: string;
+	/** The tools offered to the model, by name; unset offers all. A call to any other tool is blocked as well. */
+	allowedTools?: readonly string[];
 	log?: Log;
 	metrics?: Metrics;
 }
@@ -44,6 +48,7 @@ export class PiDurableRuntime implements AgentRuntime {
 	#rootId = 0;
 	#resumed = false;
 	#modelChoice: { provider: string; modelId: string };
+	#offeredTools: ToolRegistration[] | undefined;
 
 	constructor(options: PiRuntimeOptions) {
 		this.#options = options;
@@ -51,7 +56,19 @@ export class PiDurableRuntime implements AgentRuntime {
 		this.#modelChoice = options.model;
 	}
 
+	/** The registrations behind `allowedTools`: a typo must stop the service at startup, not silently hide a tool. */
+	#resolveAllowedTools(): ToolRegistration[] | undefined {
+		const allowed = this.#options.allowedTools;
+		if (!allowed) return undefined;
+		const known = new Map<string, ToolRegistration>();
+		for (const extension of [CodingTools, ...(this.#options.extensions ?? [])]) for (const tool of extension.tools ?? []) known.set(tool.name, tool);
+		const unknown = allowed.filter((name) => !known.has(name));
+		if (unknown.length > 0) throw new Error(`allowedTools names tools that do not exist: ${unknown.join(", ")} (known: ${[...known.keys()].join(", ")})`);
+		return allowed.map((name) => known.get(name)!);
+	}
+
 	async start(): Promise<void> {
+		this.#offeredTools = this.#resolveAllowedTools();
 		const registry = createRegistry();
 		registry.install(CodingTools);
 		registry.install(this.#policyExtension());
@@ -91,7 +108,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		return (await harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
-				agent: { model, cwd: workspace },
+				agent: { model, cwd: workspace, ...(this.#options.instructions ? { instructions: this.#options.instructions } : {}), ...(this.#offeredTools ? { tools: this.#offeredTools } : {}) },
 				init: async (tx, conversationId) => {
 					(await tx.doc(Keys, rootId as never)).map[agentKey] = conversationId as unknown as number;
 				},
@@ -204,6 +221,7 @@ export class PiDurableRuntime implements AgentRuntime {
 			hooks: [
 				hook(ToolTask, {
 					beforeTool: async (call, api, context) => {
+						if (this.#options.allowedTools && !this.#options.allowedTools.includes(call.name)) return { block: `the tool ${call.name} is not available to this agent` };
 						const summary = policy?.needsApproval(call.name, call.arguments as Record<string, unknown>);
 						if (!summary) return undefined;
 						const memo = `approval:${call.id}`;
