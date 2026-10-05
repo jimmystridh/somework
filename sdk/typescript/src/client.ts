@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { sleep } from "./backoff.ts";
 import { checkOptions, httpCall, TransportError, type HttpOptions } from "./http.ts";
+import { parsePublishResult, parseRuleList, parseRuleView, validatePublish, validateRuleName, validateRuleSpec, type PublishEvent, type PublishResult, type RuleSpec, type RuleView } from "./events.ts";
 import { Identity, newRuntimeInstanceId } from "./identity.ts";
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -102,6 +103,38 @@ export class SomeWorkClient {
 
 	post(path: string, body: unknown, options?: { idempotencyKey?: string; signal?: AbortSignal }): Promise<any> {
 		return this.raw("POST", path, { body, ...options });
+	}
+
+	// ---- events and rules -------------------------------------------------------------------------------------------
+	/** Publishes an event under a topic the caller's `events.publish:<prefix>` permission covers. A repeat of `key` answers `duplicate: true`. */
+	async publishEvent(event: PublishEvent, options: { signal?: AbortSignal } = {}): Promise<PublishResult> {
+		validatePublish(event);
+		return parsePublishResult(await this.raw("POST", "/v1/events/publish", { body: event, idempotencyKey: `event:${event.topic}:${event.key}`.slice(0, 256), signal: options.signal }));
+	}
+
+	async listRules(): Promise<RuleView[]> {
+		return parseRuleList(await this.get("/v1/rules"));
+	}
+
+	async getRule(name: string): Promise<RuleView> {
+		return parseRuleView(await this.get(`/v1/rules/${segment(validateRuleName(name))}`));
+	}
+
+	/** Create or replace; idempotent. The rule's `owner` must be a principal the caller may define rules for (`rules.manage`). */
+	async putRule(name: string, spec: RuleSpec): Promise<RuleView> {
+		return parseRuleView(await this.raw("PUT", `/v1/rules/${segment(validateRuleName(name))}`, { body: validateRuleSpec(spec) }));
+	}
+
+	async deleteRule(name: string): Promise<void> {
+		await this.raw("DELETE", `/v1/rules/${segment(validateRuleName(name))}`);
+	}
+
+	async pauseRule(name: string): Promise<RuleView> {
+		return parseRuleView(await this.post(`/v1/rules/${segment(validateRuleName(name))}/pause`, {}));
+	}
+
+	async resumeRule(name: string): Promise<RuleView> {
+		return parseRuleView(await this.post(`/v1/rules/${segment(validateRuleName(name))}/resume`, {}));
 	}
 
 	// ---- runtimes ---------------------------------------------------------------------------------------------------

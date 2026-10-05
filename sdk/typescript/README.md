@@ -55,6 +55,20 @@ after a cancel request still commits its result (cancel versus completion is a l
 the promise resolves with the requester's answer (or rejects if the job is stopped meanwhile). `client.uploadArtifact(...)` does
 begin / PUT / complete with digest verification and returns the ArtifactRef to put in `completed.artifacts`.
 
+## Events and rules
+Producers and tooling use the same client (`docs/EVENTS.md`, "Interfaces"):
+
+```ts
+await client.publishEvent({ topic: "github.pull_request.opened", key: deliveryId, source: "github", data: { number: 42 }, classification: "internal", verified: true });
+// -> { seq, eventId, duplicate }   a repeat of `key` answers duplicate: true (30 days)
+
+const rules = await client.listRules();                       // RuleView[]
+await client.putRule("pr-review-opened", spec);                 // create or replace
+await client.pauseRule("pr-review-opened");                     // and resumeRule, deleteRule, getRule
+```
+
+Requests are validated against the contract before anything is sent (`ContractError`: topic shape and length, key, 64 KiB of data, rule shape, `${/pointer}` templates) and answers are checked for the fields the tooling relies on. `publishEvent` carries an idempotency key, so a transport failure is retried safely. `renderTemplate`, `resolvePointer` and `whereMatches` implement the rule input templates and `where` exactly as the domain defines them.
+
 ## Not in this version
 Sending chat messages (reading them is possible through `wakes`). It follows the sidecar's behaviour and can be added without
 changing the handler contract.
