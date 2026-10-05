@@ -1,0 +1,23 @@
+when:
+  - event: manual
+
+steps:
+  - name: rust-build
+    image: rust:1.90-bookworm
+    commands:
+      - cargo build --release -p somework-api -p somework-sidecar
+      - mkdir -p dist
+      - cp target/release/somework target/release/somework-sidecar dist/
+
+  - name: rust-test
+    image: rust:1.90-bookworm
+    commands:
+      - cargo test --workspace --release
+
+  - name: typescript-test
+    image: node:22.19.0-bookworm
+    commands:
+      - ./scripts/fetch-tools.sh
+      - npm ci --ignore-scripts
+      - npm run check:roles
+      - npm test

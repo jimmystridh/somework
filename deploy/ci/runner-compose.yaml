@@ -1,0 +1,25 @@
+name: agent-cluster-ci
+services:
+  agent:
+    image: woodpeckerci/woodpecker-agent:v3.18.1@sha256:73ee7cc63161b40bfefa4a26eae45c518a09124ab34f7e3c5e781df85e1ba4ac
+    restart: unless-stopped
+    mem_limit: 2g
+    pids_limit: 512
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/agent-cluster-woodpecker-agent:/run/secrets:ro
+      - agent-state:/etc/woodpecker
+    environment:
+      WOODPECKER_SERVER: ${SERVER_IP}:9000
+      WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent-secret
+      WOODPECKER_BACKEND: docker
+      WOODPECKER_HOSTNAME: admin-cloud-ci
+      WOODPECKER_MAX_WORKFLOWS: '2'
+      WOODPECKER_AGENT_LABELS: repo=${REPO_OWNER}/${REPO_NAME}
+      WOODPECKER_LOG_LEVEL: info
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+volumes:
+  agent-state:

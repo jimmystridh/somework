@@ -1,0 +1,46 @@
+name: agent-cluster-woodpecker
+services:
+  server:
+    image: woodpeckerci/woodpecker-server:v3.18.1@sha256:58dafbe56bb3529d78b48ee8d56a1f4b0886748763fd04ac23c01cc06c3dd24e
+    restart: unless-stopped
+    user: '1000:1000'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    cpus: 1
+    mem_limit: 300m
+    pids_limit: 128
+    ports:
+      - '${SERVER_IP}:9445:8443'
+      - '${SERVER_IP}:9000:9000'
+    volumes:
+      - /etc/agent-cluster-woodpecker:/run/secrets:ro
+      - /srv/agent-cluster-woodpecker:/var/lib/woodpecker
+    env_file:
+      - /etc/agent-cluster-woodpecker/github.env
+    environment:
+      GOMEMLIMIT: 240MiB
+      WOODPECKER_HOST: ${WOODPECKER_HOST}
+      WOODPECKER_SERVER_ADDR: ':8000'
+      WOODPECKER_SERVER_ADDR_TLS: ':8443'
+      WOODPECKER_SERVER_CERT: /run/secrets/server.crt
+      WOODPECKER_SERVER_KEY: /run/secrets/server.key
+      WOODPECKER_GRPC_ADDR: ':9000'
+      WOODPECKER_AGENT_SECRET_FILE: /run/secrets/agent-secret
+      WOODPECKER_OPEN: 'false'
+      WOODPECKER_ADMIN: ${ADMIN_LOGIN}
+      WOODPECKER_REPO_OWNERS: ${REPO_OWNER}
+      WOODPECKER_GITHUB: 'true'
+      WOODPECKER_DISABLE_USER_AGENT_REGISTRATION: 'true'
+      WOODPECKER_DATABASE_DRIVER: sqlite3
+      WOODPECKER_DATABASE_DATASOURCE: /var/lib/woodpecker/woodpecker.sqlite
+      WOODPECKER_LOG_LEVEL: info
+    tmpfs: ['/tmp:size=16m,mode=1777']
+    healthcheck:
+      test: ['CMD', '/bin/woodpecker-server', 'ping']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
