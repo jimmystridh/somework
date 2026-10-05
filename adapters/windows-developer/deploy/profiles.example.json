@@ -1,0 +1,23 @@
+{
+  "build": {
+    "example-build": {
+      "command": "echo replace-with-the-real-build-command && exit 0",
+      "cwd": ".",
+      "timeoutMinutes": 120,
+      "env": { "CONFIGURATION": "Release" },
+      "blockPushOnFailure": true
+    }
+  },
+  "test": {
+    "example-tests": {
+      "command": "echo replace-with-the-real-test-command && exit 0",
+      "timeoutMinutes": 30,
+      "blockPushOnFailure": true
+    }
+  },
+  "encoding": {
+    "legacyGlobs": ["**/*.cpp", "**/*.h", "**/*.rc"],
+    "utf8Globs": ["**/*.md", "**/*.json", "**/*.ts"],
+    "blockPush": true
+  }
+}

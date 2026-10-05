@@ -1,0 +1,13 @@
+# Outbound destinations the service user may reach. One per line: a host name, an IPv4 address, a CIDR block or an a.b.c.d-e.f.g.h range.
+# Host names are resolved when firewall.ps1 runs (and again by its refresh task); everything else outbound is blocked for that user.
+somework.example.test
+api.openai.com
+auth.openai.com
+chatgpt.com
+github.com
+api.github.com
+codeload.github.com
+registry.npmjs.org
+nuget.pkg.github.com
+api.nuget.org
+# the build tools' own feeds, mirrors and licence servers go here

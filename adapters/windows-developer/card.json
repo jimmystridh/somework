@@ -1,0 +1,292 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/windows-developer",
+  "domainId": "development",
+  "displayName": "Windows developer",
+  "description": "Makes code changes that must build and run on Windows, on a Windows machine with the Windows toolchain. Works like the Linux developer (branch agent/<taskId>, pull request) and additionally runs a build and tests selected by name from the profiles configured on the machine, and refuses to push files whose encoding or line endings were damaged.",
+  "owner": {
+    "team": "platform"
+  },
+  "interfaces": [
+    {
+      "protocol": "mcp"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "code.windows",
+      "version": "1",
+      "name": "Windows coding agent",
+      "description": "Give an instruction and a repository (url + ref). The agent changes the checkout on Windows; afterwards the service runs the selected build profile and test profiles (by name, configured on the agent), checks that no modified file changed encoding or line endings, and only then pushes branch agent/<taskId> and opens a pull request. If a blocking check fails the task completes with status `blocked` and nothing is pushed. A budget (maxTokens, maxMinutes) is required. The agent may ask the requester for approval before risky commands (the task shows input_required; answer with {approved: true|false, reason?}).",
+      "tags": [
+        "contract:idempotent",
+        "coding",
+        "windows"
+      ],
+      "sideEffects": "write",
+      "timeoutSeconds": 3600,
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "repository",
+          "instruction",
+          "budget"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "agentKey": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "stable key that selects the conversation; default: repository + the task's conversation"
+          },
+          "repository": {
+            "type": "object",
+            "required": [
+              "url",
+              "ref"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "ref": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "where the work starts: a branch, a tag, a commit SHA (name the full resolved SHA when handing work over) or refs/pull/<n>/head"
+              },
+              "baseRef": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "branch the pull request targets when ref is not a branch (default: the remote's default branch)"
+              }
+            }
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "model": {
+            "type": "object",
+            "required": [
+              "provider",
+              "id"
+            ],
+            "additionalProperties": false,
+            "description": "optional model for a new conversation; must be enabled on the agent (PI_ALLOWED_MODELS), otherwise the task fails with model_not_allowed. Default: the agent's own model.",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "id": {
+                "type": "string",
+                "maxLength": 200
+              }
+            }
+          },
+          "budget": {
+            "type": "object",
+            "required": [
+              "maxTokens",
+              "maxMinutes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "maxMinutes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "build": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false,
+            "description": "name of a build profile configured on this agent; it runs after the agent finished and before anything is pushed. Arbitrary commands are not accepted.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 64
+              }
+            }
+          },
+          "tests": {
+            "type": "array",
+            "maxItems": 10,
+            "uniqueItems": true,
+            "description": "names of test profiles configured on this agent; they run after the build (skipped when the build failed).",
+            "items": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "status",
+          "summary"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "completed",
+              "no_changes",
+              "blocked"
+            ],
+            "description": "blocked: the work is in the workspace but nothing was pushed (a blocking build, test or encoding check failed; see `blocked`)"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prUrl": {
+            "type": "string"
+          },
+          "build": {
+            "type": "object",
+            "required": [
+              "name",
+              "ok",
+              "exitCode",
+              "durationMs"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "exitCode": {
+                "type": "integer"
+              },
+              "durationMs": {
+                "type": "integer"
+              },
+              "skipped": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "string"
+              },
+              "logArtifact": {
+                "type": "string"
+              }
+            }
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "ok",
+                "exitCode",
+                "durationMs"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "exitCode": {
+                  "type": "integer"
+                },
+                "durationMs": {
+                  "type": "integer"
+                },
+                "skipped": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "logArtifact": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "encoding": {
+            "type": "object",
+            "required": [
+              "ok",
+              "checked"
+            ],
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "checked": {
+                "type": "integer"
+              },
+              "violations": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "file",
+                    "reasons"
+                  ],
+                  "properties": {
+                    "file": {
+                      "type": "string"
+                    },
+                    "reasons": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "blocked": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "totalTokens": {
+                "type": "integer"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            }
+          },
+          "baseSha": {
+            "type": "string",
+            "description": "the full commit SHA the work started from"
+          }
+        }
+      }
+    }
+  ]
+}
