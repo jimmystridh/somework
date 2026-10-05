@@ -30,6 +30,8 @@ const natsServerBinary = process.env.NATS_SERVER_BIN ?? join(repoRoot, "tools/bi
 export interface Broker {
 	url: string;
 	port: number;
+	/** Set when the broker serves TLS with a certificate for 127.0.0.1 (an IP, as deployments use). */
+	caPem?: string;
 	stop(): Promise<void>;
 	start(): Promise<void>;
 }
@@ -51,16 +53,18 @@ export interface Domain {
 }
 
 /** A real domain server in a temporary directory with one provider agent (`agent/ts-worker`, code.review) and one requester. */
-export async function startDomain(options: { cardFile?: string; nats?: boolean } = {}): Promise<Domain> {
+export async function startDomain(options: { cardFile?: string; nats?: boolean | "tls" } = {}): Promise<Domain> {
 	const dir = mkdtempSync(join(tmpdir(), "somework-sdk-"));
 	const port = await freePort();
 	const url = `http://127.0.0.1:${port}`;
 	const config = join(dir, "somework.toml");
 	const natsPort = options.nats ? await freePort() : 0;
 	const natsDir = join(dir, "nats");
-	const natsUrl = `nats://127.0.0.1:${natsPort}`;
+	const tlsFiles = options.nats === "tls" ? makeTlsFiles(join(dir, "nats-tls")) : undefined;
+	const natsUrl = `${tlsFiles ? "tls" : "nats"}://127.0.0.1:${natsPort}`;
+	const natsTls = tlsFiles ? `tls_required = true\ntls_ca_file = "${tlsFiles.ca}"\n` : "";
 	const natsSection = options.nats
-		? `[nats]\nurl = "${natsUrl}"\nuser = "somework-domain"\npassword = "domain-secret-for-tests"\nusers_file = "${natsDir}/users.conf"\nreload_command = ["sh", "-c", "kill -HUP $(cat ${natsDir}/nats.pid)"]\nreconcile_interval_ms = 200\nmetrics_interval_ms = 500\n`
+		? `[nats]\n${natsTls}url = "${natsUrl}"\nuser = "somework-domain"\npassword = "domain-secret-for-tests"\nusers_file = "${natsDir}/users.conf"\nreload_command = ["sh", "-c", "kill -HUP $(cat ${natsDir}/nats.pid)"]\nreconcile_interval_ms = 200\nmetrics_interval_ms = 500\n`
 		: "";
 	const masterKey = options.nats ? `master_key = "${randomBytes(32).toString("base64url")}"\n` : "";
 	writeFileSync(
@@ -83,7 +87,7 @@ export async function startDomain(options: { cardFile?: string; nats?: boolean }
 	let nats: Broker | undefined;
 	if (options.nats) {
 		mkdirSync(natsDir, { recursive: true });
-		admin("render-nats-conf", "--out-dir", natsDir, "--host", "127.0.0.1", "--port", String(natsPort), "--store-dir", join(natsDir, "jetstream"), "--pid-file", join(natsDir, "nats.pid"));
+		admin("render-nats-conf", "--out-dir", natsDir, "--host", "127.0.0.1", "--port", String(natsPort), "--store-dir", join(natsDir, "jetstream"), "--pid-file", join(natsDir, "nats.pid"), ...(tlsFiles ? ["--tls-cert", tlsFiles.cert, "--tls-key", tlsFiles.key] : []));
 		const startBroker = async () => {
 			broker = spawn(natsServerBinary, ["-c", join(natsDir, "nats-server.conf")], { stdio: "ignore" });
 			broker.unref();
@@ -100,7 +104,7 @@ export async function startDomain(options: { cardFile?: string; nats?: boolean }
 			current.kill("SIGKILL");
 			await new Promise((done) => current.once("exit", done));
 		};
-		nats = { url: natsUrl, port: natsPort, start: startBroker, stop: stopBroker };
+		nats = { url: natsUrl, port: natsPort, ...(tlsFiles ? { caPem: readFileSync(tlsFiles.ca, "utf8") } : {}), start: startBroker, stop: stopBroker };
 		await startBroker();
 	}
 
@@ -145,6 +149,24 @@ export async function startDomain(options: { cardFile?: string; nats?: boolean }
 			proxy.close();
 		},
 	};
+}
+
+/** A throwaway CA and a server certificate valid for the IP 127.0.0.1 only (no DNS name), like the deployed broker. */
+function makeTlsFiles(dir: string): { ca: string; cert: string; key: string } {
+	mkdirSync(dir, { recursive: true });
+	const at = (name: string) => join(dir, name);
+	const run = (...args: string[]) => {
+		const out = spawnSync("openssl", args, { encoding: "utf8" });
+		if (out.status !== 0) throw new Error(`openssl ${args.join(" ")} failed: ${out.stderr}`);
+	};
+	writeFileSync(at("ca.ext"), "basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign\n");
+	writeFileSync(at("server.ext"), "basicConstraints=CA:FALSE\nsubjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n");
+	run("ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", at("ca.key"));
+	run("req", "-x509", "-new", "-key", at("ca.key"), "-subj", "/CN=sdk-test-ca", "-days", "2", "-addext", "basicConstraints=critical,CA:TRUE", "-out", at("ca.pem"));
+	run("ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", at("server.key"));
+	run("req", "-new", "-key", at("server.key"), "-subj", "/CN=broker", "-out", at("server.csr"));
+	run("x509", "-req", "-in", at("server.csr"), "-CA", at("ca.pem"), "-CAkey", at("ca.key"), "-CAcreateserial", "-days", "2", "-extfile", at("server.ext"), "-out", at("server.pem"));
+	return { ca: at("ca.pem"), cert: at("server.pem"), key: at("server.key") };
 }
 
 async function portOpen(port: number): Promise<boolean> {

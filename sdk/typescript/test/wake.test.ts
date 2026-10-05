@@ -101,6 +101,25 @@ describe("NATS wake", () => {
 		await assert.rejects(() => NatsWakeSource.connect(info, "agent/ts-worker", { requireTls: true }, () => {}), /./);
 	});
 
+	it("verifies a TLS broker that is addressed by IP and rejects an unknown CA", async () => {
+		const secured = await startDomain({ nats: "tls" });
+		try {
+			const info = natsInfoFrom(await secured.worker().connection());
+			assert.ok(info?.url.startsWith("tls://127.0.0.1:"), "the domain hands out the TLS URL");
+			const source = await NatsWakeSource.connect(info, "agent/ts-worker", { requireTls: true, caPem: secured.nats!.caPem }, () => {});
+			await source.close();
+			const stranger = startDomain({ nats: "tls" });
+			const other = await stranger;
+			try {
+				await assert.rejects(() => NatsWakeSource.connect(info, "agent/ts-worker", { requireTls: true, caPem: other.nats!.caPem }, () => {}), /./);
+			} finally {
+				await other.close();
+			}
+		} finally {
+			await secured.close();
+		}
+	});
+
 	it("streams wakes to a requester-style consumer", async () => {
 		const abort = new AbortController();
 		const client = domain.worker();

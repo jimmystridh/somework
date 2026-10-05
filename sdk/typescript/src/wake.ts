@@ -1,3 +1,4 @@
+import { checkServerIdentity, type PeerCertificate } from "node:tls";
 import { jetstream } from "@nats-io/jetstream";
 import { connect, type NatsConnection } from "@nats-io/transport-node";
 import { Backoff, jittered, sleep } from "./backoff.ts";
@@ -127,10 +128,12 @@ export class NatsWakeSource {
 	 */
 	static async connect(info: NatsInfo, ownAgentId: string, tls: SomeWorkClient["tls"], onWake: (wake: Wake) => void, kinds: readonly WakeKind[] = ["task", "message", "taskEvent"]): Promise<NatsWakeSource> {
 		const secure = tls.requireTls || tls.caPem !== undefined || info.url.startsWith("tls://");
+		const servers = info.url.replace(/^(nats|tls):\/\//, "");
+		const expectedHost = new URL(`tls://${servers}`).hostname.replace(/^\[|\]$/g, "");
 		const connection = await connect({
-			servers: info.url.replace(/^(nats|tls):\/\//, ""),
+			servers,
 			...(info.user !== undefined && info.password !== undefined ? { user: info.user, pass: info.password } : info.token !== undefined ? { token: info.token } : {}),
-			...(secure ? { tls: tls.caPem ? { ca: tls.caPem } : {} } : {}),
+			...(secure ? { tls: { ...(tls.caPem ? { ca: tls.caPem } : {}), checkServerIdentity: (_name: string, certificate: PeerCertificate) => checkServerIdentity(expectedHost, certificate) } } : {}),
 			reconnect: false,
 			timeout: 10_000,
 		});
