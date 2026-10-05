@@ -1,0 +1,35 @@
+[package]
+name = "somework-testkit"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+axum = "0.8.9"
+chrono = "0.4.45"
+ed25519-dalek = "3.0.0"
+parking_lot = "0.12.5"
+rand = "0.10.3"
+rcgen = "0.14.10"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+somework-api = { version = "0.1.0", path = "../somework-api" }
+somework-client = { version = "0.1.0", path = "../somework-client" }
+somework-core = { version = "0.1.0", path = "../somework-core" }
+somework-domain = { version = "0.1.0", path = "../somework-domain" }
+somework-gateway = { version = "0.1.0", path = "../somework-gateway" }
+somework-matrix = { version = "0.1.0", path = "../somework-matrix" }
+somework-nats = { version = "0.1.0", path = "../somework-nats" }
+sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["full"] }
+tokio-util = "0.7.19"
+tracing = "0.1.44"
+urlencoding = "2.1.3"
+vodozemac = "0.11.1"

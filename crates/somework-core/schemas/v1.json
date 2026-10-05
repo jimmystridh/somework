@@ -1,0 +1,1194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:somework:schema:v1",
+  "title": "SomeWork Contracts",
+  "$defs": {
+    "ActorRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "domainId"],
+      "properties": {
+        "kind": {
+          "enum": ["agent", "human", "service", "domain"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "domainId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "Capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "name",
+        "description",
+        "inputSchema",
+        "outputSchema",
+        "sideEffects"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{1,127}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "uniqueItems": true
+        },
+        "inputSchema": {
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object"
+        },
+        "inputMediaTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputMediaTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sideEffects": {
+          "enum": ["none", "read", "write", "irreversible"]
+        },
+        "dataClasses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "requiredPermissions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "examples": {
+          "type": "array",
+          "maxItems": 10,
+          "items": {
+            "type": "object"
+          }
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "costHint": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "AgentCard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "agentId",
+        "domainId",
+        "displayName",
+        "description",
+        "owner",
+        "capabilities",
+        "interfaces"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "agentId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._:/-]{1,255}$"
+        },
+        "domainId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "owner": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["team"],
+          "properties": {
+            "team": {
+              "type": "string"
+            },
+            "contact": {
+              "type": "string"
+            },
+            "service": {
+              "type": "string"
+            }
+          }
+        },
+        "status": {
+          "enum": ["active", "degraded", "offline", "disabled"],
+          "default": "active"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Capability"
+          }
+        },
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["protocol"],
+            "properties": {
+              "protocol": {
+                "enum": ["somework", "a2a", "mcp"]
+              },
+              "binding": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "version": {
+                "type": "string"
+              },
+              "tenant": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "authSchemes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "cardVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "CatalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entryId",
+        "agentCard",
+        "visibility",
+        "approval",
+        "availability",
+        "source"
+      ],
+      "properties": {
+        "entryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "agentCard": {
+          "$ref": "#/$defs/AgentCard"
+        },
+        "visibility": {
+          "enum": ["private", "domain", "exported", "public"]
+        },
+        "exportedCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "trustTier": {
+          "enum": ["local", "partner", "external", "untrusted"]
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "enum": ["draft", "approved", "suspended", "revoked"]
+            },
+            "approvedBy": {
+              "type": "string"
+            },
+            "approvedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "policyVersion": {
+              "type": "string"
+            }
+          }
+        },
+        "availability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": {
+            "state": {
+              "enum": [
+                "available",
+                "busy",
+                "queueable",
+                "offline",
+                "unknown"
+              ]
+            },
+            "activeInstances": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "queueDepth": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {
+              "enum": ["native", "a2a", "manual"]
+            },
+            "uri": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string"
+            }
+          }
+        },
+        "searchText": {
+          "type": "string",
+          "maxLength": 8192
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ArtifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifactId",
+        "version",
+        "uri",
+        "mediaType",
+        "sizeBytes",
+        "digest",
+        "classification",
+        "createdBy",
+        "createdAt"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "uri": {
+          "type": "string",
+          "pattern": "^artifact://"
+        },
+        "filename": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "value"],
+          "properties": {
+            "algorithm": {
+              "const": "sha-256"
+            },
+            "value": {
+              "type": "string",
+              "pattern": "^[A-Fa-f0-9]{64}$"
+            }
+          }
+        },
+        "classification": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdBy": {
+          "$ref": "#/$defs/ActorRef"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "sourceTaskId": {
+          "type": "string"
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "encryption": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "MessageEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "messageId",
+        "type",
+        "sender",
+        "recipients",
+        "domainId",
+        "createdAt",
+        "content",
+        "triggerMode"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "messageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "type": {
+          "enum": [
+            "chat.message",
+            "chat.notice",
+            "event.notification",
+            "task.request",
+            "task.status",
+            "task.input",
+            "task.result",
+            "context.offer",
+            "context.accepted",
+            "artifact.published",
+            "approval.request",
+            "approval.decision",
+            "catalog.changed",
+            "policy.denied",
+            "stream.chunk",
+            "presence.changed"
+          ]
+        },
+        "sender": {
+          "$ref": "#/$defs/ActorRef"
+        },
+        "recipients": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ActorRef"
+          }
+        },
+        "domainId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "correlationId": {
+          "type": "string"
+        },
+        "causationId": {
+          "type": "string"
+        },
+        "replyTo": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "priority": {
+          "enum": ["low", "normal", "high", "critical"],
+          "default": "normal"
+        },
+        "triggerMode": {
+          "enum": ["never", "directed", "subscription", "task-state"]
+        },
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mediaType", "data"],
+          "properties": {
+            "mediaType": {
+              "type": "string"
+            },
+            "data": {}
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        },
+        "contextRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["contextPackId", "version"],
+            "properties": {
+              "contextPackId": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "sections": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "authorizationTokenId": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "traceparent": {
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "taskId",
+        "domainId",
+        "capability",
+        "requester",
+        "state",
+        "revision",
+        "createdAt",
+        "updatedAt",
+        "input",
+        "attempt"
+      ],
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "domainId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "parentTaskId": {
+          "type": ["string", "null"]
+        },
+        "capability": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version"],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          }
+        },
+        "requester": {
+          "$ref": "#/$defs/ActorRef"
+        },
+        "targetAgentId": {
+          "type": ["string", "null"]
+        },
+        "assignee": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ActorRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "submitted",
+            "queued",
+            "claimed",
+            "running",
+            "input_required",
+            "blocked",
+            "cancel_requested",
+            "succeeded",
+            "failed",
+            "rejected",
+            "canceled",
+            "expired"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "input": {
+          "type": "object"
+        },
+        "contextRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["contextPackId", "version"],
+            "properties": {
+              "contextPackId": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "lease": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "leaseId",
+                "runtimeInstanceId",
+                "fencingToken",
+                "expiresAt"
+              ],
+              "properties": {
+                "leaseId": {
+                  "type": "string"
+                },
+                "runtimeInstanceId": {
+                  "type": "string"
+                },
+                "fencingToken": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "expiresAt": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          ]
+        },
+        "authorizationTokenId": {
+          "type": "string"
+        },
+        "policyDecisionId": {
+          "type": "string"
+        },
+        "result": {
+          "type": ["object", "null"]
+        },
+        "resultArtifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        },
+        "failure": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["code", "message", "retryable"],
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "retryable": {
+                  "type": "boolean"
+                },
+                "details": {
+                  "type": "object"
+                }
+              }
+            }
+          ]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "deadlineAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "ContextPack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "contextPackId",
+        "version",
+        "objective",
+        "currentState",
+        "requestedContinuation",
+        "security",
+        "provenance",
+        "createdAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0"
+        },
+        "contextPackId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": ["contextPackId", "version"],
+              "properties": {
+                "contextPackId": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          ]
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "acceptanceCriteria": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        },
+        "currentState": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summary", "completed", "remaining"],
+          "properties": {
+            "summary": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "completed": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            },
+            "remaining": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 4096
+              }
+            }
+          }
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["statement", "confidence", "assertedBy"],
+            "properties": {
+              "statement": {
+                "type": "string",
+                "maxLength": 8192
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "assertedBy": {
+                "$ref": "#/$defs/ActorRef"
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "observedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "hypotheses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["statement", "confidence"],
+            "properties": {
+              "statement": {
+                "type": "string",
+                "maxLength": 8192
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "evidenceRefs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["decision", "rationale"],
+            "properties": {
+              "decision": {
+                "type": "string",
+                "maxLength": 8192
+              },
+              "rationale": {
+                "type": "string",
+                "maxLength": 8192
+              },
+              "madeBy": {
+                "$ref": "#/$defs/ActorRef"
+              },
+              "at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "openQuestions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "workspace": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "conversationRefs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["conversationId"],
+            "properties": {
+              "conversationId": {
+                "type": "string"
+              },
+              "fromMessageId": {
+                "type": "string"
+              },
+              "toMessageId": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "toolResultRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ArtifactRef"
+          }
+        },
+        "requestedContinuation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "instruction"],
+          "properties": {
+            "mode": {
+              "enum": [
+                "subtask",
+                "ownership_transfer",
+                "consultation"
+              ]
+            },
+            "instruction": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "expectedOutputCapability": {
+              "type": "string"
+            }
+          }
+        },
+        "executionConstraints": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "security": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["classification", "allowedDomains"],
+          "properties": {
+            "classification": {
+              "type": "string"
+            },
+            "allowedDomains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "redactionsApplied": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "instructionsTrusted": {
+              "const": false
+            }
+          }
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["createdBy"],
+          "properties": {
+            "createdBy": {
+              "$ref": "#/$defs/ActorRef"
+            },
+            "sourceTaskId": {
+              "type": "string"
+            },
+            "sourceAgentId": {
+              "type": "string"
+            }
+          }
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        }
+      }
+    },
+    "AuthorizationToken": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jti",
+        "issuer",
+        "subject",
+        "audience",
+        "domainId",
+        "actions",
+        "issuedAt",
+        "notBefore",
+        "expiresAt",
+        "policyVersion"
+      ],
+      "properties": {
+        "jti": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 256
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/ActorRef"
+        },
+        "audience": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "domainId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "catalog.read",
+              "message.send",
+              "message.read",
+              "task.submit",
+              "task.read",
+              "task.claim",
+              "task.update",
+              "task.delegate",
+              "task.cancel",
+              "artifact.read",
+              "artifact.write",
+              "context.read",
+              "context.write",
+              "approval.grant",
+              "capability.invoke"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "constraints": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "classificationMax": {
+          "type": "string"
+        },
+        "delegation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed", "remainingDepth"],
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "remainingDepth": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "confirmation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "certificateSha256": {
+              "type": "string",
+              "pattern": "^[A-Fa-f0-9]{64}$"
+            },
+            "keyThumbprint": {
+              "type": "string"
+            }
+          }
+        },
+        "policyVersion": {
+          "type": "string"
+        },
+        "parentJti": {
+          "type": "string"
+        },
+        "issuedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "notBefore": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

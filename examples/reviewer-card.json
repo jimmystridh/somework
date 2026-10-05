@@ -1,0 +1,152 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/reviewer",
+  "domainId": "development",
+  "displayName": "Reviewer",
+  "description": "Reviews source code for correctness and safety problems (demo agent with static heuristics)",
+  "owner": {
+    "team": "platform"
+  },
+  "capabilities": [
+    {
+      "id": "code.review",
+      "version": "1",
+      "name": "Code review",
+      "description": "Review a pull request for correctness and security",
+      "sideEffects": "read",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "repository"
+        ],
+        "properties": {
+          "repository": {
+            "type": "string"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "verdict": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    {
+      "id": "code.review",
+      "version": "2",
+      "name": "Code review (files or text)",
+      "description": "Review source text for correctness and safety problems. Pass the code directly: `files` ([{name, content}], up to 20) or `text`. Static heuristics: shell strictness, destructive commands, unquoted variables, piping downloads into a shell.",
+      "sideEffects": "read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string",
+            "description": "optional label for what is being reviewed"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 30000,
+            "description": "source text to review"
+          },
+          "files": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "content"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 30000
+                }
+              }
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "text"
+            ]
+          },
+          {
+            "required": [
+              "files"
+            ]
+          },
+          {
+            "required": [
+              "repository"
+            ]
+          }
+        ]
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "verdict": {
+            "enum": [
+              "approve",
+              "needs_changes",
+              "reject"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "file",
+                "line",
+                "severity",
+                "message"
+              ],
+              "properties": {
+                "file": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "severity": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "interfaces": [
+    {
+      "protocol": "mcp"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+[package]
+name = "somework-it"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+async-nats = "0.50.0"
+async-trait = "0.1.92"
+base64 = "0.23.1"
+bytes = "1.12.1"
+chrono = "0.4.45"
+ed25519-dalek = "3.0.0"
+eventsource-stream = "0.2.3"
+futures = "0.3.34"
+hex = "0.4.3"
+prost-types = "0.14.4"
+rand = "0.10.3"
+rustls = "0.23.45"
+rcgen = "0.14.10"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = "1.0.229"
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+somework-api = { path = "../somework-api" }
+somework-client = { path = "../somework-client" }
+somework-core = { path = "../somework-core" }
+somework-domain = { path = "../somework-domain" }
+somework-gateway = { path = "../somework-gateway" }
+somework-matrix = { path = "../somework-matrix" }
+somework-nats = { path = "../somework-nats" }
+somework-sidecar = { path = "../somework-sidecar" }
+somework-testkit = { path = "../somework-testkit" }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "sqlite"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.2", features = ["full"] }
+tokio-rustls = "0.26.6"
+tokio-stream = "0.1.19"
+tokio-util = "0.7.19"
+tonic = "0.14.6"
+tonic-health = "0.14.6"
+tonic-types = "0.14.6"

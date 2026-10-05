@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/somework-core",
+  "crates/somework-domain",
+  "crates/somework-api",
+  "crates/somework-client",
+  "crates/somework-nats",
+  "crates/somework-matrix",
+  "crates/somework-gateway",
+  "crates/somework-sidecar",
+  "crates/somework-testkit",
+  "crates/somework-it",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+result_large_err = "allow"
+type_complexity = "allow"
+
+# Keep build artifacts small: integration tests link many large binaries.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.release]
+debug = "line-tables-only"

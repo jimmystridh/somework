@@ -1,0 +1,171 @@
+{
+  "schemaVersion": "1.0",
+  "contextPackId": "ctxp_01JZXR57K1SFM23Q5FW4XB9YRP",
+  "version": 3,
+  "base": {
+    "contextPackId": "ctxp_01JZXR57K1SFM23Q5FW4XB9YRP",
+    "version": 2
+  },
+  "objective": "Diagnose and fix the invoice-import regression introduced after commit 61a8d52.",
+  "acceptanceCriteria": [
+    "Root cause is identified and supported by a minimal reproduction.",
+    "A regression test fails before the fix and passes afterward.",
+    "The proposed patch does not change public date parsing semantics outside invoice import.",
+    "Do not merge or deploy the patch."
+  ],
+  "currentState": {
+    "summary": "Failure is isolated to parsing invoice dates containing an explicit offset when the process locale is sv-SE.",
+    "completed": [
+      "Reproduced the failure at commit 61a8d52.",
+      "Verified that changing the database backend does not affect the failure.",
+      "Tested explicit invariant-culture parsing; the reproduction then passes."
+    ],
+    "remaining": [
+      "Verify which change introduced the locale dependency.",
+      "Create a regression test.",
+      "Propose the smallest safe patch."
+    ]
+  },
+  "facts": [
+    {
+      "statement": "The test reproduces at commit 61a8d52 in the supplied container.",
+      "confidence": 1.0,
+      "assertedBy": {
+        "kind": "agent",
+        "id": "agent/dev-investigator",
+        "domainId": "development",
+        "displayName": "Development Investigator"
+      },
+      "evidenceRefs": [
+        "artifact://development/art_testlog_93/1"
+      ],
+      "observedAt": "2026-10-03T11:54:17Z"
+    },
+    {
+      "statement": "The database implementation is not required to reproduce the failure.",
+      "confidence": 0.98,
+      "assertedBy": {
+        "kind": "agent",
+        "id": "agent/dev-investigator",
+        "domainId": "development"
+      },
+      "evidenceRefs": [
+        "artifact://development/art_repro_17/2"
+      ],
+      "observedAt": "2026-10-03T11:59:03Z"
+    }
+  ],
+  "hypotheses": [
+    {
+      "statement": "The regression was caused by replacing invariant date parsing with process-culture parsing.",
+      "confidence": 0.78,
+      "evidenceRefs": [
+        "artifact://development/art_diff_44/1"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Keep investigation read-only until the root cause is independently verified.",
+      "rationale": "The failing path is shared with production invoice imports and a premature fix could alter accepted date formats.",
+      "madeBy": {
+        "kind": "agent",
+        "id": "agent/project-manager",
+        "domainId": "development"
+      },
+      "at": "2026-10-03T12:01:12Z"
+    }
+  ],
+  "openQuestions": [
+    "Was the parser change intentional for another locale?",
+    "Does the same issue affect credit-note import?"
+  ],
+  "workspace": [
+    {
+      "kind": "git",
+      "repository": "billing/import-service",
+      "commit": "61a8d52",
+      "branch": "investigate/invoice-date-regression",
+      "paths": [
+        "src/InvoiceImport",
+        "tests/InvoiceImport.Tests"
+      ]
+    }
+  ],
+  "conversationRefs": [
+    {
+      "conversationId": "conv_invoice_regression",
+      "fromMessageId": "msg_0198",
+      "toMessageId": "msg_0239"
+    }
+  ],
+  "toolResultRefs": [
+    "toolrun_8c0231",
+    "toolrun_8c02c8"
+  ],
+  "artifacts": [
+    {
+      "artifactId": "art_repro_17",
+      "version": 2,
+      "uri": "artifact://development/art_repro_17/2",
+      "filename": "minimal-repro.tar.gz",
+      "mediaType": "application/gzip",
+      "sizeBytes": 21841,
+      "digest": {
+        "algorithm": "sha-256",
+        "value": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "classification": "internal",
+      "createdBy": {
+        "kind": "agent",
+        "id": "agent/dev-investigator",
+        "domainId": "development"
+      },
+      "createdAt": "2026-10-03T11:58:40Z",
+      "expiresAt": null,
+      "sourceTaskId": "task_invoice_842",
+      "provenance": {
+        "generator": "reproduction-builder",
+        "sourceCommit": "61a8d52"
+      },
+      "encryption": {}
+    }
+  ],
+  "requestedContinuation": {
+    "mode": "subtask",
+    "instruction": "Independently verify the date-parsing hypothesis, add a regression test, and return a proposed patch. Do not merge or deploy.",
+    "expectedOutputCapability": "code.patch.propose"
+  },
+  "executionConstraints": {
+    "allowedSideEffects": [
+      "workspace.write"
+    ],
+    "forbiddenSideEffects": [
+      "git.merge",
+      "git.push",
+      "production.deploy"
+    ],
+    "deadlineAt": "2026-10-03T16:00:00Z"
+  },
+  "security": {
+    "classification": "internal",
+    "allowedDomains": [
+      "development"
+    ],
+    "redactionsApplied": [
+      "customer identifiers removed from test log"
+    ],
+    "instructionsTrusted": false
+  },
+  "provenance": {
+    "createdBy": {
+      "kind": "agent",
+      "id": "agent/dev-investigator",
+      "domainId": "development"
+    },
+    "sourceTaskId": "task_invoice_842",
+    "sourceAgentId": "agent/dev-investigator"
+  },
+  "createdAt": "2026-10-03T12:04:19Z",
+  "digest": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+}

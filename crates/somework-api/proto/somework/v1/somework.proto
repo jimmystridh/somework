@@ -1,0 +1,590 @@
+syntax = "proto3";
+
+package somework.v1;
+
+import "google/protobuf/struct.proto";
+
+// Identical domain semantics to the REST API (`docs/api.md`). Ids, revisions, fencing tokens and states are typed;
+// the JSON-Schema-defined payloads (capability input/output, ContextPack, envelope content, results) stay
+// `google.protobuf.Struct` so the canonical v1 JSON contracts remain the single source of truth.
+//
+// Request metadata: `authorization: Bearer <assertion|grant|OIDC token>`, `idempotency-key`,
+// `if-match` (task revision, integer), `traceparent`. Every response carries `trace-id` and `traceparent`
+// metadata and a `trace_id` field.
+
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  TASK_STATE_SUBMITTED = 1;
+  TASK_STATE_QUEUED = 2;
+  TASK_STATE_CLAIMED = 3;
+  TASK_STATE_RUNNING = 4;
+  TASK_STATE_INPUT_REQUIRED = 5;
+  TASK_STATE_BLOCKED = 6;
+  TASK_STATE_CANCEL_REQUESTED = 7;
+  TASK_STATE_SUCCEEDED = 8;
+  TASK_STATE_FAILED = 9;
+  TASK_STATE_REJECTED = 10;
+  TASK_STATE_CANCELED = 11;
+  TASK_STATE_EXPIRED = 12;
+}
+
+enum ProgressStatus {
+  PROGRESS_STATUS_UNSPECIFIED = 0; // running
+  PROGRESS_STATUS_RUNNING = 1;
+  PROGRESS_STATUS_INPUT_REQUIRED = 2;
+  PROGRESS_STATUS_BLOCKED = 3;
+}
+
+message CapabilityRef {
+  string id = 1;
+  string version = 2;
+}
+
+message Member {
+  string kind = 1; // agent | human | service | domain
+  string id = 2;
+}
+
+message ContextRef {
+  string context_pack_id = 1;
+  uint64 version = 2;
+  repeated string sections = 3;
+}
+
+message Lease {
+  string lease_id = 1;
+  string runtime_instance_id = 2;
+  uint64 fencing_token = 3;
+  string expires_at = 4;
+}
+
+message Failure {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+  google.protobuf.Struct details = 4;
+}
+
+// A task snapshot: typed essentials plus the complete canonical Task document.
+message Task {
+  string task_id = 1;
+  TaskState state = 2;
+  uint64 revision = 3;
+  uint64 attempt = 4;
+  string conversation_id = 5;
+  CapabilityRef capability = 6;
+  google.protobuf.Struct task = 7;
+}
+
+// ---- CatalogService -----------------------------------------------------------------------------------------------------
+
+message SearchConstraints {
+  string side_effects_at_most = 1;
+  string data_classification = 2;
+  repeated string allowed_domains = 3;
+}
+
+message SearchRequest {
+  string query = 1;
+  repeated string required_capabilities = 2;
+  repeated string tags = 3;
+  google.protobuf.Struct input = 4;
+  google.protobuf.Struct input_schema = 5;
+  google.protobuf.Struct output_schema = 6;
+  SearchConstraints constraints = 7;
+  repeated string availability = 8;
+  repeated string trust_tiers = 9;
+  uint32 limit = 10;
+}
+
+message SearchMatch {
+  string entry_id = 1;
+  string agent_id = 2;
+  string domain_id = 3;
+  double score = 4;
+  string availability = 5;
+  repeated CapabilityRef matched_capabilities = 6;
+  repeated string why = 7;
+}
+
+message SearchResponse {
+  repeated SearchMatch matches = 1;
+  string trace_id = 2;
+}
+
+message GetAgentRequest {
+  string agent_id = 1;
+}
+
+message GetAgentResponse {
+  string entry_id = 1;
+  string agent_id = 2;
+  google.protobuf.Struct entry = 3; // CatalogEntry (card filtered to what the caller may see)
+  string trace_id = 4;
+}
+
+message GetCapabilityRequest {
+  string id = 1;
+  string version = 2;
+}
+
+message GetCapabilityResponse {
+  google.protobuf.Struct capability = 1;
+  string trace_id = 2;
+}
+
+service CatalogService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
+  rpc GetCapability(GetCapabilityRequest) returns (GetCapabilityResponse);
+}
+
+// ---- MessageService -----------------------------------------------------------------------------------------------------
+
+message SendMessageRequest {
+  string type = 1; // chat.message (default), chat.notice, event.notification, task.status
+  string message_id = 2;
+  string conversation_id = 3;
+  string task_id = 4;
+  repeated Member recipients = 5;
+  string media_type = 6;
+  google.protobuf.Value data = 7;
+  string correlation_id = 8;
+  string causation_id = 9;
+  string reply_to = 10;
+  string expires_at = 11;
+  string priority = 12;
+  string trigger_mode = 13; // never | directed | subscription | task-state
+  repeated google.protobuf.Struct artifacts = 14;
+  repeated ContextRef context_refs = 15;
+  map<string, string> labels = 16;
+  string idempotency_key = 17;
+}
+
+message MessageRecord {
+  string message_id = 1;
+  int64 seq = 2;
+  string type = 3;
+  string conversation_id = 4;
+  string trigger_mode = 5;
+  google.protobuf.Struct envelope = 6; // canonical MessageEnvelope
+  string trace_id = 7;
+}
+
+message ListMessagesRequest {
+  string conversation_id = 1;
+  int64 cursor = 2;
+  int64 limit = 3;
+}
+
+message ListMessagesResponse {
+  repeated MessageRecord messages = 1;
+  int64 next_cursor = 2;
+  bool has_more = 3;
+  string trace_id = 4;
+}
+
+service MessageService {
+  rpc Send(SendMessageRequest) returns (MessageRecord);
+  rpc List(ListMessagesRequest) returns (ListMessagesResponse);
+}
+
+// ---- EventService -------------------------------------------------------------------------------------------------------
+
+message WatchEventsRequest {
+  int64 after = 1; // cursor; 0 resumes from the caller's acknowledged cursor
+  bool from_start = 2; // true: start at event 0 regardless of the stored cursor
+  int64 limit = 3;
+}
+
+message Event {
+  int64 seq = 1;
+  string event_id = 2;
+  string type = 3;
+  string task_id = 4;
+  string conversation_id = 5;
+  string message_id = 6;
+  int64 revision = 7;
+  bool wake = 8;
+  google.protobuf.Struct payload = 9;
+  string created_at = 10;
+}
+
+message AckEventsRequest {
+  int64 cursor = 1;
+}
+
+message AckEventsResponse {
+  int64 cursor = 1;
+  string trace_id = 2;
+}
+
+service EventService {
+  rpc Watch(WatchEventsRequest) returns (stream Event);
+  rpc Ack(AckEventsRequest) returns (AckEventsResponse);
+}
+
+// ---- TaskService --------------------------------------------------------------------------------------------------------
+
+message SubmitTaskRequest {
+  CapabilityRef capability = 1;
+  string target_agent_id = 2;
+  string conversation_id = 3;
+  string parent_task_id = 4;
+  optional uint64 parent_fencing_token = 5;
+  google.protobuf.Struct input = 6;
+  repeated ContextRef context_refs = 7;
+  string deadline_at = 8;
+  google.protobuf.Struct constraints = 9;
+}
+
+message SubmitTaskResponse {
+  Task task = 1;
+  string approval_id = 2;
+  string trace_id = 3;
+}
+
+message GetTaskRequest {
+  string task_id = 1;
+}
+
+message TaskResponse {
+  Task task = 1;
+  string trace_id = 2;
+}
+
+message ListTaskEventsRequest {
+  string task_id = 1;
+  int64 after = 2;
+  int64 limit = 3;
+}
+
+message TaskEvent {
+  string task_id = 1;
+  int64 event_sequence = 2;
+  string event_id = 3;
+  string type = 4;
+  string from_state = 5;
+  string to_state = 6;
+  int64 revision = 7;
+  google.protobuf.Struct actor = 8;
+  google.protobuf.Struct data = 9;
+  string trace_id = 10;
+  string created_at = 11;
+}
+
+message ListTaskEventsResponse {
+  repeated TaskEvent events = 1;
+  string trace_id = 2;
+}
+
+message ClaimTaskRequest {
+  string task_id = 1;
+  int64 lease_seconds = 2;
+  optional uint64 expected_revision = 3;
+}
+
+message ClaimTaskResponse {
+  Task task = 1;
+  Lease lease = 2;
+  uint64 fencing_token = 3;
+  string authorization_token = 4;
+  google.protobuf.Struct capability = 5;
+  google.protobuf.Struct authority = 6;
+  string trace_id = 7;
+}
+
+message HeartbeatTaskRequest {
+  string task_id = 1;
+  uint64 fencing_token = 2;
+  int64 lease_seconds = 3;
+}
+
+message HeartbeatTaskResponse {
+  Lease lease = 1;
+  TaskState state = 2;
+  uint64 revision = 3;
+  bool cancel_requested = 4;
+  string authorization_token = 5;
+  string trace_id = 6;
+}
+
+message ProgressTaskRequest {
+  string task_id = 1;
+  uint64 fencing_token = 2;
+  optional uint64 expected_revision = 3;
+  ProgressStatus status = 4;
+  string message = 5;
+  google.protobuf.Struct checkpoint = 6;
+  double percent = 7;
+  google.protobuf.Struct question = 8;
+  repeated string blocked_on = 9;
+}
+
+message ProvideInputRequest {
+  string task_id = 1;
+  google.protobuf.Struct data = 2;
+  optional uint64 expected_revision = 3;
+}
+
+message CompleteTaskRequest {
+  string task_id = 1;
+  uint64 fencing_token = 2;
+  optional uint64 expected_revision = 3;
+  google.protobuf.Struct result = 4;
+  repeated google.protobuf.Struct artifacts = 5;
+}
+
+message FailTaskRequest {
+  string task_id = 1;
+  uint64 fencing_token = 2;
+  optional uint64 expected_revision = 3;
+  Failure failure = 4;
+}
+
+message CancelTaskRequest {
+  string task_id = 1;
+  optional uint64 expected_revision = 2;
+  string reason = 3;
+  bool acknowledge = 4;
+  uint64 fencing_token = 5;
+}
+
+message WatchTaskRequest {
+  string task_id = 1;
+}
+
+// First message of a Watch stream is the snapshot (event unset); later messages carry the new task event and the
+// task as of that event. The stream ends after the task reaches a terminal state.
+message TaskUpdate {
+  Task task = 1;
+  TaskEvent event = 2;
+  bool snapshot = 3;
+}
+
+service TaskService {
+  rpc Submit(SubmitTaskRequest) returns (SubmitTaskResponse);
+  rpc Get(GetTaskRequest) returns (TaskResponse);
+  rpc ListEvents(ListTaskEventsRequest) returns (ListTaskEventsResponse);
+  rpc Claim(ClaimTaskRequest) returns (ClaimTaskResponse);
+  rpc Heartbeat(HeartbeatTaskRequest) returns (HeartbeatTaskResponse);
+  rpc Progress(ProgressTaskRequest) returns (TaskResponse);
+  rpc ProvideInput(ProvideInputRequest) returns (TaskResponse);
+  rpc Complete(CompleteTaskRequest) returns (TaskResponse);
+  rpc Fail(FailTaskRequest) returns (TaskResponse);
+  rpc Cancel(CancelTaskRequest) returns (TaskResponse);
+  rpc Watch(WatchTaskRequest) returns (stream TaskUpdate);
+}
+
+// ---- ContextService -----------------------------------------------------------------------------------------------------
+
+message CreateContextPackRequest {
+  google.protobuf.Struct pack = 1; // ContextPack (v1 contract); id/version/digest are filled in when omitted
+}
+
+message ContextPackRecord {
+  string context_pack_id = 1;
+  uint64 version = 2;
+  string digest = 3;
+  string classification = 4;
+  uint64 size_bytes = 5;
+  string created_at = 6;
+  string trace_id = 7;
+}
+
+message GetContextPackRequest {
+  string context_pack_id = 1;
+  uint64 version = 2;
+  repeated string sections = 3; // empty: manifest view
+  string task_id = 4;
+}
+
+message ContextPackView {
+  string context_pack_id = 1;
+  uint64 version = 2;
+  string digest = 3;
+  string classification = 4;
+  repeated string disclosed_sections = 5;
+  repeated string withheld_sections = 6;
+  google.protobuf.Struct section_index = 7;
+  google.protobuf.Struct pack = 8;
+  string trace_id = 9;
+}
+
+message OfferContextRequest {
+  string context_pack_id = 1;
+  uint64 version = 2;
+  Member to = 3;
+  string mode = 4; // subtask | ownership_transfer | consultation
+  string task_id = 5;
+  repeated string sections = 6;
+  int64 expires_in_seconds = 7;
+  string note = 8;
+}
+
+message ContextOffer {
+  string offer_id = 1;
+  string context_pack_id = 2;
+  uint64 version = 3;
+  string mode = 4;
+  string task_id = 5;
+  repeated string sections = 6;
+  string status = 7;
+  string expires_at = 8;
+  google.protobuf.Struct offer = 9;
+  string trace_id = 10;
+}
+
+message AcceptContextRequest {
+  string context_pack_id = 1;
+  uint64 version = 2;
+  string offer_id = 3;
+  int64 lease_seconds = 4;
+}
+
+message AcceptContextResponse {
+  ContextOffer offer = 1;
+  Task task = 2;
+  Lease lease = 3;
+  uint64 fencing_token = 4;
+  string authorization_token = 5;
+  string trace_id = 6;
+}
+
+service ContextService {
+  rpc Create(CreateContextPackRequest) returns (ContextPackRecord);
+  rpc Get(GetContextPackRequest) returns (ContextPackView);
+  rpc Offer(OfferContextRequest) returns (ContextOffer);
+  rpc Accept(AcceptContextRequest) returns (AcceptContextResponse);
+}
+
+// ---- ArtifactService ----------------------------------------------------------------------------------------------------
+
+message BeginUploadRequest {
+  string artifact_id = 1;
+  string filename = 2;
+  string media_type = 3;
+  uint64 size_bytes = 4;
+  string sha256 = 5;
+  string classification = 6;
+  string source_task_id = 7;
+  google.protobuf.Struct provenance = 8;
+  string expires_at = 9;
+  string conversation_id = 10;
+}
+
+message UploadGrant {
+  string artifact_id = 1;
+  uint64 version = 2;
+  string uri = 3;
+  string expires_at = 4;
+  string method = 5;
+  string url = 6;
+  map<string, string> headers = 7;
+  google.protobuf.Struct multipart = 8;
+  string trace_id = 9;
+}
+
+message CompletedPart {
+  uint32 part_number = 1;
+  string etag = 2;
+}
+
+message CompleteUploadRequest {
+  string artifact_id = 1;
+  uint64 version = 2;
+  repeated CompletedPart parts = 3;
+}
+
+message ArtifactMetadata {
+  string artifact_id = 1;
+  uint64 version = 2;
+  string uri = 3;
+  string media_type = 4;
+  uint64 size_bytes = 5;
+  string sha256 = 6;
+  string classification = 7;
+  google.protobuf.Struct artifact = 8; // canonical ArtifactRef
+  string trace_id = 9;
+}
+
+message GetArtifactRequest {
+  string artifact_id = 1;
+  uint64 version = 2;
+  string task_id = 3;
+}
+
+message GetDownloadRequest {
+  string artifact_id = 1;
+  uint64 version = 2;
+  string task_id = 3;
+  optional uint64 fencing_token = 4;
+}
+
+message DownloadGrant {
+  ArtifactMetadata artifact = 1;
+  string url = 2;
+  string expires_at = 3;
+  string trace_id = 4;
+}
+
+service ArtifactService {
+  rpc BeginUpload(BeginUploadRequest) returns (UploadGrant);
+  rpc CompleteUpload(CompleteUploadRequest) returns (ArtifactMetadata);
+  rpc GetMetadata(GetArtifactRequest) returns (ArtifactMetadata);
+  rpc GetDownload(GetDownloadRequest) returns (DownloadGrant);
+}
+
+// ---- SubscriptionService / AuthorizationService -------------------------------------------------------------------------
+
+message CreateSubscriptionRequest {
+  string kind = 1; // topic | capability_queue | conversation | task
+  string selector = 2;
+  optional bool wake_on_match = 3; // required: no implicit wake behaviour (SUB-02)
+}
+
+message Subscription {
+  string subscription_id = 1;
+  string kind = 2;
+  string selector = 3;
+  bool wake_on_match = 4;
+  string status = 5;
+  string subject = 6;
+  string trace_id = 7;
+}
+
+message DeleteSubscriptionRequest {
+  string subscription_id = 1;
+}
+
+message DeleteSubscriptionResponse {
+  string trace_id = 1;
+}
+
+service SubscriptionService {
+  rpc Create(CreateSubscriptionRequest) returns (Subscription);
+  rpc Delete(DeleteSubscriptionRequest) returns (DeleteSubscriptionResponse);
+}
+
+message DelegateRequest {
+  Member subject = 1;
+  repeated string actions = 2;
+  repeated string capabilities = 3;
+  repeated string resources = 4;
+  google.protobuf.Struct constraints = 5;
+  string classification_max = 6;
+  int64 ttl_seconds = 7;
+}
+
+message DelegatedGrant {
+  string token = 1;
+  string jti = 2;
+  string parent_jti = 3;
+  string expires_at = 4;
+  uint32 remaining_depth = 5;
+  string trace_id = 6;
+}
+
+service AuthorizationService {
+  rpc Delegate(DelegateRequest) returns (DelegatedGrant);
+}

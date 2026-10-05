@@ -1,0 +1,11 @@
+[domain]
+id = "development"
+db = "data/somework.db"
+listen = "127.0.0.1:8080"
+public_url = "http://127.0.0.1:8080"
+
+[objects]
+dir = "data/objects"
+
+[ui]
+dir = "../ui"

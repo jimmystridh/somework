@@ -1,0 +1,17 @@
+.git
+target
+run
+tools
+e2e
+repomix-output.xml
+**/*.key.json
+**/*.db
+**/*.db-wal
+**/*.db-shm
+dist
+spec.md
+docs
+**/node_modules
+adapters/pi/spike
+adapters/pi/test
+sdk/typescript/test

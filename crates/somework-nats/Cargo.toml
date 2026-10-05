@@ -1,0 +1,26 @@
+[package]
+name = "somework-nats"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-nats = "0.50.0"
+async-trait = "0.1.92"
+bytes = "1.12.1"
+futures = "0.3.34"
+hex = "0.4.3"
+hmac = "0.13.0"
+parking_lot = "0.12.5"
+rustls = { version = "0.23.45", default-features = false, features = ["aws_lc_rs", "std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+somework-core = { version = "0.1.0", path = "../somework-core" }
+somework-domain = { version = "0.1.0", path = "../somework-domain" }
+tokio = { version = "1.53.2", features = ["full"] }
+tokio-util = "0.7.19"
+tracing = "0.1.44"
