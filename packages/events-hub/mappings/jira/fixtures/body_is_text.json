@@ -1,0 +1,27 @@
+{
+  "description": "a non-JSON body is dropped",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Atlassian HttpClient 4.2.1 / JIRA-9.12.4 / 912004"
+    },
+    "body": "hello",
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "jira",
+    "defaults": {
+      "repository": {
+        "cloneUrl": "https://github.com/example-org/example-repo.git",
+        "ref": "refs/heads/main"
+      },
+      "projects": {
+        "OPS": {
+          "repository": {
+            "cloneUrl": "https://github.com/example-org/ops-repo.git",
+            "ref": "refs/heads/release"
+          }
+        }
+      }
+    }
+  },
+  "expected": []
+}

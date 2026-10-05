@@ -1,0 +1,103 @@
+{
+  "description": "a check run completes on a pull request",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "GitHub-Hookshot/abc1234",
+      "x-github-event": "check_run",
+      "x-github-delivery": "11111111-aaaa-4bbb-8ccc-000000000009",
+      "x-github-hook-id": "555",
+      "x-hub-signature-256": "sha256=deadbeef"
+    },
+    "body": {
+      "action": "completed",
+      "check_run": {
+        "id": 31,
+        "name": "build-and-test",
+        "head_sha": "1111111111111111111111111111111111111111",
+        "status": "completed",
+        "conclusion": "failure",
+        "html_url": "https://github.com/Visma-Administration/visma.administration/runs/31",
+        "output": {
+          "title": "CANARY-CHECK-OUTPUT",
+          "summary": "CANARY-CHECK-OUTPUT"
+        },
+        "pull_requests": [
+          {
+            "number": 7,
+            "url": "https://api.github.com/x"
+          },
+          {
+            "number": 8,
+            "url": "https://api.github.com/y"
+          }
+        ]
+      },
+      "repository": {
+        "id": 4242,
+        "node_id": "R_kgDOB",
+        "name": "visma.administration",
+        "full_name": "Visma-Administration/visma.administration",
+        "private": true,
+        "owner": {
+          "login": "Visma-Administration",
+          "id": 777,
+          "node_id": "MDQ6VXNlcjE=",
+          "avatar_url": "https://avatars.githubusercontent.com/u/777?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/Visma-Administration",
+          "html_url": "https://github.com/Visma-Administration",
+          "type": "Organization",
+          "site_admin": false
+        },
+        "html_url": "https://github.com/Visma-Administration/visma.administration",
+        "description": "Development repository for Visma Administration. CANARY-REPO-DESCRIPTION",
+        "fork": false,
+        "url": "https://api.github.com/repos/Visma-Administration/visma.administration",
+        "clone_url": "https://github.com/Visma-Administration/visma.administration.git",
+        "ssh_url": "git@github.com:Visma-Administration/visma.administration.git",
+        "default_branch": "main",
+        "open_issues_count": 12
+      },
+      "sender": {
+        "login": "github-actions[bot]",
+        "id": 41898282,
+        "node_id": "MDQ6VXNlcjE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/41898282?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/github-actions[bot]",
+        "html_url": "https://github.com/github-actions[bot]",
+        "type": "Bot",
+        "site_admin": false
+      }
+    },
+    "receivedAt": "2026-10-05T08:05:01.000Z",
+    "source": "github"
+  },
+  "expected": [
+    {
+      "topic": "github.check_run.completed",
+      "key": "github:delivery:11111111-aaaa-4bbb-8ccc-000000000009",
+      "data": {
+        "repository": {
+          "fullName": "Visma-Administration/visma.administration",
+          "cloneUrl": "https://github.com/Visma-Administration/visma.administration.git",
+          "htmlUrl": "https://github.com/Visma-Administration/visma.administration"
+        },
+        "name": "build-and-test",
+        "status": "completed",
+        "conclusion": "failure",
+        "htmlUrl": "https://github.com/Visma-Administration/visma.administration/runs/31",
+        "headSha": "1111111111111111111111111111111111111111",
+        "pullRequests": [
+          7,
+          8
+        ]
+      },
+      "classification": "internal"
+    }
+  ],
+  "canaries": [
+    "CANARY-CHECK-OUTPUT"
+  ]
+}

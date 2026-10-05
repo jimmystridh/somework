@@ -1,0 +1,63 @@
+/* Jira Data Center webhook -> events (webhookEvent, issue, changelog, comment, user, timestamp). Shapes: rules/samples/ and docs/RULES.md.
+   The webhook carries neither a repository nor a revision, so `repository` comes from the source's static `defaults` block of the hub
+   configuration: defaults.repository for everything, defaults.projects.<PROJECT KEY>.repository to override it for one project. Jira sends
+   no delivery id, so keys are built from ids that repeat when Jira resends the same change (issue id, changelog id, comment id). Free text
+   leaves only as a 500-character excerpt marked excerpt:true. No e-mail addresses and no display names are carried, only user names. */
+(
+  $b := body;
+  $we := $b.webhookEvent;
+  $issue := $b.issue;
+  $fields := $issue.fields;
+  $projectKey := $fields.project.key;
+  $browse := $issue.self ? $substringBefore($issue.self, "/rest/api/") & "/browse/" & $issue.key;
+
+  $projectRepo := $projectKey and defaults.projects ? $lookup(defaults.projects, $projectKey).repository;
+  $repository := $projectRepo ? $projectRepo : defaults.repository;
+
+  $issueData := $issue ? {
+    "key": $issue.key,
+    "summary": $clip($fields.summary, 200),
+    "url": $browse,
+    "type": $fields.issuetype.name,
+    "project": $projectKey
+  };
+  $actor := $b.user.name;
+  $id := $string($issue.id);
+
+  $issue.id and $issue.key ? (
+    $we = "jira:issue_created" ? {
+      "topic": "jira.issue.created",
+      "key": "jira:" & $id & ":created",
+      "data": { "issue": $issueData, "actor": $actor, "repository": $repository }
+    }
+    : $we = "jira:issue_updated" and $count($b.changelog.items) > 0 ? (
+      $status := $b.changelog.items[field = "status"][0];
+      $change := $b.changelog.id ? $string($b.changelog.id) : $string($b.timestamp);
+      $status ? {
+        "topic": "jira.issue.transitioned",
+        "key": "jira:" & $id & ":change:" & $change,
+        "data": {
+          "issue": $issueData,
+          "from": $clip($status.fromString, 100),
+          "to": $clip($status.toString, 100),
+          "actor": $actor,
+          "repository": $repository
+        }
+      } : {
+        "topic": "jira.issue.updated",
+        "key": "jira:" & $id & ":change:" & $change,
+        "data": { "issue": $issueData, "changed": [$b.changelog.items.field][[0..29]], "actor": $actor, "repository": $repository }
+      }
+    )
+    : $we = "comment_created" and $b.comment.id ? {
+      "topic": "jira.comment.created",
+      "key": "jira:" & $id & ":comment:" & $b.comment.id,
+      "data": {
+        "issue": $issueData,
+        "comment": { "id": $b.comment.id, "author": $b.comment.author.name, "body": $excerpt($b.comment.body, 500) },
+        "actor": $actor,
+        "repository": $repository
+      }
+    }
+  )
+)

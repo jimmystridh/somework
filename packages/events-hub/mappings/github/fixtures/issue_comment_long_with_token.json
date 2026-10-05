@@ -1,0 +1,122 @@
+{
+  "description": "a long pull request comment becomes a 500 character excerpt and credentials are scrubbed",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "GitHub-Hookshot/abc1234",
+      "x-github-event": "issue_comment",
+      "x-github-delivery": "11111111-aaaa-4bbb-8ccc-000000000010",
+      "x-github-hook-id": "555",
+      "x-hub-signature-256": "sha256=deadbeef"
+    },
+    "body": {
+      "action": "created",
+      "issue": {
+        "number": 7,
+        "title": "Fix rounding in VAT report",
+        "pull_request": {
+          "url": "https://api.github.com/p"
+        },
+        "user": {
+          "login": "anna-dev",
+          "id": 1001,
+          "node_id": "MDQ6VXNlcjE=",
+          "avatar_url": "https://avatars.githubusercontent.com/u/1001?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/anna-dev",
+          "html_url": "https://github.com/anna-dev",
+          "type": "User",
+          "site_admin": false
+        }
+      },
+      "comment": {
+        "id": 8001,
+        "user": {
+          "login": "bob-reviewer",
+          "id": 1002,
+          "node_id": "MDQ6VXNlcjE=",
+          "avatar_url": "https://avatars.githubusercontent.com/u/1002?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/bob-reviewer",
+          "html_url": "https://github.com/bob-reviewer",
+          "type": "User",
+          "site_admin": false
+        },
+        "author_association": "MEMBER",
+        "html_url": "https://github.com/Visma-Administration/visma.administration/pull/7#issuecomment-8001",
+        "body": "Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this.  token ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8",
+        "created_at": "2026-10-05T08:10:00Z"
+      },
+      "repository": {
+        "id": 4242,
+        "node_id": "R_kgDOB",
+        "name": "visma.administration",
+        "full_name": "Visma-Administration/visma.administration",
+        "private": true,
+        "owner": {
+          "login": "Visma-Administration",
+          "id": 777,
+          "node_id": "MDQ6VXNlcjE=",
+          "avatar_url": "https://avatars.githubusercontent.com/u/777?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/Visma-Administration",
+          "html_url": "https://github.com/Visma-Administration",
+          "type": "Organization",
+          "site_admin": false
+        },
+        "html_url": "https://github.com/Visma-Administration/visma.administration",
+        "description": "Development repository for Visma Administration. CANARY-REPO-DESCRIPTION",
+        "fork": false,
+        "url": "https://api.github.com/repos/Visma-Administration/visma.administration",
+        "clone_url": "https://github.com/Visma-Administration/visma.administration.git",
+        "ssh_url": "git@github.com:Visma-Administration/visma.administration.git",
+        "default_branch": "main",
+        "open_issues_count": 12
+      },
+      "sender": {
+        "login": "bob-reviewer",
+        "id": 1002,
+        "node_id": "MDQ6VXNlcjE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1002?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/bob-reviewer",
+        "html_url": "https://github.com/bob-reviewer",
+        "type": "User",
+        "site_admin": false
+      }
+    },
+    "receivedAt": "2026-10-05T08:05:01.000Z",
+    "source": "github"
+  },
+  "expected": [
+    {
+      "topic": "github.issue_comment.created",
+      "key": "github:delivery:11111111-aaaa-4bbb-8ccc-000000000010",
+      "data": {
+        "repository": {
+          "fullName": "Visma-Administration/visma.administration",
+          "cloneUrl": "https://github.com/Visma-Administration/visma.administration.git",
+          "htmlUrl": "https://github.com/Visma-Administration/visma.administration"
+        },
+        "number": 7,
+        "isPullRequest": true,
+        "title": "Fix rounding in VAT report",
+        "comment": {
+          "id": 8001,
+          "author": "bob-reviewer",
+          "authorAssociation": "MEMBER",
+          "htmlUrl": "https://github.com/Visma-Administration/visma.administration/pull/7#issuecomment-8001",
+          "body": {
+            "excerpt": true,
+            "text": "Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at this. Please look at t…",
+            "truncated": true
+          }
+        }
+      },
+      "classification": "internal"
+    }
+  ],
+  "canaries": [
+    "ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+  ]
+}

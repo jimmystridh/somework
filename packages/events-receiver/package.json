@@ -1,0 +1,14 @@
+{
+  "name": "@somework/events-receiver",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The public-edge webhook receiver: authenticates a webhook, buffers it durably and unchanged, and lets the private-side hub pull it. No dependencies, never opens a connection inward.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts",
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts"
+  }
+}

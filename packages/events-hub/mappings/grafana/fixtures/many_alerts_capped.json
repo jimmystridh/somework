@@ -1,0 +1,2195 @@
+{
+  "description": "at most 50 alerts per notification become events",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Grafana",
+      "x-grafana-alerting-notification-type": "grafana"
+    },
+    "body": {
+      "receiver": "somework-hub",
+      "status": "firing",
+      "orgId": 1,
+      "alerts": [
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:00:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f000",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:01:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f001",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:02:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f002",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:03:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f003",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:04:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f004",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:05:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f005",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:06:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f006",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:07:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f007",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:08:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f008",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:09:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f009",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:10:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f010",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:11:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f011",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:12:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f012",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:13:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f013",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:14:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f014",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:15:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f015",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:16:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f016",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:17:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f017",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:18:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f018",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:19:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f019",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:20:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f020",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:21:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f021",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:22:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f022",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:23:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f023",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:24:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f024",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:25:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f025",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:26:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f026",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:27:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f027",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:28:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f028",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:29:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f029",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:30:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f030",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:31:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f031",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:32:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f032",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:33:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f033",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:34:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f034",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:35:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f035",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:36:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f036",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:37:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f037",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:38:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f038",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:39:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f039",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:40:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f040",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:41:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f041",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:42:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f042",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:43:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f043",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:44:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f044",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:45:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f045",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:46:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f046",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:47:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f047",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:48:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f048",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:49:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f049",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:50:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f050",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:51:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f051",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:52:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f052",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:53:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f053",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:54:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f054",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:55:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f055",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:56:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f056",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:57:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f057",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:58:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f058",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        },
+        {
+          "status": "firing",
+          "labels": {
+            "alertname": "SomeWork jobs failing with infrastructure errors",
+            "grafana_folder": "Agent Cluster",
+            "severity": "ticket",
+            "system": "somework"
+          },
+          "annotations": {
+            "summary": "More than 3 agent jobs failed with errors in the last hour",
+            "description": "See the SomeWork Agents dashboard",
+            "runbook_url": "https://example.invalid/CANARY-RUNBOOK"
+          },
+          "startsAt": "2026-10-05T09:59:00Z",
+          "endsAt": "0001-01-01T00:00:00Z",
+          "generatorURL": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1",
+          "fingerprint": "f059",
+          "silenceURL": "https://grafana.example/alerting/silence/new?x=1",
+          "dashboardURL": "https://grafana.example/d/somework-agents",
+          "panelURL": "https://grafana.example/d/somework-agents?viewPanel=1",
+          "values": {
+            "B": 1,
+            "C": 1
+          },
+          "valueString": "[ var='B' labels={} value=4 ]"
+        }
+      ],
+      "groupLabels": {
+        "alertname": "x"
+      },
+      "commonLabels": {
+        "system": "somework"
+      },
+      "commonAnnotations": {},
+      "externalURL": "https://grafana.example/",
+      "version": "1",
+      "groupKey": "{}:{alertname=\"x\"}",
+      "truncatedAlerts": 0,
+      "title": "[FIRING:1] x",
+      "state": "alerting",
+      "message": "**Firing** CANARY-MESSAGE"
+    },
+    "receivedAt": "2026-10-05T09:58:05.000Z",
+    "source": "grafana"
+  },
+  "expected": [
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f000:1791190800",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f001:1791190860",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f002:1791190920",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f003:1791190980",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f004:1791191040",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f005:1791191100",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f006:1791191160",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f007:1791191220",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f008:1791191280",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f009:1791191340",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f010:1791191400",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f011:1791191460",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f012:1791191520",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f013:1791191580",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f014:1791191640",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f015:1791191700",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f016:1791191760",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f017:1791191820",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f018:1791191880",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f019:1791191940",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f020:1791192000",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f021:1791192060",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f022:1791192120",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f023:1791192180",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f024:1791192240",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f025:1791192300",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f026:1791192360",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f027:1791192420",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f028:1791192480",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f029:1791192540",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f030:1791192600",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f031:1791192660",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f032:1791192720",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f033:1791192780",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f034:1791192840",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f035:1791192900",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f036:1791192960",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f037:1791193020",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f038:1791193080",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f039:1791193140",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f040:1791193200",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f041:1791193260",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f042:1791193320",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f043:1791193380",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f044:1791193440",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f045:1791193500",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f046:1791193560",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f047:1791193620",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f048:1791193680",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    },
+    {
+      "topic": "grafana.alert.firing",
+      "key": "grafana:somework-jobs-failing:f049:1791193740",
+      "data": {
+        "alert": "SomeWork jobs failing with infrastructure errors",
+        "uid": "somework-jobs-failing",
+        "severity": "ticket",
+        "summary": "More than 3 agent jobs failed with errors in the last hour",
+        "url": "https://grafana.example/alerting/grafana/somework-jobs-failing/view?orgId=1"
+      },
+      "classification": "internal"
+    }
+  ]
+}

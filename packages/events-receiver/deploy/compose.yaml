@@ -1,0 +1,68 @@
+# Receiver on the external services VM (the DMZ), next to the Penpot origin. Public traffic reaches it only through the nginx origin of that VM
+# (Cloudflare in front); the hub pulls from the private listener, which is published on the DMZ address only and is TLS + bearer protected.
+#   docker compose --env-file .env up -d
+# The receiver never opens a connection towards the private network.
+name: somework-events-receiver
+
+networks:
+  # The Docker network the nginx origin is on (Penpot's compose project calls it penpot_default). The receiver is reachable there as events-receiver:8080.
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:-penpot_default}
+
+services:
+  receiver:
+    image: somework-events-receiver:${RECEIVER_VERSION:?set RECEIVER_VERSION to the built image tag}
+    restart: unless-stopped
+    user: "10020:10020"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      edge:
+        aliases: [events-receiver]
+    environment:
+      RECEIVER_CONFIG: /etc/receiver/receiver.config.json
+      HUB_SECRET_FILE: /run/secrets/hub-secret
+      QUEUE_PATH: /data/queue.sqlite
+      PUBLIC_HOST: 0.0.0.0
+      PUBLIC_PORT: "8080"
+      PRIVATE_HOST: 0.0.0.0
+      PRIVATE_PORT: "8443"
+      PRIVATE_TLS_CERT: /run/secrets/tls/tls.crt
+      PRIVATE_TLS_KEY: /run/secrets/tls/tls.key
+      # PRIVATE_CLIENT_CA: /run/secrets/tls/client-ca.crt      # also require a client certificate from the hub
+    ports:
+      # The pull side, on the DMZ address only (never 0.0.0.0): the one route the host firewall opens from the agents VM.
+      - "${DMZ_ADDRESS:?the VM's DMZ address, for example 10.20.20.10}:${PRIVATE_PORT:-8443}:8443"
+    volumes:
+      - ./config/receiver.config.json:/etc/receiver/receiver.config.json:ro
+      - ./secrets/hub-secret:/run/secrets/hub-secret:ro
+      - ./secrets/tls:/run/secrets/tls:ro
+      - queue:/data
+    tmpfs: ["/tmp:size=16m,noexec,nosuid"]
+    mem_limit: 256m
+    pids_limit: 64
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 10s
+
+  # One-shot: the named volume starts root-owned, the receiver runs as uid 10020.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    profiles: [init]
+    image: somework-events-receiver:${RECEIVER_VERSION:?set RECEIVER_VERSION}
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown -R 10020:10020 /data"]
+    volumes:
+      - queue:/data
+
+volumes:
+  queue: {}

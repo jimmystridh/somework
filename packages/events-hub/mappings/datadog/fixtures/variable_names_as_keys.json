@@ -1,0 +1,40 @@
+{
+  "description": "payload keys named like the Datadog variables work",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Datadog-Webhook"
+    },
+    "body": {
+      "ID": "7654321098765432101",
+      "ALERT_ID": "1122334",
+      "EVENT_TITLE": "[Triggered] Disk almost full",
+      "ALERT_TRANSITION": "Triggered",
+      "ALERT_STATUS": "Alert",
+      "HOSTNAME": "db-1",
+      "TAGS": "env:prod,team:administration",
+      "LINK": "https://app.datadoghq.eu/event/event?id=1",
+      "ORG_NAME": "Visma",
+      "DATE": "1759651200000"
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "datadog"
+  },
+  "expected": [
+    {
+      "topic": "datadog.monitor.alert",
+      "key": "datadog:1122334:Alert:1759651200",
+      "data": {
+        "monitorId": 1122334,
+        "monitor": "[Triggered] Disk almost full",
+        "transition": "Alert",
+        "tags": [
+          "env:prod",
+          "team:administration"
+        ],
+        "url": "https://app.datadoghq.eu/event/event?id=1"
+      },
+      "classification": "internal"
+    }
+  ]
+}

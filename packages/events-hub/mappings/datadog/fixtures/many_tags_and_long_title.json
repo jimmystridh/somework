@@ -1,0 +1,60 @@
+{
+  "description": "tags are capped at 20 and the title at 200 characters",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Datadog-Webhook"
+    },
+    "body": {
+      "id": "7654321098765432101",
+      "alert_id": "1122334",
+      "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+      "transition": "Triggered",
+      "status": "Alert",
+      "hostname": "web-1",
+      "tags": "tag0:value0,tag1:value1,tag2:value2,tag3:value3,tag4:value4,tag5:value5,tag6:value6,tag7:value7,tag8:value8,tag9:value9,tag10:value10,tag11:value11,tag12:value12,tag13:value13,tag14:value14,tag15:value15,tag16:value16,tag17:value17,tag18:value18,tag19:value19,tag20:value20,tag21:value21,tag22:value22,tag23:value23,tag24:value24,tag25:value25,tag26:value26,tag27:value27,tag28:value28,tag29:value29,tag30:value30,tag31:value31,tag32:value32,tag33:value33,tag34:value34,tag35:value35,tag36:value36,tag37:value37,tag38:value38,tag39:value39",
+      "link": "https://app.datadoghq.eu/event/event?id=7654321098765432101",
+      "org": "Visma",
+      "date": "1759651200000",
+      "priority": "normal"
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "datadog"
+  },
+  "expected": [
+    {
+      "topic": "datadog.monitor.alert",
+      "key": "datadog:1122334:Alert:1759651200",
+      "data": {
+        "monitorId": 1122334,
+        "monitor": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT…",
+        "transition": "Alert",
+        "priority": "normal",
+        "tags": [
+          "tag0:value0",
+          "tag1:value1",
+          "tag2:value2",
+          "tag3:value3",
+          "tag4:value4",
+          "tag5:value5",
+          "tag6:value6",
+          "tag7:value7",
+          "tag8:value8",
+          "tag9:value9",
+          "tag10:value10",
+          "tag11:value11",
+          "tag12:value12",
+          "tag13:value13",
+          "tag14:value14",
+          "tag15:value15",
+          "tag16:value16",
+          "tag17:value17",
+          "tag18:value18",
+          "tag19:value19"
+        ],
+        "url": "https://app.datadoghq.eu/event/event?id=7654321098765432101"
+      },
+      "classification": "internal"
+    }
+  ]
+}

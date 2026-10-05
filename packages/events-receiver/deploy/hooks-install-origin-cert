@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Installs the Cloudflare Origin CA certificate for the webhook host (read from standard input) after checking host name, validity, chain
+# and that it belongs to hooks.key. The previous certificate stays as hooks.pem.previous; nginx is reloaded only if its test passes.
+set -euo pipefail
+umask 077
+test "$#" = 0
+directory=/etc/agent-cluster-external/tls
+host=hooks-innov.ih0.se
+candidate=$(mktemp "$directory/.hooks-candidate.XXXXXX")
+trap 'unlink "$candidate"' EXIT
+dd iflag=fullblock bs=16384 count=1 status=none of="$candidate"
+openssl x509 -in "$candidate" -noout -checkhost "$host" | grep -q 'does match'
+openssl x509 -in "$candidate" -noout -checkend 2592000
+openssl verify -purpose sslserver -CAfile "$directory/cloudflare-origin-ca.pem" "$candidate"
+test "$(openssl x509 -in "$candidate" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum)" = "$(openssl pkey -in "$directory/hooks.key" -pubout -outform DER | sha256sum)"
+cp -a "$directory/hooks.pem" "$directory/hooks.pem.previous"
+install -m 644 "$candidate" "$directory/hooks.pem"
+if ! docker exec penpot-origin-1 nginx -t; then
+  cp -a "$directory/hooks.pem.previous" "$directory/hooks.pem"
+  exit 1
+fi
+docker exec penpot-origin-1 nginx -s reload
+openssl x509 -in "$directory/hooks.pem" -noout -issuer -subject -dates
+printf 'Webhook host certificate installed\n'

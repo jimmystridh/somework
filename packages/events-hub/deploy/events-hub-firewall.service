@@ -1,0 +1,14 @@
+[Unit]
+Description=Events hub published-port policy (DOCKER-USER)
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/events-hub-firewall
+ExecStart=/usr/local/sbin/events-hub-firewall
+
+[Install]
+WantedBy=docker.service

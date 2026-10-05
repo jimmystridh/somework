@@ -1,0 +1,45 @@
+{
+  "description": "an unknown webhookEvent is dropped",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Atlassian HttpClient 4.2.1 / JIRA-9.12.4 / 912004"
+    },
+    "body": {
+      "timestamp": 1759651200000,
+      "user": {
+        "self": "https://jira.example.com/rest/api/2/user?username=anna",
+        "name": "anna",
+        "key": "JIRAUSER71214",
+        "emailAddress": "canary-anna@visma.example",
+        "displayName": "Anna Svensson",
+        "active": true,
+        "timeZone": "Europe/Stockholm",
+        "avatarUrls": {
+          "48x48": "https://jira.example.com/avatar"
+        }
+      },
+      "webhookEvent": "jira:version_released",
+      "version": {
+        "name": "9.1"
+      }
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "jira",
+    "defaults": {
+      "repository": {
+        "cloneUrl": "https://github.com/example-org/example-repo.git",
+        "ref": "refs/heads/main"
+      },
+      "projects": {
+        "OPS": {
+          "repository": {
+            "cloneUrl": "https://github.com/example-org/ops-repo.git",
+            "ref": "refs/heads/release"
+          }
+        }
+      }
+    }
+  },
+  "expected": []
+}

@@ -1,0 +1,96 @@
+/* GitHub webhook -> events. Input: {headers, body, receivedAt, source, defaults}. Headers are lower-cased by the receiver.
+   The data shapes are the ones rules/samples/ records and docs/RULES.md lists; change them together. Key = the delivery id, so a redelivery of
+   the same webhook is the same event. Only the fields named below are carried; the draft flag is data, whether to review drafts is a rule's
+   decision. $clip and $excerpt are provided by the hub. */
+(
+  $event := headers."x-github-event";
+  $delivery := headers."x-github-delivery";
+  $b := body;
+  $key := "github:delivery:" & $delivery;
+
+  $repo := $b.repository ? {
+    "fullName": $clip($b.repository.full_name, 200),
+    "cloneUrl": $b.repository.clone_url,
+    "htmlUrl": $b.repository.html_url
+  };
+
+  $delivery ? (
+    $event = "pull_request" and $b.pull_request ? (
+      $pr := $b.pull_request;
+      $action := $b.action;
+      $topic := $action = "opened" ? "github.pull_request.opened"
+        : $action = "synchronize" ? "github.pull_request.synchronize"
+        : $action = "ready_for_review" ? "github.pull_request.ready_for_review"
+        : $action = "reopened" ? "github.pull_request.reopened"
+        : $action = "closed" ? ($pr.merged = true ? "github.pull_request.merged" : "github.pull_request.closed");
+      $base := {
+        "action": $action,
+        "number": $b.number,
+        "draft": $pr.draft = true,
+        "title": $clip($pr.title, 200),
+        "author": $pr.user.login,
+        "headSha": $pr.head.sha,
+        "headRef": $clip($pr.head.ref, 200),
+        "baseRef": $clip($pr.base.ref, 200),
+        "htmlUrl": $pr.html_url,
+        "repository": $repo
+      };
+      $topic ? {
+        "topic": $topic,
+        "key": $key,
+        "data": $action = "closed" ? $merge([$base, { "merged": $pr.merged = true }]) : $base
+      }
+    )
+    : $event = "check_run" and $b.action = "completed" and $b.check_run ? {
+      "topic": "github.check_run.completed",
+      "key": $key,
+      "data": {
+        "repository": $repo,
+        "name": $clip($b.check_run.name, 200),
+        "status": $b.check_run.status,
+        "conclusion": $b.check_run.conclusion,
+        "htmlUrl": $b.check_run.html_url,
+        "headSha": $b.check_run.head_sha,
+        "pullRequests": [$b.check_run.pull_requests.number][[0..9]]
+      }
+    }
+    : $event = "issue_comment" and $b.action = "created" and $b.comment ? {
+      "topic": "github.issue_comment.created",
+      "key": $key,
+      "data": {
+        "repository": $repo,
+        "number": $b.issue.number,
+        "isPullRequest": $exists($b.issue.pull_request),
+        "title": $clip($b.issue.title, 200),
+        "comment": {
+          "id": $b.comment.id,
+          "author": $b.comment.user.login,
+          "authorAssociation": $b.comment.author_association,
+          "htmlUrl": $b.comment.html_url,
+          "body": $excerpt($b.comment.body, 500)
+        }
+      }
+    }
+    : $event = "push" and $b.ref ? {
+      "topic": "github.push.pushed",
+      "key": $key,
+      "data": {
+        "repository": $repo,
+        "ref": $clip($b.ref, 250),
+        "branch": $substring($b.ref, 0, 11) = "refs/heads/" ? $clip($substring($b.ref, 11), 200),
+        "before": $b.before,
+        "after": $b.after,
+        "created": $b.created = true,
+        "deleted": $b.deleted = true,
+        "forced": $b.forced = true,
+        "commitCount": $count($b.commits),
+        "headCommit": $b.head_commit ? {
+          "id": $b.head_commit.id,
+          "message": $clip($split($b.head_commit.message, "\n")[0], 200),
+          "author": $b.head_commit.author.username
+        },
+        "pusher": $b.pusher.name
+      }
+    }
+  )
+)

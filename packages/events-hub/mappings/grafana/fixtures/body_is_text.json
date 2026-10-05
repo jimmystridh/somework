@@ -1,0 +1,10 @@
+{
+  "description": "a non-JSON body is dropped",
+  "input": {
+    "headers": {},
+    "body": "text",
+    "receivedAt": "2026-10-05T09:58:05.000Z",
+    "source": "grafana"
+  },
+  "expected": []
+}

@@ -1,0 +1,44 @@
+{
+  "description": "a monitor goes to Warn",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Datadog-Webhook"
+    },
+    "body": {
+      "id": "7654321098765432101",
+      "alert_id": "1122334",
+      "title": "[Warn on {host:web-1}] Error rate above 2%",
+      "transition": "Triggered",
+      "status": "Warn",
+      "hostname": "web-1",
+      "tags": "env:prod,service:administration-api,team:administration,monitor",
+      "link": "https://app.datadoghq.eu/event/event?id=7654321098765432101",
+      "org": "Visma",
+      "date": "1759651200000",
+      "priority": "normal"
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "datadog"
+  },
+  "expected": [
+    {
+      "topic": "datadog.monitor.warn",
+      "key": "datadog:1122334:Warn:1759651200",
+      "data": {
+        "monitorId": 1122334,
+        "monitor": "[Warn on {host:web-1}] Error rate above 2%",
+        "transition": "Warn",
+        "priority": "normal",
+        "tags": [
+          "env:prod",
+          "service:administration-api",
+          "team:administration",
+          "monitor"
+        ],
+        "url": "https://app.datadoghq.eu/event/event?id=7654321098765432101"
+      },
+      "classification": "internal"
+    }
+  ]
+}

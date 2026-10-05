@@ -1,0 +1,15 @@
+{
+  "sources": [
+    { "name": "github", "version": 1, "verify": "github-hmac" },
+    { "name": "jira", "version": 1 },
+    { "name": "datadog", "version": 1 },
+    { "name": "woodpecker", "version": 1, "path": "/api/hook" }
+  ],
+  "limits": {
+    "maxBodyBytes": 1048576,
+    "perSource": { "ratePerSecond": 20, "burst": 100 },
+    "global": { "ratePerSecond": 100, "burst": 400 },
+    "authFailuresPerMinute": 20
+  },
+  "retentionHours": 24
+}

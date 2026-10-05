@@ -1,0 +1,22 @@
+{
+  "name": "@somework/events-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The private-side event hub: pulls webhooks from the receiver, maps them to events with reviewed JSONata mappings, publishes them to the domain as per-source producers, and runs the clock.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "somework-hub": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts",
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "cli": "node --disable-warning=ExperimentalWarning src/cli.ts"
+  },
+  "dependencies": {
+    "@somework/sdk": "0.1.0",
+    "jsonata": "2.2.2"
+  }
+}

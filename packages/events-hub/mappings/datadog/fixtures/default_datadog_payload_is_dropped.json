@@ -1,0 +1,24 @@
+{
+  "description": "Datadog's default payload (no template) has no transition and is dropped",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Datadog-Webhook"
+    },
+    "body": {
+      "body": "@webhook-x\n%%% Monitor triggered %%%",
+      "last_updated": "1759651200000",
+      "event_type": "triggered_monitor",
+      "title": "t",
+      "date": "1759651200000",
+      "org": {
+        "id": "1",
+        "name": "Visma"
+      },
+      "id": "9"
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "datadog"
+  },
+  "expected": []
+}

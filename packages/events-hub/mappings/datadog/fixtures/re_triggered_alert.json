@@ -1,0 +1,44 @@
+{
+  "description": "a monitor that stays in Alert and is re-triggered is a new alert event at its own time",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Datadog-Webhook"
+    },
+    "body": {
+      "id": "7654321098765432101",
+      "alert_id": "1122334",
+      "title": "[Triggered on {host:web-1}] Error rate above 5% on administration-api",
+      "transition": "Re-Triggered",
+      "status": "Alert",
+      "hostname": "web-1",
+      "tags": "env:prod,service:administration-api,team:administration,monitor",
+      "link": "https://app.datadoghq.eu/event/event?id=7654321098765432101",
+      "org": "Visma",
+      "date": "1759654800000",
+      "priority": "normal"
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "datadog"
+  },
+  "expected": [
+    {
+      "topic": "datadog.monitor.alert",
+      "key": "datadog:1122334:Alert:1759654800",
+      "data": {
+        "monitorId": 1122334,
+        "monitor": "[Triggered on {host:web-1}] Error rate above 5% on administration-api",
+        "transition": "Alert",
+        "priority": "normal",
+        "tags": [
+          "env:prod",
+          "service:administration-api",
+          "team:administration",
+          "monitor"
+        ],
+        "url": "https://app.datadoghq.eu/event/event?id=7654321098765432101"
+      },
+      "classification": "internal"
+    }
+  ]
+}

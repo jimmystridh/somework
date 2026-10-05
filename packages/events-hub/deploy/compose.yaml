@@ -1,0 +1,62 @@
+# Event hub on the agents VM. It reaches three things, all outbound: the receiver in the DMZ (the one route the host firewall opens from this VM),
+# the domain's proxy, and the private target of forward-only sources (Woodpecker). Its only listener is published on this VM's private address,
+# for senders inside the private network (Grafana posts alerts to /in/grafana/<token>).
+#   docker compose --env-file .env up -d
+name: somework-events-hub
+
+services:
+  hub:
+    image: somework-events-hub:${HUB_VERSION:?set HUB_VERSION to the built image tag}
+    restart: unless-stopped
+    user: "10021:10021"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      HUB_CONFIG: /etc/hub/hub.config.json
+      HUB_SECRET_FILE: /run/secrets/hub-secret
+      LISTEN_HOST: 0.0.0.0
+      LISTEN_PORT: "8090"
+      TLS_PORT: "8091"
+      TLS_CERT_FILE: /run/hub/tls/tls.crt
+      TLS_KEY_FILE: /run/hub/tls/tls.key
+    ports:
+      # plain HTTP: senders that cannot speak TLS inside the private network (restrict by source address on the host)
+      - "${HUB_BIND_ADDRESS:?this VM's private address, for example 10.10.10.12}:${HUB_PORT:-8090}:8090"
+      # TLS (certificate from the private CA): the dashboard and the manager read /admin and /metrics here
+      - "${HUB_BIND_ADDRESS}:${HUB_TLS_PORT:-8091}:8091"
+    volumes:
+      - ./config/hub.config.json:/etc/hub/hub.config.json:ro
+      - ./secrets/hub-secret:/run/secrets/hub-secret:ro
+      - ./tls:/run/hub/tls:ro                                # tls.crt / tls.key for the TLS listener
+      - ${HUB_KEYS_DIR:-./keys}:/run/hub/keys:ro                              # one producer key file per source: github.key.json, jira.key.json, ... clock.key.json
+      - ./config/ca.pem:/run/hub/ca.pem:ro                   # the private CA of the domain's proxy
+      - ./config/receiver-ca.pem:/run/hub/receiver-ca.pem:ro # the CA that signed the receiver's private listener certificate
+      - ${FORWARD_CA_FILE:-/etc/agent-cluster-observability/ca.crt}:/etc/agent-cluster-observability/ca.crt:ro
+      - data:/data
+    tmpfs: ["/tmp:size=16m,noexec,nosuid"]
+    mem_limit: 384m
+    pids_limit: 128
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+
+  # One-shot: the named volume starts root-owned, the hub runs as uid 10021.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    profiles: [init]
+    image: somework-events-hub:${HUB_VERSION:?set HUB_VERSION}
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown -R 10021:10021 /data"]
+    volumes:
+      - data:/data
+
+volumes:
+  data: {}

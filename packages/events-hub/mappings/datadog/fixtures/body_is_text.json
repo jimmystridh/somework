@@ -1,0 +1,13 @@
+{
+  "description": "a non-JSON body is dropped",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Datadog-Webhook"
+    },
+    "body": "plain text",
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "datadog"
+  },
+  "expected": []
+}

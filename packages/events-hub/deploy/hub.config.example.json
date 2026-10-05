@@ -1,0 +1,27 @@
+{
+  "domain": { "url": "https://10.10.10.13:7080", "caFile": "/run/hub/ca.pem", "requireTls": true },
+  "receiver": { "url": "https://10.20.20.10:8443", "caFile": "/run/hub/receiver-ca.pem", "waitSeconds": 25 },
+  "defaultClassification": "internal",
+  "mappingsDir": "/app/packages/events-hub/mappings",
+  "storePath": "/data/hub.sqlite",
+  "maxAttempts": 20,
+  "sources": [
+    { "name": "github", "version": 1, "mapping": "github", "producer": { "keyFile": "/run/hub/keys/github.key.json" } },
+    {
+      "name": "jira", "version": 1, "mapping": "jira", "producer": { "keyFile": "/run/hub/keys/jira.key.json" },
+      "defaults": {
+        "repository": { "cloneUrl": "https://github.com/example-org/example-repo.git", "ref": "refs/heads/main" },
+        "projects": { "OPS": { "repository": { "cloneUrl": "https://github.com/example-org/ops-repo.git", "ref": "refs/heads/release" } } }
+      }
+    },
+    { "name": "datadog", "version": 1, "mapping": "datadog", "producer": { "keyFile": "/run/hub/keys/datadog.key.json" } },
+    { "name": "grafana", "version": 1, "internal": true, "mapping": "grafana", "producer": { "keyFile": "/run/hub/keys/grafana.key.json" } },
+    { "name": "woodpecker", "version": 1, "forward": { "baseUrl": "https://10.10.10.14:9445", "caFile": "/etc/agent-cluster-observability/ca.crt" } }
+  ],
+  "clock": {
+    "producer": { "keyFile": "/run/hub/keys/clock.key.json" },
+    "schedules": [
+      { "name": "nightly_digest", "cron": "0 23 * * *", "timeZone": "Europe/Stockholm", "jitterSeconds": 0, "missed": "run-once" }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "description": "a body without alerts is dropped",
+  "input": {
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "hello": "world"
+    },
+    "receivedAt": "2026-10-05T09:58:05.000Z",
+    "source": "grafana"
+  },
+  "expected": []
+}

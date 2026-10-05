@@ -1,0 +1,24 @@
+{
+  "description": "without a transition time there is no stable key",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Datadog-Webhook"
+    },
+    "body": {
+      "id": "7654321098765432101",
+      "alert_id": "1122334",
+      "title": "[Triggered on {host:web-1}] Error rate above 5% on administration-api",
+      "transition": "Triggered",
+      "status": "Alert",
+      "hostname": "web-1",
+      "tags": "env:prod,service:administration-api,team:administration,monitor",
+      "link": "https://app.datadoghq.eu/event/event?id=7654321098765432101",
+      "org": "Visma",
+      "priority": "normal"
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "datadog"
+  },
+  "expected": []
+}

@@ -1,0 +1,154 @@
+import { DatabaseSync } from "node:sqlite";
+import type { RawItem } from "./types.ts";
+
+export interface DeadLetter {
+	id: string;
+	source: string;
+	receivedAt: string;
+	headers: Record<string, string>;
+	body: Buffer;
+	kind: string;
+	error: string;
+	attempts: number;
+	createdAt: number;
+	replayedAt: number | null;
+	path: string;
+	query: string;
+}
+
+interface DeadRow {
+	id: string;
+	source: string;
+	received_at: string;
+	headers: string;
+	body: Uint8Array;
+	kind: string;
+	error: string;
+	attempts: number;
+	created_at: number;
+	replayed_at: number | null;
+	path: string;
+	query: string;
+}
+
+const toDead = (row: DeadRow): DeadLetter => ({ id: row.id, source: row.source, receivedAt: row.received_at, headers: JSON.parse(row.headers), body: Buffer.from(row.body), kind: row.kind, error: row.error, attempts: row.attempts, createdAt: row.created_at, replayedAt: row.replayed_at, path: row.path, query: row.query });
+
+/** The hub's own durable state: pull cursor, dead letters, the inbox of the internal listener, clock progress and source switches. */
+export class Store {
+	readonly #db: DatabaseSync;
+	readonly #now: () => number;
+
+	constructor(path: string, now: () => number = Date.now) {
+		this.#now = now;
+		this.#db = new DatabaseSync(path);
+		this.#db.exec(`
+			PRAGMA journal_mode = WAL;
+			PRAGMA synchronous = FULL;
+			PRAGMA busy_timeout = 5000;
+			CREATE TABLE IF NOT EXISTS kv (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS dead_letters (
+				id TEXT PRIMARY KEY, source TEXT NOT NULL, received_at TEXT NOT NULL, headers TEXT NOT NULL, body BLOB NOT NULL,
+				kind TEXT NOT NULL, error TEXT NOT NULL, attempts INTEGER NOT NULL, created_at INTEGER NOT NULL, replayed_at INTEGER,
+				path TEXT NOT NULL DEFAULT '', query TEXT NOT NULL DEFAULT ''
+			);
+			CREATE TABLE IF NOT EXISTS inbox (
+				seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, source TEXT NOT NULL, received_at TEXT NOT NULL, headers TEXT NOT NULL, body BLOB NOT NULL,
+				path TEXT NOT NULL DEFAULT '', query TEXT NOT NULL DEFAULT ''
+			);
+			CREATE TABLE IF NOT EXISTS clock_state (name TEXT PRIMARY KEY, last_scheduled INTEGER NOT NULL);
+			CREATE TABLE IF NOT EXISTS paused_sources (name TEXT PRIMARY KEY);
+		`);
+		for (const table of ["dead_letters", "inbox"]) {
+			const columns = (this.#db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
+			for (const column of ["path", "query"]) if (!columns.includes(column)) this.#db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+		}
+	}
+
+	#get(name: string): string | undefined {
+		return (this.#db.prepare("SELECT value FROM kv WHERE name = ?").get(name) as { value: string } | undefined)?.value;
+	}
+
+	#set(name: string, value: string): void {
+		this.#db.prepare("INSERT INTO kv(name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value").run(name, value);
+	}
+
+	cursor(): number {
+		return Number(this.#get("cursor") ?? 0);
+	}
+
+	setCursor(seq: number): void {
+		this.#set("cursor", String(seq));
+	}
+
+	addDeadLetter(item: RawItem, kind: string, error: string, attempts: number): void {
+		this.#db
+			.prepare("INSERT OR IGNORE INTO dead_letters(id, source, received_at, headers, body, kind, error, attempts, created_at, path, query) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			.run(item.id, item.source, item.receivedAt, JSON.stringify(item.headers), item.body, kind, error.slice(0, 500), attempts, this.#now(), item.path, item.query);
+	}
+
+	deadLetters(options: { pending?: boolean } = {}): DeadLetter[] {
+		const sql = options.pending ? "SELECT * FROM dead_letters WHERE replayed_at IS NULL ORDER BY created_at" : "SELECT * FROM dead_letters ORDER BY created_at";
+		return (this.#db.prepare(sql).all() as unknown as DeadRow[]).map(toDead);
+	}
+
+	deadLetter(id: string): DeadLetter | undefined {
+		const row = this.#db.prepare("SELECT * FROM dead_letters WHERE id = ?").get(id) as DeadRow | undefined;
+		return row ? toDead(row) : undefined;
+	}
+
+	markReplayed(id: string): void {
+		this.#db.prepare("UPDATE dead_letters SET replayed_at = ? WHERE id = ?").run(this.#now(), id);
+	}
+
+	deleteDeadLetter(id: string): boolean {
+		return Number(this.#db.prepare("DELETE FROM dead_letters WHERE id = ?").run(id).changes) > 0;
+	}
+
+	deadLetterCounts(): Record<string, number> {
+		const rows = this.#db.prepare("SELECT source, COUNT(*) AS n FROM dead_letters WHERE replayed_at IS NULL GROUP BY source").all() as { source: string; n: number }[];
+		return Object.fromEntries(rows.map((row) => [row.source, row.n]));
+	}
+
+	purgeDeadLetters(retentionMs: number): number {
+		return Number(this.#db.prepare("DELETE FROM dead_letters WHERE created_at < ?").run(this.#now() - retentionMs).changes);
+	}
+
+	enqueueInbox(item: RawItem): number {
+		const result = this.#db.prepare("INSERT INTO inbox(id, source, received_at, headers, body, path, query) VALUES (?, ?, ?, ?, ?, ?, ?)").run(item.id, item.source, item.receivedAt, JSON.stringify(item.headers), item.body, item.path, item.query);
+		return Number(result.lastInsertRowid);
+	}
+
+	inbox(limit: number): { seq: number; item: RawItem }[] {
+		const rows = this.#db.prepare("SELECT seq, id, source, received_at, headers, body, path, query FROM inbox ORDER BY seq LIMIT ?").all(limit) as unknown as (DeadRow & { seq: number })[];
+		return rows.map((row) => ({ seq: row.seq, item: { id: row.id, source: row.source, receivedAt: row.received_at, headers: JSON.parse(row.headers), body: Buffer.from(row.body), path: row.path, query: row.query } }));
+	}
+
+	inboxDone(seq: number): void {
+		this.#db.prepare("DELETE FROM inbox WHERE seq = ?").run(seq);
+	}
+
+	inboxSize(): number {
+		return Number((this.#db.prepare("SELECT COUNT(*) AS n FROM inbox").get() as { n: number }).n);
+	}
+
+	clockLast(name: string): number | undefined {
+		return (this.#db.prepare("SELECT last_scheduled FROM clock_state WHERE name = ?").get(name) as { last_scheduled: number } | undefined)?.last_scheduled;
+	}
+
+	setClockLast(name: string, scheduled: number): void {
+		this.#db.prepare("INSERT INTO clock_state(name, last_scheduled) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET last_scheduled = excluded.last_scheduled").run(name, scheduled);
+	}
+
+	isPaused(source: string): boolean {
+		return this.#db.prepare("SELECT 1 FROM paused_sources WHERE name = ?").get(source) !== undefined;
+	}
+
+	setPaused(source: string, paused: boolean): void {
+		if (paused) this.#db.prepare("INSERT OR IGNORE INTO paused_sources(name) VALUES (?)").run(source);
+		else this.#db.prepare("DELETE FROM paused_sources WHERE name = ?").run(source);
+	}
+
+	close(): void {
+		this.#db.close();
+	}
+}

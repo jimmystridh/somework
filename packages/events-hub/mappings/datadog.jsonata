@@ -1,0 +1,33 @@
+/* Datadog monitor webhook -> events, state transitions only (Alert, Warn, Recovered). Shapes: rules/samples/ and docs/RULES.md.
+   The webhook payload is a template the operator writes in Datadog; the documented one is in the README (keys id, alert_id, title,
+   transition, status, link, date, priority, tags). Keys written as the variable names themselves (ALERT_TRANSITION, EVENT_TITLE ...) work
+   too: keys are compared lower-cased. Key = monitor id + state + transition time in seconds, so Datadog resending a notification is the same
+   event. data.transition is the new state: Alert, Warn or Recovered. */
+(
+  $raw := $type(body) = "object" ? body;
+  $b := $raw ? $merge($each($raw, function($v, $k) { { $lowercase($k): $v } }));
+  $transition := $lowercase($string($b.transition ? $b.transition : $b.alert_transition));
+  $status := $lowercase($string($b.status ? $b.status : $b.alert_status));
+  $monitor := $string($b.alert_id ? $b.alert_id : $b.id);
+  $date := $string($b.date);
+  $dateNumber := $date ~> $match(/^[0-9]{9,16}$/) ? $number($date);
+  $seconds := $dateNumber ? ($dateNumber > 99999999999 ? $floor($dateNumber / 1000) : $floor($dateNumber));
+
+  $state := $transition = "recovered" or $status = "ok" or $status = "recovered" ? "Recovered"
+    : $status = "warn" or $transition = "warn" ? "Warn"
+    : $transition = "triggered" or $transition = "re-triggered" ? "Alert";
+  $monitorId := $monitor ~> $match(/^[0-9]{1,15}$/) ? $number($monitor) : $monitor;
+
+  $b and $state and $monitor and $seconds ? {
+    "topic": $state = "Alert" ? "datadog.monitor.alert" : $state = "Warn" ? "datadog.monitor.warn" : "datadog.monitor.recovered",
+    "key": "datadog:" & $monitor & ":" & $state & ":" & $seconds,
+    "data": {
+      "monitorId": $monitorId,
+      "monitor": $clip($b.title ? $b.title : $b.event_title, 200),
+      "transition": $state,
+      "priority": $clip($b.priority ? $b.priority : $b.alert_priority, 20),
+      "tags": [$map($split($string($b.tags), ","), function($t) { $clip($trim($t), 100) })[$length($) > 0]][[0..19]],
+      "url": $b.link
+    }
+  }
+)

@@ -1,0 +1,130 @@
+{
+  "description": "a push to a branch; commit e-mail addresses are never carried",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "GitHub-Hookshot/abc1234",
+      "x-github-event": "push",
+      "x-github-delivery": "11111111-aaaa-4bbb-8ccc-000000000012",
+      "x-github-hook-id": "555",
+      "x-hub-signature-256": "sha256=deadbeef"
+    },
+    "body": {
+      "ref": "refs/heads/main",
+      "before": "3333333333333333333333333333333333333333",
+      "after": "4444444444444444444444444444444444444444",
+      "created": false,
+      "deleted": false,
+      "forced": false,
+      "commits": [
+        {
+          "id": "4444",
+          "message": "Fix rounding\n\nCANARY-COMMIT-BODY",
+          "author": {
+            "name": "Anna Developer",
+            "email": "canary-anna@example.com",
+            "username": "anna-dev"
+          }
+        },
+        {
+          "id": "5555",
+          "message": "Another",
+          "author": {
+            "name": "Anna Developer",
+            "email": "canary-anna@example.com",
+            "username": "anna-dev"
+          }
+        }
+      ],
+      "head_commit": {
+        "id": "4444",
+        "message": "Fix rounding\n\nCANARY-COMMIT-BODY",
+        "author": {
+          "name": "Anna Developer",
+          "email": "canary-anna@example.com",
+          "username": "anna-dev"
+        },
+        "committer": {
+          "email": "canary-committer@example.com"
+        }
+      },
+      "pusher": {
+        "name": "anna-dev",
+        "email": "canary-pusher@example.com"
+      },
+      "repository": {
+        "id": 4242,
+        "node_id": "R_kgDOB",
+        "name": "visma.administration",
+        "full_name": "Visma-Administration/visma.administration",
+        "private": true,
+        "owner": {
+          "login": "Visma-Administration",
+          "id": 777,
+          "node_id": "MDQ6VXNlcjE=",
+          "avatar_url": "https://avatars.githubusercontent.com/u/777?v=4",
+          "gravatar_id": "",
+          "url": "https://api.github.com/users/Visma-Administration",
+          "html_url": "https://github.com/Visma-Administration",
+          "type": "Organization",
+          "site_admin": false
+        },
+        "html_url": "https://github.com/Visma-Administration/visma.administration",
+        "description": "Development repository for Visma Administration. CANARY-REPO-DESCRIPTION",
+        "fork": false,
+        "url": "https://api.github.com/repos/Visma-Administration/visma.administration",
+        "clone_url": "https://github.com/Visma-Administration/visma.administration.git",
+        "ssh_url": "git@github.com:Visma-Administration/visma.administration.git",
+        "default_branch": "main",
+        "open_issues_count": 12
+      },
+      "sender": {
+        "login": "anna-dev",
+        "id": 1001,
+        "node_id": "MDQ6VXNlcjE=",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1001?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/anna-dev",
+        "html_url": "https://github.com/anna-dev",
+        "type": "User",
+        "site_admin": false
+      }
+    },
+    "receivedAt": "2026-10-05T08:05:01.000Z",
+    "source": "github"
+  },
+  "expected": [
+    {
+      "topic": "github.push.pushed",
+      "key": "github:delivery:11111111-aaaa-4bbb-8ccc-000000000012",
+      "data": {
+        "repository": {
+          "fullName": "Visma-Administration/visma.administration",
+          "cloneUrl": "https://github.com/Visma-Administration/visma.administration.git",
+          "htmlUrl": "https://github.com/Visma-Administration/visma.administration"
+        },
+        "ref": "refs/heads/main",
+        "branch": "main",
+        "before": "3333333333333333333333333333333333333333",
+        "after": "4444444444444444444444444444444444444444",
+        "created": false,
+        "deleted": false,
+        "forced": false,
+        "commitCount": 2,
+        "headCommit": {
+          "id": "4444",
+          "message": "Fix rounding",
+          "author": "anna-dev"
+        },
+        "pusher": "anna-dev"
+      },
+      "classification": "internal"
+    }
+  ],
+  "canaries": [
+    "canary-anna@example.com",
+    "canary-committer@example.com",
+    "canary-pusher@example.com",
+    "CANARY-COMMIT-BODY"
+  ]
+}
