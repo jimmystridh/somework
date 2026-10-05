@@ -53,6 +53,16 @@ services:
       BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-1000000}
       BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-30}
       DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-5000000}
+      EVENTS_ENABLED: ${EVENTS_ENABLED:-0}                  # 1 = run event handlers and wakes for this agent (docs/EVENTS.md)
+      EVENTS_NOTIFY_TO: ${EVENTS_NOTIFY_TO:-agent/manager}
+      EVENTS_CONTROLLERS: ${EVENTS_CONTROLLERS:-agent/manager}
+      EVENTS_ACCEPT: ${EVENTS_ACCEPT:-}
+      EVENTS_TOKEN_SHARE: ${EVENTS_TOKEN_SHARE:-0.3}
+      EVENTS_THROTTLE_AT: ${EVENTS_THROTTLE_AT:-0.8}
+      EVENTS_MAX_FAILURES: ${EVENTS_MAX_FAILURES:-5}
+      EVENTS_MAX_WAKES_PER_HOUR: ${EVENTS_MAX_WAKES_PER_HOUR:-20}
+      EVENTS_HANDLER_TIMEOUT_SECONDS: ${EVENTS_HANDLER_TIMEOUT_SECONDS:-10}
+      EVENTS_WAKE_MAX_TOKENS: ${EVENTS_WAKE_MAX_TOKENS:-100000}
       HEALTH_PORT: "8081"
     volumes:
       - ${REVIEWER_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
@@ -63,7 +73,7 @@ services:
       - ./skills-overlay:/run/skills-overlay:ro             # <skill>.md overlays (only used with SKILLS_OVERLAY_DIR)
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
-    ports: ["127.0.0.1:8082:8081"]                          # health and metrics for the host's agent (8081 belongs to the developer role)
+    ports: ["${HEALTH_BIND:-127.0.0.1}:8082:8081"]      # health, handlers and token pools (8081 belongs to the developer agent on the same host)
     depends_on:
       sandbox: {condition: service_healthy}
     mem_limit: 1g

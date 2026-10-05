@@ -1,0 +1,14 @@
+[Unit]
+Description=Kit agents health ports published-port policy (DOCKER-USER)
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/agent-health-firewall
+ExecStart=/usr/local/sbin/agent-health-firewall
+
+[Install]
+WantedBy=docker.service

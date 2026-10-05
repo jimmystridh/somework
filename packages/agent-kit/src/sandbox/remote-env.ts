@@ -122,7 +122,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
 	async exec(command: string, options: ShellExecOptions | undefined, context: Context): Promise<Result<ShellExecResult, ExecutionError>> {
 		const { onOutput, ...wireOptions } = options ?? {};
 		const outcome = await this.#call("/exec", { command, ...wireOptions, cwd: wireOptions.cwd ?? this.cwd }, context, (line) => {
-			if (line.t === "out") onOutput?.(line.d, context);
+			if (line.t === "out") onOutput?.(line.d, context, { stream: "stdout" });
 		});
 		if ("aborted" in outcome) return err(new ExecutionError("aborted", "aborted"));
 		if ("transport" in outcome) return err(new ExecutionError("spawn_error", `sandbox unreachable: ${outcome.transport}`));

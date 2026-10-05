@@ -32,6 +32,7 @@ export function qaProfile(options: QaProfileOptions = {}): AgentProfile {
 		requireBudget: true,
 		git: { push: false, pullRequest: false, branchPrefix: "qa" },
 		skills: { allow: [] },
+		events: { enabled: false },
 	});
 }
 

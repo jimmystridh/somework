@@ -1,41 +1,149 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-/** Daily token spend, persisted so a restart does not reset the cap. */
+export type Pool = "tasks" | "events";
+export type PoolState = "ok" | "throttled" | "stopped";
+
+export interface EventPoolOptions {
+	/** Share of the daily limit that event-driven runs may use. */
+	share: number;
+	/** Optional cap per ISO week for event-driven runs. */
+	weeklyTokens?: number;
+	/** Fraction of the events pool at which the agent is throttled. */
+	throttleAt?: number;
+}
+
+export interface PoolUsage {
+	tasks: { used: number; limit: number };
+	events: { used: number; limit: number; weeklyUsed?: number; weeklyLimit?: number; throttled: boolean; stopped: boolean };
+}
+
+interface LedgerState {
+	date: string;
+	tokens: number;
+	events?: number;
+	week?: string;
+	weekEvents?: number;
+	notices?: string[];
+}
+
+export const isoWeek = (date: string): string => {
+	const day = new Date(`${date}T00:00:00Z`);
+	day.setUTCDate(day.getUTCDate() + 4 - (day.getUTCDay() || 7));
+	const week = Math.ceil(((day.getTime() - Date.UTC(day.getUTCFullYear(), 0, 1)) / 86_400_000 + 1) / 7);
+	return `${day.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+};
+
+/**
+ * Daily token spend, persisted so a restart does not reset the cap. Two pools share the daily limit: `tasks` (what requesters submit) and
+ * `events` (runs started by events, capped at a share of the limit). Event spend never exceeds its share, so it can never take more than
+ * that share away from tasks. Without event pool options the ledger behaves exactly as the plain daily ledger.
+ */
 export class DailyLedger {
 	readonly #path: string;
 	readonly #limit: number;
 	readonly #today: () => string;
+	readonly #events: EventPoolOptions | undefined;
 
-	constructor(path: string, dailyTokenLimit: number, today: () => string = () => new Date().toISOString().slice(0, 10)) {
+	constructor(path: string, dailyTokenLimit: number, today: () => string = () => new Date().toISOString().slice(0, 10), events?: EventPoolOptions) {
 		this.#path = path;
 		this.#limit = dailyTokenLimit;
 		this.#today = today;
+		this.#events = events && events.share > 0 ? events : undefined;
 		mkdirSync(dirname(path), { recursive: true });
 	}
 
-	#read(): { date: string; tokens: number } {
+	#read(): LedgerState {
+		const today = this.#today();
+		let state: LedgerState = { date: today, tokens: 0 };
 		try {
-			const state = JSON.parse(readFileSync(this.#path, "utf8")) as { date: string; tokens: number };
-			if (state.date === this.#today()) return state;
+			const stored = JSON.parse(readFileSync(this.#path, "utf8")) as LedgerState;
+			if (stored.date === today) state = stored;
+			else if (stored.week === isoWeek(today)) state = { date: today, tokens: 0, week: stored.week, weekEvents: stored.weekEvents };
 		} catch {
 			// no ledger yet, or a new day
 		}
-		return { date: this.#today(), tokens: 0 };
+		const week = isoWeek(today);
+		if (state.week !== week) {
+			state.week = week;
+			state.weekEvents = 0;
+		}
+		return state;
 	}
 
+	#write(state: LedgerState): void {
+		writeFileSync(`${this.#path}.tmp`, JSON.stringify(state));
+		renameSync(`${this.#path}.tmp`, this.#path);
+	}
+
+	get eventsLimit(): number {
+		return this.#events ? Math.floor(this.#limit * Math.min(this.#events.share, 1)) : 0;
+	}
+
+	/** Tokens spent today by requester tasks. */
 	spent(): number {
 		return this.#read().tokens;
 	}
 
+	/** What a requester task may still use today: event spend (up to its share) comes off the daily limit, so tasks keep at least the rest. */
 	remaining(): number {
-		return Math.max(0, this.#limit - this.spent());
+		const state = this.#read();
+		const events = this.#events ? Math.min(state.events ?? 0, this.eventsLimit) : 0;
+		return Math.max(0, this.#limit - state.tokens - events);
 	}
 
-	record(tokens: number): void {
+	/** What event-driven runs may still use today (and this week, when a weekly cap is set). */
+	eventsRemaining(): number {
+		if (!this.#events) return 0;
 		const state = this.#read();
-		state.tokens += Math.max(0, Math.round(tokens));
-		writeFileSync(`${this.#path}.tmp`, JSON.stringify(state));
-		renameSync(`${this.#path}.tmp`, this.#path);
+		const daily = Math.max(0, this.eventsLimit - (state.events ?? 0));
+		const weekly = this.#events.weeklyTokens === undefined ? Number.POSITIVE_INFINITY : Math.max(0, this.#events.weeklyTokens - (state.weekEvents ?? 0));
+		return Math.min(daily, weekly);
+	}
+
+	eventsState(): PoolState {
+		if (!this.#events) return "ok";
+		const state = this.#read();
+		const used = state.events ?? 0;
+		const weeklyStopped = this.#events.weeklyTokens !== undefined && (state.weekEvents ?? 0) >= this.#events.weeklyTokens;
+		if (used >= this.eventsLimit || weeklyStopped) return "stopped";
+		if (used >= this.eventsLimit * (this.#events.throttleAt ?? 0.8)) return "throttled";
+		return "ok";
+	}
+
+	record(tokens: number, pool: Pool = "tasks"): void {
+		const state = this.#read();
+		const amount = Math.max(0, Math.round(tokens));
+		if (pool === "events") {
+			state.events = (state.events ?? 0) + amount;
+			state.weekEvents = (state.weekEvents ?? 0) + amount;
+		} else {
+			state.tokens += amount;
+		}
+		this.#write(state);
+	}
+
+	/** True the first time it is called for `key` today; used for "tell the owner once a day". */
+	firstNoticeToday(key: string): boolean {
+		const state = this.#read();
+		if (state.notices?.includes(key)) return false;
+		state.notices = [...(state.notices ?? []), key];
+		this.#write(state);
+		return true;
+	}
+
+	usage(): PoolUsage {
+		const state = this.#read();
+		const events = this.eventsState();
+		return {
+			tasks: { used: state.tokens, limit: this.#limit },
+			events: {
+				used: state.events ?? 0,
+				limit: this.eventsLimit,
+				...(this.#events?.weeklyTokens === undefined ? {} : { weeklyUsed: state.weekEvents ?? 0, weeklyLimit: this.#events.weeklyTokens }),
+				throttled: events === "throttled",
+				stopped: events === "stopped",
+			},
+		};
 	}
 }

@@ -6,6 +6,8 @@ import { Identity, SomeWorkClient, Worker } from "@somework/sdk";
 import { runChatResponder } from "./chat.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
+import { createEventsComponent } from "./events/component.ts";
+import { resolveEvents } from "./events/config.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
 import { createHandler } from "./handler.ts";
 import { createHealthServer } from "./health.ts";
@@ -70,8 +72,26 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
+			const eventsConfig = resolveEvents(profile.events, env);
+			const ledger = new DailyLedger(join(config.state.dir, "ledger.json"), config.limits.dailyTokenLimit, undefined, eventsConfig.enabled ? { share: eventsConfig.tokenShare, weeklyTokens: eventsConfig.weeklyTokens, throttleAt: eventsConfig.throttleAt } : undefined);
+			// the event component needs the runtime for woken runs and the runtime needs the component's tools: the runtime is looked up late
+			let runtimeRef: PiDurableRuntime | undefined;
+			const events = eventsConfig.enabled
+				? createEventsComponent({
+						config: eventsConfig,
+						stateDir: config.state.dir,
+						client,
+						runtime: { execute: (request, runHooks) => runtimeRef!.execute(request, runHooks) },
+						envFor,
+						workspaceRoot: config.sandbox.workspaceRoot,
+						ledger,
+						agent: { id: identity.agentId, role: profile.id, capabilities: profile.capabilities },
+						log,
+						metrics,
+					})
+				: undefined;
 			const skillAllow = config.skills.allow ?? profile.skills.allow;
-			const extensions = [...(hooks.extensions ?? []), ...(skillAllow.length > 0 ? [skillsExtension({ allow: skillAllow, overlayDir: config.skills.overlayDir ?? profile.skills.overlayDir, log })] : [])];
+			const extensions = [...(hooks.extensions ?? []), ...(events ? [events.extension] : []), ...(skillAllow.length > 0 ? [skillsExtension({ allow: skillAllow, overlayDir: config.skills.overlayDir ?? profile.skills.overlayDir, log })] : [])];
 			const runtime = new PiDurableRuntime({
 				storagePath: join(config.state.dir, "pi.sqlite"),
 				models,
@@ -79,11 +99,12 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				env: envFor,
 				policy: approvalPolicy(config.approvalPatterns, profile.approvalPatterns, profile.toolApprovals),
 				instructions: profile.systemPrompt,
-				allowedTools: profile.allowedTools,
+				allowedTools: profile.allowedTools && events ? [...profile.allowedTools, ...events.toolNames] : profile.allowedTools,
 				extensions,
 				log,
 				metrics,
 			});
+			runtimeRef = runtime;
 			await runtime.start();
 
 			const handler = createHandler({
@@ -95,7 +116,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				client,
 				limits: config.limits,
 				allowedModels: config.allowedModels,
-				ledger: new DailyLedger(join(config.state.dir, "ledger.json"), config.limits.dailyTokenLimit),
+				ledger,
 				shards: config.shards ? { table: config.shards, agentId: identity.agentId } : undefined,
 				metrics,
 				log,
@@ -106,6 +127,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const health = createHealthServer({
 				runtime,
 				metrics,
+				status: () => (events ? events.status() : { handlers: [], tokenPools: ledger.usage() }),
 				checks: { ...(hooks.envFactory ? {} : { sandbox: async () => (await fetch(`${config.sandbox.url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok }), ...hooks.readinessChecks },
 			});
 			health.listen(config.healthPort, hooks.healthBind ?? "0.0.0.0");
@@ -114,11 +136,12 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) process.once(signal, () => stop.abort());
 			const worker = new Worker(client, { handler, concurrency: config.concurrency, leaseSeconds: config.leaseSeconds, shutdownGraceMs: 20_000, logger: (level, message, fields) => log(level, message, fields) });
 			const chat = env.CHAT_AUTOREPLY === "0" ? false : profile.chat?.autoReply !== false;
-			if (chat) {
-				// a courtesy notice for chat messages; it can never fail or delay the claim loop below
-				void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: profile.chat });
+			if (chat || events) {
+				// a courtesy notice for chat messages (and the kill switch for event handlers); it can never fail or delay the claim loop below
+				void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: chat ? profile.chat : { ...profile.chat, autoReply: false }, ...(events ? { intercept: events.intercept } : {}) });
 			}
-			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, chat });
+			if (events) void events.run(stop.signal).catch((error) => log("error", "events_stopped", { error: error instanceof Error ? error.message : String(error) }));
+			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, chat, events: eventsConfig.enabled });
 			await worker.run(stop.signal);
 			health.close();
 			await runtime.close();

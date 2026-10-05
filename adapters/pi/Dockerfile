@@ -25,7 +25,7 @@ COPY adapters/pi/src /app/adapters/pi/src
 COPY adapters/pi/card.json /app/adapters/pi/card.json
 WORKDIR /app/adapters/pi
 # Everything the three images run must import at build time: a dependency that is missing from the lockfile fails here, not in production.
-RUN node --input-type=module -e "for (const name of ['@somework/sdk', '@somework/agent-kit', '@somework/agent-kit/sandbox/server', '@somework/agent-kit/egress/proxy', '@somework/agent-kit/providers/antigravity', './src/profile.ts']) await import(name)"
+RUN node --input-type=module -e "for (const name of ['@somework/sdk', '@somework/agent-kit', '@somework/agent-kit/sandbox/server', '@somework/agent-kit/egress/proxy', '@somework/agent-kit/providers/antigravity', '@somework/agent-kit/events', './src/profile.ts']) await import(name)"
 
 # The harness: holds the SomeWork key and the model credentials, runs Pi Durable, never runs a tool itself.
 FROM app AS agent

@@ -11,4 +11,5 @@ export const profile: AgentProfile = validateProfile({
 	git: { push: true, pullRequest: true, branchPrefix: "agent" },
 	// the repository's own skills are opt-in per deployment: SKILLS_ALLOW=name,name (and SKILLS_OVERLAY_DIR)
 	skills: { allow: [] },
+	events: { enabled: false },
 });

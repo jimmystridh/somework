@@ -2,6 +2,7 @@
 export * from "./chat.ts";
 export * from "./config.ts";
 export * from "./credentials.ts";
+export * from "./events/index.ts";
 export * from "./git.ts";
 export * from "./githost.ts";
 export * from "./handler.ts";

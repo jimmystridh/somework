@@ -18,4 +18,5 @@ export const profile: AgentProfile = validateProfile({
 	requireBudget: true,
 	git: { push: false, pullRequest: false, branchPrefix: "review" },
 	skills: { allow: [] },
+	events: { enabled: false },
 });

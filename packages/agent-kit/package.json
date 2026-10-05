@@ -13,6 +13,7 @@
     "./config": "./src/config.ts",
     "./credentials": "./src/credentials.ts",
     "./egress/proxy": "./src/egress/proxy.ts",
+    "./events": "./src/events/index.ts",
     "./git": "./src/git.ts",
     "./githost": "./src/githost.ts",
     "./handler": "./src/handler.ts",

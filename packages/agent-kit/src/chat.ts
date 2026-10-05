@@ -116,6 +116,11 @@ export interface ChatResponderOptions {
 	maxAgeMs?: number;
 	senderWindowMs?: number;
 	hourlyLimit?: number;
+	/**
+	 * Looks at each message before the chat rules do; returning true means it was dealt with (a control message for the event handlers)
+	 * and gets no notice. Only one consumer may read the agent's message wakes, so other message handling hooks in here.
+	 */
+	intercept?: (message: InboundMessage) => Promise<boolean>;
 	/** How wakes arrive (`poll` never uses NATS); tests use short poll intervals. */
 	wake?: Pick<WakeOptions, "mode" | "pollEveryMs" | "sweepEveryMs">;
 }
@@ -139,7 +144,8 @@ const asMessage = (body: any): InboundMessage | undefined => {
  * message is dropped (a notice is a courtesy, not a guarantee).
  */
 export async function runChatResponder(options: ChatResponderOptions): Promise<void> {
-	if (options.config?.autoReply === false) return;
+	const replying = options.config?.autoReply !== false;
+	if (!replying && !options.intercept) return;
 	const now = options.now ?? Date.now;
 	const limiter = new ReplyLimiter(options.senderWindowMs, options.hourlyLimit);
 	const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
@@ -161,6 +167,11 @@ export async function runChatResponder(options: ChatResponderOptions): Promise<v
 			outcome?.({ result: "ignored", reason: "unreadable" });
 			return;
 		}
+		if (options.intercept && (await options.intercept(message).catch(() => false))) {
+			outcome?.({ result: "ignored", reason: "intercepted" });
+			return;
+		}
+		if (!replying) return;
 		const decision = decideReply(message, { self: options.agentId, now: now(), maxAgeMs, limiter });
 		if (!decision.reply) {
 			options.log("info", "chat_message_received", { from: message.sender.id, conversationId: message.conversationId, replied: false, reason: decision.reason });

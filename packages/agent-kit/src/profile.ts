@@ -2,6 +2,8 @@ import type { Extension } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import type { Failure, Outcome, ProgressUpdate, SomeWorkClient } from "@somework/sdk";
 import type { ChatConfig } from "./chat.ts";
+import { validateEventsProfile } from "./events/config.ts";
+import type { EventsProfile } from "./events/types.ts";
 import type { FinalizeResult } from "./git.ts";
 import type { Log } from "./log.ts";
 import type { AgentRuntime, Budget, Usage } from "./runtime.ts";
@@ -50,6 +52,11 @@ export interface AgentProfile {
 	 * with the capability list); no model reads the message. `CHAT_AUTOREPLY=0` in the environment turns it off for a deployment.
 	 */
 	chat?: ChatConfig;
+	/**
+	 * Events (see docs/EVENTS.md): when `enabled`, the agent receives the events its subscriptions wake it for, runs its own handlers on them
+	 * and has the handler tools. Off by default: a role that does not opt in behaves exactly as before.
+	 */
+	events?: EventsProfile;
 }
 
 /** A role's decision that the work must not leave the workspace (a failed check, damaged files): no commit, no push, no pull request. */
@@ -179,5 +186,6 @@ export function validateProfile(profile: AgentProfile): AgentProfile {
 		if (profile.chat.autoReply !== undefined && typeof profile.chat.autoReply !== "boolean") throw new Error(`profile ${profile.id}: chat.autoReply must be true or false`);
 		if (profile.chat.replyTemplate !== undefined && typeof profile.chat.replyTemplate !== "function") throw new Error(`profile ${profile.id}: chat.replyTemplate must be a function`);
 	}
+	validateEventsProfile(profile.id, profile.events);
 	return profile;
 }

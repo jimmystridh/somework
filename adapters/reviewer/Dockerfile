@@ -24,7 +24,7 @@ COPY adapters/reviewer/src /app/adapters/reviewer/src
 COPY adapters/reviewer/card.json /app/adapters/reviewer/card.json
 WORKDIR /app/adapters/reviewer
 # Everything the service imports must resolve at build time: a dependency missing from the lockfile fails here, not in production.
-RUN node --input-type=module -e "for (const name of ['@somework/sdk', '@somework/agent-kit', '@somework/agent-kit/providers/faux', '@somework/agent-kit/providers/antigravity', '@somework/agent-kit/sandbox/remote-env', '@earendil-works/pi-ai', './src/profile.ts', './src/hooks.ts', './src/handler.ts']) await import(name)"
+RUN node --input-type=module -e "for (const name of ['@somework/sdk', '@somework/agent-kit', '@somework/agent-kit/providers/faux', '@somework/agent-kit/providers/antigravity', '@somework/agent-kit/events', '@somework/agent-kit/sandbox/remote-env', '@earendil-works/pi-ai', './src/profile.ts', './src/hooks.ts', './src/handler.ts']) await import(name)"
 
 # The harness: holds the SomeWork key and the model credentials, runs Pi Durable, never runs a tool itself.
 FROM app AS agent

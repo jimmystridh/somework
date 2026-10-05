@@ -22,4 +22,5 @@ export const profile: AgentProfile = validateProfile({
 	git: { push: true, pullRequest: true, branchPrefix: "agent" },
 	// the repository's own skills are loaded at the task's ref by the kit; the deployment names the ones this role may use (SKILLS_ALLOW)
 	skills: { allow: [] },
+	events: { enabled: false },
 });

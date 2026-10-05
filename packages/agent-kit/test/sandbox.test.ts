@@ -61,6 +61,13 @@ describe("remote ExecutionEnv", () => {
 		assert.equal(dir.error.code, (await local.readTextFile("a", ctx)).ok ? "?" : "is_directory");
 	});
 
+	it("hands the tool library an output info object with every chunk", async () => {
+		const infos: unknown[] = [];
+		value(await remote.exec("echo chunk", { onOutput: (_text, _context, info) => infos.push(info) }, ctx));
+		assert.ok(infos.length > 0);
+		for (const info of infos) assert.equal(typeof (info as { stream: string }).stream, "string");
+	});
+
 	it("runs commands with streamed output and an exit code", async () => {
 		const out: string[] = [];
 		const result = value(await remote.exec("echo one; echo two >&2; exit 3", { onOutput: (text) => out.push(text) }, ctx));
