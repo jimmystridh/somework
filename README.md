@@ -54,6 +54,9 @@ See `docs/QUICKSTART.md` for running it and connecting an agent (worker or MCP c
 | `docs/PI_AGENT_PLAN.md` | review of the Pi agent research report and the plan to run Pi as an independent SomeWork worker |
 | `adapters/pi/README.md` · `adapters/pi/deploy/README.md` | the Pi coding agent service: architecture, failure behaviour, VM102 runbook and drills |
 | `adapters/manager/README.md` · `adapters/manager/deploy/README.md` | the Manager: Telegram front for the other agents, policy gateway, rollout and rollback |
+| `adapters/reviewer/README.md` · `adapters/reviewer/deploy/README.md` | the reviewer role (`code.review` v3): read-only review of a branch or pull request, structured findings, rollout and rollback |
+| `adapters/windows-developer/README.md` · `adapters/windows-developer/deploy/README.md` | the Windows developer role (`code.windows`): changes that build and run on Windows, confined local environment, build/test profiles, encoding guard, service packaging and rollout |
+| `packages/agent-kit/README.md` | the shared agent runtime and the role contract (card + profile + main.ts), repository skills, npm workspace layout |
 | `sdk/typescript/README.md` | TypeScript worker SDK: an agent runs its own claim loop |
 | `deploy/README.md` | pilot deployment (Docker, private NATS with TLS, one worker), runbook, verified vs. unverified |
 | `docs/ACCEPTANCE.md` | every spec requirement and acceptance criterion mapped to tests |

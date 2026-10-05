@@ -22,17 +22,17 @@ The agents are the same program with different profiles. Everything that is not 
 ```
 sdk/typescript            @somework/sdk        client, worker loop, wake (NATS + sweep), identity
 packages/agent-kit        @somework/agent-kit  the shared agent runtime (below)
-agents/developer          card.json + profile + main.ts + deploy/        (today's adapters/pi)
-agents/windows-developer  card.json + profile + main.ts + deploy/
-agents/reviewer           card.json + profile + main.ts + deploy/
-agents/qa                 card.json + profile + main.ts + deploy/
-agents/manager            Telegram bridge + gateway + Pi extension
+adapters/pi               the developer role: card.json + src/profile.ts + src/main.ts + Dockerfile + deploy/
+adapters/windows-developer  card.json + profile + main.ts + deploy/        (to do)
+adapters/reviewer         card.json + profile + main.ts + deploy/          (to do)
+adapters/qa               card.json + profile + main.ts + deploy/          (to do)
+adapters/manager          Telegram bridge + gateway + Pi extension (a requester: uses the SDK only)
 ```
 
-An npm workspace ties them together, so every agent is built from the same tree, tested together, and released as one set of
-images (one Dockerfile with a `--target` per role; the Windows agent is a zip of the same tree plus a service wrapper).
+An npm workspace (root `package.json`, one `package-lock.json`) ties them together, so every agent is built from the same tree,
+tested together, and released as one set of images (one Dockerfile with a `--target` per role; the Windows agent is a zip of the same tree plus a service wrapper).
 
-`agent-kit` contains what today lives in `adapters/pi/src`: the runtime interface and the Pi Durable runtime, provider wiring and the
+`agent-kit` contains what used to live in `adapters/pi/src` (**done**, see `packages/agent-kit/README.md`): the runtime interface and the Pi Durable runtime, provider wiring and the
 credential store, git workspace handling and the GitHub host (idempotent branch, commit, push, PR), the approval policy, budgets and
 the daily ledger, shards, metrics, redacted structured logs, config helpers, health server, the sandbox protocol (server and remote
 `ExecutionEnv`), the egress proxy, and a **skill loader** (point 3). A role is only:
@@ -68,8 +68,9 @@ The repository the agents work on already carries its own instructions (`AGENTS.
 description) to the system prompt; the model opens the `SKILL.md` it needs with its file tool (progressive disclosure). Consequences:
 
 * Skills are **never copied into agent images or into this repository**. They change with the code they describe, per branch.
-* The same skill serves every agent that is allowed to use it: the reviewer's profile lists `pr-review`, `review-cpp-pr`; the Windows
-  developer's lists `bfs-cpp-style`, `cpp-developer`, `check-encodings`; QA lists `qa`. The profile is an **allowlist of skill names**.
+* The same skill serves every agent that is allowed to use it. Each role exposes **no skill by default**; the deployment names the allowed
+  repository skills per role (`SKILLS_ALLOW`), for example the reviewer's review skills, the Windows developer's style and encoding skills and
+  QA's verification skill. The allowlist is a list of skill names and lives in deployment configuration, not in this repository.
 * When a skill must be adapted for SomeWork (QA: no human Chrome extension, no direct Jira writes), the adaptation is a small **overlay**
   file in the deployment config (`SKILLS_OVERLAY_DIR`, kept out of git for company content) that is appended after the base skill and
   states only the differences. The base skill is not forked, so it keeps getting upstream improvements; a check warns when the
@@ -104,7 +105,7 @@ Same kit and the same protocol (clone, branch `agent/<task>`, commit, push, PR) 
   the profile therefore keeps approvals on for anything outside build/test/git.
 * Runs as a service/scheduled task at boot (the machine already has an elevated build task and the toolchain: MSBuild, .NET, Node, git).
 * Source encoding rules of the repository (legacy files are not UTF-8) are enforced by tool choice in the profile (encoding-safe edit
-  tool) and a check step before commit (the repository's own `check-encodings`).
+  tool) and a check step before commit (the repository's own encoding check, configured as a test profile).
 
 ### Reviewer
 `code.review` v2 (kept compatible; adds `pr` and `ticket`): checks out the ref read-only, loads the allowed review skills, gathers PR
@@ -131,8 +132,9 @@ It needs infrastructure that does not exist yet (see open decisions).
 
 ## Build order
 
-1. Workspace + `agent-kit` extraction (behaviour-preserving; the developer agent keeps passing its tests).
-2. Skill loader with allowlist and overlay support.
+1. Workspace + `agent-kit` extraction (behaviour-preserving; the developer agent keeps passing its tests). **Done.**
+2. Skill loader with allowlist and overlay support. **Done** (`packages/agent-kit/src/skills.ts`; Pi Durable has no native discovery,
+   so it renders a prompt section from the sandbox workspace; `AgentProfile` and `createAgentService` are the extension points).
 3. Reviewer (smallest: read-only, no sandbox writes, reuses everything).
 4. Windows developer (local `ExecutionEnv`, Windows service packaging, Windows-specific test run on the machine).
 5. QA (after the infrastructure decisions below).
