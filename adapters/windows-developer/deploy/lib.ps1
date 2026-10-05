@@ -22,10 +22,16 @@ function Get-UserSid([string]$Name) {
 # Only the Administrators and SYSTEM keep full control; the service user gets exactly $Rights (RX, R or M) and nothing is inherited.
 function Set-DirectoryAcl([string]$Path, [string]$Sid, [string]$Rights, [switch]$Recurse) {
     New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    # The rule is set on the directory only. Passing /T together with /inheritance:r and (OI)(CI) would strip the entries of every file below
+    # it (the flags mean nothing on a file), leaving them with an empty ACL that nobody, the service account included, can read.
     $arguments = @($Path, '/inheritance:r', '/grant:r', 'SYSTEM:(OI)(CI)F', 'Administrators:(OI)(CI)F', ('*{0}:(OI)(CI){1}' -f $Sid, $Rights), '/C', '/Q')
-    if ($Recurse) { $arguments += '/T' }
     & icacls.exe @arguments | Out-Null
     if ($LASTEXITCODE -ne 0) { throw ('icacls failed for {0} (exit {1})' -f $Path, $LASTEXITCODE) }
+    if ($Recurse) {
+        # existing children go back to inheriting from the directory (the wildcard keeps the directory's own entries as set above)
+        & icacls.exe (Join-Path $Path '*') /reset /T /C /Q | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw ('icacls reset failed under {0} (exit {1})' -f $Path, $LASTEXITCODE) }
+    }
 }
 
 # Adds (or removes) a user right such as SeBatchLogonRight / SeDenyNetworkLogonRight for a SID, through secedit.

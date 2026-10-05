@@ -157,7 +157,7 @@ for ($i = 0; $i -lt $blocked.Count; $i += $chunk) {
     $slice = @($blocked[$i..([Math]::Min($i + $chunk, $blocked.Count) - 1)] | ForEach-Object { Format-Range $_ })
     New-NetFirewallRule -DisplayName ('{0}-Block-IPv4-{1}' -f $RulePrefix, ($i / $chunk)) -Direction Outbound -Action Block -Profile Any -LocalUser $descriptor -RemoteAddress $slice -Description 'SomeWork agent: outbound to anything not in firewall-allow.txt' | Out-Null
 }
-New-NetFirewallRule -DisplayName ($RulePrefix + '-Block-IPv6') -Direction Outbound -Action Block -Profile Any -LocalUser $descriptor -RemoteAddress '::/0' -Description 'SomeWork agent: no IPv6' | Out-Null
+New-NetFirewallRule -DisplayName ($RulePrefix + '-Block-IPv6') -Direction Outbound -Action Block -Profile Any -LocalUser $descriptor -RemoteAddress @('::/1', '8000::/1') -Description 'SomeWork agent: no IPv6' | Out-Null
 Write-Host ('rules installed for {0} ({1})' -f $ServiceUser, $sid)
 
 if ($RegisterRefreshTask) {

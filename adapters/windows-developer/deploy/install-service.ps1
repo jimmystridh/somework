@@ -35,7 +35,7 @@ if (Get-LocalUser -Name $ServiceUser -ErrorAction SilentlyContinue) {
     Set-LocalUser -Name $ServiceUser -Password $securePassword
     Write-Host ('account {0} exists; password rotated' -f $ServiceUser)
 } else {
-    New-LocalUser -Name $ServiceUser -Password $securePassword -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires -Description 'SomeWork Windows developer agent (unprivileged service account)' | Out-Null
+    New-LocalUser -Name $ServiceUser -Password $securePassword -PasswordNeverExpires -UserMayNotChangePassword -AccountNeverExpires -Description 'SomeWork Windows developer agent (service)' | Out-Null
     Write-Host ('account {0} created' -f $ServiceUser)
 }
 Remove-LocalGroupMember -Group 'Administrators' -Member $ServiceUser -ErrorAction SilentlyContinue

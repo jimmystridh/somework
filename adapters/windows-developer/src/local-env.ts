@@ -4,6 +4,7 @@ import type { Context } from "@earendil-works/chord";
 import { err, ExecutionError, FileError, ok, type BinaryReader, type DirReader, type ExecutionEnv, type FileInfo, type FileWatcher, type Result, type ShellExecOptions, type ShellExecResult, type TextLineReader, type WatchChange, type WatchTarget } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { ConfinementError, isInside, nativeFlavour, resolveInside, type Flavour } from "./paths.ts";
+import { sweepLeftovers, type SweepOptions } from "./sweep.ts";
 
 export interface LocalEnvOptions {
 	/** Workspace root: the only part of the disk the model's file tools and the job's commands start in. */
@@ -19,6 +20,13 @@ export interface LocalEnvOptions {
 	maxOutputBytes?: number;
 	/** Upper bound for a command's timeout in seconds; a command without a timeout gets this one. Default one hour. */
 	maxTimeoutSeconds?: number;
+	/**
+	 * After a command timed out or was aborted, stop every process of this account that started during the command. Needed on Windows because
+	 * background children of Git Bash lose their parent link and escape `taskkill /T`. Only safe when this account runs one job at a time.
+	 */
+	sweepUser?: string;
+	/** Replaces the real sweep (tests). */
+	sweep?: (options: SweepOptions) => Promise<number>;
 }
 
 const DEFAULT_MAX_OUTPUT = 8 * 1024 * 1024;
@@ -71,6 +79,8 @@ export class ConfinedExecutionEnv implements ExecutionEnv {
 	readonly #baseEnv: Record<string, string>;
 	readonly #maxOutput: number;
 	readonly #maxTimeout: number;
+	readonly #sweepUser: string | undefined;
+	readonly #sweep: (options: SweepOptions) => Promise<number>;
 	#realRoot: Promise<string> | undefined;
 
 	constructor(options: LocalEnvOptions) {
@@ -81,6 +91,8 @@ export class ConfinedExecutionEnv implements ExecutionEnv {
 		this.#baseEnv = options.baseEnv;
 		this.#maxOutput = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
 		this.#maxTimeout = options.maxTimeoutSeconds ?? DEFAULT_MAX_TIMEOUT_SECONDS;
+		this.#sweepUser = options.sweepUser;
+		this.#sweep = options.sweep ?? sweepLeftovers;
 		this.#inner = new NodeExecutionEnv({ cwd: this.cwd, shellPath: options.shellPath });
 	}
 
@@ -228,7 +240,12 @@ export class ConfinedExecutionEnv implements ExecutionEnv {
 				}
 			: undefined;
 		// `inheritEnv: false`: pi-durable then passes only what is given here, so no variable of the service process reaches a command
-		return this.#inner.exec(command, { ...options, cwd, env: { ...this.#baseEnv, ...(options?.env ?? {}) }, inheritEnv: false, timeout, onOutput }, context);
+		const startedAt = Date.now();
+		const result = await this.#inner.exec(command, { ...options, cwd, env: { ...this.#baseEnv, ...(options?.env ?? {}) }, inheritEnv: false, timeout, onOutput }, context);
+		if (this.#sweepUser && !result.ok && (result.error.code === "timeout" || result.error.code === "aborted")) {
+			await this.#sweep({ user: this.#sweepUser, sinceMs: startedAt - 1000, protectPids: [process.pid, process.ppid] });
+		}
+		return result;
 	}
 
 	cleanup(context: Context): Promise<void> {

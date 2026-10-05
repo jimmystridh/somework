@@ -19,9 +19,13 @@ Write-Host 'PASS: node and the installation are present'
 $env:NODE_OPTIONS = '--disable-warning=ExperimentalWarning'
 Push-Location $appDirectory
 try {
-    & $node 'deploy\smoke.ts' 2>&1 | ForEach-Object { Write-Host $_ }
+    # Windows PowerShell 5.1 wraps every line a native program writes to stderr (git prints "Cloning into ..." there) in an error record, and
+    # under 'Stop' that ends the script. The exit code is what counts, so let the lines through.
+    $ErrorActionPreference = 'Continue'
+    & $node 'deploy\smoke.ts' 2>&1 | ForEach-Object { Write-Host ([string]$_) }
     if ($LASTEXITCODE -ne 0) { $failed = $failed + 1 }
 } finally {
+    $ErrorActionPreference = 'Stop'
     Pop-Location
 }
 

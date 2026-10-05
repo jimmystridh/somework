@@ -26,7 +26,7 @@ export function windowsHooksFor(settings: WindowsSettings, context: ServiceConte
 	context.log("info", "windows_profiles_loaded", { root: settings.root, build: Object.keys(profiles.build), test: Object.keys(profiles.test) });
 	return {
 		...role.hooks,
-		envFactory: localEnvFactory({ root: settings.root, shellPath: settings.bash, baseEnv: baseEnvironment({ root: settings.root, host: process.env, pathDirectories: settings.pathDirectories, passEnv: settings.passEnv }), maxOutputBytes: settings.maxOutputBytes }),
+		envFactory: localEnvFactory({ root: settings.root, shellPath: settings.bash, sweepUser: settings.sweepUser, baseEnv: baseEnvironment({ root: settings.root, host: process.env, pathDirectories: settings.pathDirectories, passEnv: settings.passEnv }), maxOutputBytes: settings.maxOutputBytes }),
 		healthBind: "127.0.0.1",
 		readinessChecks: {
 			bash: async () => existsSync(settings.bash),

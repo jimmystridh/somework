@@ -56,7 +56,7 @@ await check(windows ? "Git for Windows bash and git are found" : "bash and git a
 
 const baseEnv = windows ? baseEnvironment({ root: workspaceRoot, host: process.env }) : { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: workspaceRoot };
 if (windows) writeFileSync(join(workspaceRoot, ".home", ".gitconfig"), "[core]\n\tlongpaths = true\n\tautocrlf = false\n[credential]\n\thelper =\n");
-const envFor = localEnvFactory({ root: workspaceRoot, shellPath: bash, baseEnv, maxOutputBytes: 64 * 1024 });
+const envFor = localEnvFactory({ root: workspaceRoot, shellPath: bash, baseEnv, maxOutputBytes: 64 * 1024, ...(windows ? { sweepUser: process.env.USERNAME } : {}) });
 const ctx = BACKGROUND_CONTEXT;
 
 const run = async (command: string, options: { cwd?: string; timeout?: number; env?: Record<string, string> } = {}) => {
@@ -103,7 +103,7 @@ await check("a timeout kills the command and everything it started", async () =>
 	must(Date.now() - started < 20_000, "the command was not stopped by its timeout");
 	await new Promise((done) => setTimeout(done, 1000));
 	const left = windows
-		? spawnSync("powershell.exe", ["-NoProfile", "-Command", `@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*sleep*${marker}*' }).Count`], { encoding: "utf8" }).stdout.trim()
+		? spawnSync("powershell.exe", ["-NoProfile", "-Command", `@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'sleep.exe' -and $_.CommandLine -like '*${marker}*' }).Count`], { encoding: "utf8" }).stdout.trim()
 		: spawnSync("pgrep", ["-f", `sleep ${marker}`], { encoding: "utf8" }).stdout.trim() === ""
 			? "0"
 			: "1";
