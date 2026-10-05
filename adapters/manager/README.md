@@ -16,8 +16,8 @@ Telegram (owner only) <--long poll--> bridge (host process, Node)
 ```
 
 ## What the model can do
-Six tools (extension `extension/somework-tools.ts`, loaded into Pi with `-e`): `somework_catalog`, `somework_submit`,
-`somework_task`, `somework_cancel`, `somework_message`, `somework_inbox`. They call the gateway only; the SomeWork key never enters the
+Eleven tools (extension `extension/somework-tools.ts`, loaded into Pi with `-e`): `somework_catalog`, `somework_submit`,
+`somework_task`, `somework_cancel`, `somework_message`, `somework_inbox`, and for events `somework_rules`, `somework_sources`, `somework_handlers`, `somework_approvals` (read only) and `somework_control` (asks the owner to pause or resume a rule or source, or to switch handlers off or on). They call the gateway only; the SomeWork key never enters the
 container. The rules are enforced in the gateway, not in the prompt:
 
 * A capability whose card declares `none` or `read` side effects is submitted immediately. Anything else (`write`, `irreversible`, or a
@@ -37,6 +37,21 @@ container. The rules are enforced in the gateway, not in the prompt:
 * Commands: `/agents` `/tasks` `/pending` `/approve <id>` `/deny <id>` `/answer <taskId> <text>` `/cancel <taskId>` `/status` `/stop`
   `/workspace` `/help`. Everything else goes to Pi as `[telegram] text`.
 
+## Events, approvals and controls
+* **Domain approvals.** A write-class task that an event rule starts waits for a structured approval in the domain (bound to the task's
+  action digest and revision). The Manager polls for pending ones (`MANAGER_APPROVAL_POLL_MS`) and tells the owner once: capability,
+  side effects, rule and the event it fired on, budget, a redacted input summary, expiry, with Approve and Deny buttons (or
+  `/approve <id>`, `/deny <id>`). The decision carries the digest and revision the domain reported, so the domain's own checks stay in
+  charge. Decided elsewhere or expired approvals are reported once. Only the paired owner's taps and commands count.
+* **Event forwarding, no model.** Events the Manager is woken by (rules owned by `agent/manager`) are shown as one compact message each
+  when the topic is on the allow-list, de-duplicated by event id, limited per topic and hour (the excess is summarised), optionally held
+  during quiet hours, and the schedule topic produces a digest (tasks, approvals, rules, sources, handlers). Event text is shown as data:
+  fixed fields only, cut, secret-looking values hidden, and every `/word` given a look-alike slash so it cannot be tapped as a command.
+  Notices from agents (a handler's notify decision, an auto-disabled handler, a used-up token pool) come the same way, limited per sender.
+* **Commands.** `/rules` `/pause <rule>` `/resume <rule>` `/sources` `/pausesource <source>` `/resumesource <source>` `/handlers <agent>`
+  `/kill <agent> <handler|all> [reason]` `/unkill <agent> <handler|all>` `/approvals`. The owner's commands run at once; the model's
+  `somework_control` only creates a request the owner confirms with a button. Creating or deleting rules is not possible from here.
+
 ## Learning about changes
 `MANAGER_FEED=wake` (default) uses the SDK's wake source: NATS for chat messages when the domain offers it, an HTTP safety net, no long
 polls. The domain pushes a requester nothing about its own tasks (status messages never wake, task wakes go to the assignee), so tasks in
@@ -46,8 +61,8 @@ decides *when* to look; `TaskTracker` and `InboxReader` decide *what* changed, s
 
 ## Layout
 `src/` bridge (Telegram commands, Pi turns), `service` (all decisions), `gateway` (HTTP front for Pi), `notifier` (tracker, inbox, feeds),
-`domain` (REST adapter), `policy`, `approvals`, `redact`, `rpc`, `telemetry`, `state`, `config`, `main`. `extension/` the Pi tools.
-`deploy/` systemd unit, compose override, env example, rollout. `test/` 57 tests, including an end-to-end run against a real domain
+`domain` (REST adapter), `policy`, `approvals`, `reaction-approvals` (domain approvals), `event-intake` (alerts, digest), `controls` (rules, hub, handlers), `rate`, `http`, `redact`, `rpc`, `telemetry`, `state`, `config`, `main`. `extension/` the Pi tools.
+`deploy/` systemd unit, compose override, env example, rollout. `test/` 91 tests, including an end-to-end run against a real domain
 (and a real nats-server) from `sdk/typescript/test/harness.ts`; Telegram and Pi are faked, no model or network calls.
 
 ```bash

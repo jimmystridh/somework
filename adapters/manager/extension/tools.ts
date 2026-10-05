@@ -95,6 +95,73 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	});
 
 	pi.registerTool({
+		name: "somework_rules",
+		label: "List Event Rules",
+		description: "List the event rules in the domain: status (active or paused), what they match, how often they fired and why firings were skipped. Read only.",
+		promptSnippet: "See which event rules exist and how they behave",
+		promptGuidelines: [untrusted],
+		parameters: Type.Object({}),
+		async execute(_id: string, _params: unknown, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "GET", "/v1/control/rules", undefined, signal));
+		},
+	});
+
+	pi.registerTool({
+		name: "somework_sources",
+		label: "Event Source Health",
+		description: "Per event source (github, jira, datadog, grafana, clock): how many events came in, were published, deduplicated, dropped or dead-lettered, and how old the oldest queued webhook is. Read only.",
+		promptSnippet: "Check the health of the event sources",
+		promptGuidelines: [untrusted],
+		parameters: Type.Object({}),
+		async execute(_id: string, _params: unknown, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "GET", "/v1/control/sources", undefined, signal));
+		},
+	});
+
+	pi.registerTool({
+		name: "somework_handlers",
+		label: "Agent Handlers",
+		description: "An agent's event handlers (version, on or off, runs, errors, drops, wakes, last error) and its token pools. Read only.",
+		promptSnippet: "Check an agent's event handlers and token pools",
+		promptGuidelines: [untrusted],
+		parameters: Type.Object({ agent: Type.String({ description: "agent id such as agent/reviewer" }) }),
+		async execute(_id: string, params: { agent: string }, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "GET", `/v1/control/handlers?agent=${encodeURIComponent(params.agent)}`, undefined, signal));
+		},
+	});
+
+	pi.registerTool({
+		name: "somework_approvals",
+		label: "Pending Domain Approvals",
+		description: "Approvals the domain waits for (for example write-class tasks that event rules started). Read only: only the owner can decide them, in Telegram.",
+		promptSnippet: "See which approvals are waiting",
+		parameters: Type.Object({}),
+		async execute(_id: string, _params: unknown, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "GET", "/v1/control/approvals", undefined, signal));
+		},
+	});
+
+	pi.registerTool({
+		name: "somework_control",
+		label: "Ask To Pause Or Switch Off",
+		description:
+			"Ask the owner to pause or resume an event rule, pause or resume an event source, or switch an agent's handler (or all) off or on. This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. Creating rules is not possible.",
+		promptSnippet: "Ask the owner to pause or resume a rule or source, or to switch a handler off",
+		promptGuidelines: ["Tell the owner what you asked for and why, then stop; never say it has taken effect before they confirm."],
+		parameters: Type.Object({
+			action: Type.Union([Type.Literal("pause_rule"), Type.Literal("resume_rule"), Type.Literal("pause_source"), Type.Literal("resume_source"), Type.Literal("kill_handler"), Type.Literal("unkill_handler")]),
+			rule: Type.Optional(Type.String()),
+			source: Type.Optional(Type.String()),
+			agent: Type.Optional(Type.String()),
+			handler: Type.Optional(Type.String({ description: "handler name, or all" })),
+			reason: Type.Optional(Type.String()),
+		}),
+		async execute(_id: string, params: Record<string, unknown>, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "POST", "/v1/control/request", params, signal));
+		},
+	});
+
+	pi.registerTool({
 		name: "somework_inbox",
 		label: "Read Agent Messages",
 		description: "Read unread messages other agents sent to the Manager, or the messages of one conversation.",

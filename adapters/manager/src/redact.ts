@@ -20,3 +20,17 @@ export function summarizeInput(input: unknown, maxTotal = 700, maxValue = 240): 
 
 /** Sizes only: what the gateway logs about a payload. */
 export const sizeOf = (value: unknown): number => Buffer.byteLength(JSON.stringify(value ?? null));
+
+export const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}...` : text);
+
+/**
+ * Text that came from outside (an alert title, a ticket summary, another agent's message) made safe to show the owner: secret-looking
+ * values hidden, control characters and line breaks flattened, and every `/word` that Telegram would render as a tappable bot command
+ * given a look-alike slash, so a crafted title cannot put `/approve <id>` one tap away.
+ */
+export function defang(text: string): string {
+	return scrub(text)
+		.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ")
+		.replace(/(^|[\s([{"'])\/(?=[A-Za-z0-9_])/g, "$1\u2215")
+		.trim();
+}

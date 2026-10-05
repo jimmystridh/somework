@@ -3,14 +3,21 @@ import { SomeWorkError, sleep } from "@somework/sdk";
 import { ApprovalQueue, type Approval } from "./approvals.ts";
 import type { DomainApi, InboundMessage } from "./domain.ts";
 import type { TaskTracker } from "./notifier.ts";
+import { CONTROL_REQUEST_ID, ControlRequests, describeAction, parseAction, type Controls } from "./controls.ts";
 import { PolicyError, RateLimiter, runsWithoutApproval, withBudget, type PolicyConfig } from "./policy.ts";
+import { DOMAIN_APPROVAL_ID, type ReactionApprovals } from "./reaction-approvals.ts";
 import { summarizeInput } from "./redact.ts";
 import { TERMINAL } from "./state.ts";
 
 /** How the Manager reaches its owner. The Telegram bridge implements it; it returns the id of the message it sent. */
 export interface Owner {
-	tell(text: string): Promise<number | undefined>;
+	/** `markup` is a Telegram reply markup (inline buttons). */
+	tell(text: string, markup?: unknown): Promise<number | undefined>;
 }
+
+export const controlButtons = (id: string) => ({
+	inline_keyboard: [[{ text: "Confirm", callback_data: `ct:y:${id}` }, { text: "Cancel", callback_data: `ct:n:${id}` }]],
+});
 
 export type SubmitOutcome =
 	| { status: "submitted"; taskId: string; state: string }
@@ -28,6 +35,9 @@ export interface ServiceDeps {
 	owner: Owner;
 	tracker: TaskTracker;
 	approvals?: ApprovalQueue;
+	/** Approvals the domain asks for (write-class tasks that reactions submit). */
+	reactionApprovals?: ReactionApprovals;
+	controls?: Controls;
 	now?: () => number;
 }
 
@@ -55,6 +65,9 @@ function compactTask(view: any): Record<string, unknown> {
  */
 export class ManagerService {
 	readonly approvals: ApprovalQueue;
+	readonly reactionApprovals: ReactionApprovals | undefined;
+	readonly controls: Controls | undefined;
+	readonly controlRequests: ControlRequests | undefined;
 	readonly #domain: DomainApi;
 	readonly #policy: PolicyConfig;
 	readonly #owner: Owner;
@@ -68,6 +81,9 @@ export class ManagerService {
 		this.#owner = deps.owner;
 		this.#tracker = deps.tracker;
 		this.approvals = deps.approvals ?? new ApprovalQueue(deps.policy.approvalTtlMs, deps.now);
+		this.reactionApprovals = deps.reactionApprovals;
+		this.controls = deps.controls;
+		this.controlRequests = deps.controls ? new ControlRequests(deps.controls, deps.policy.approvalTtlMs, deps.now) : undefined;
 		this.#submissions = new RateLimiter(deps.policy.submissionsPerHour, 3_600_000, deps.now);
 		this.#messages = new RateLimiter(deps.policy.messagesPerHour, 3_600_000, deps.now);
 	}
@@ -101,6 +117,16 @@ export class ManagerService {
 	/** A submitted task by id, or the outcome of an approval by its id. `waitSeconds` is bounded and only polls the domain briefly. */
 	async task(id: string, waitSeconds = 0): Promise<unknown> {
 		if (/^a[0-9a-f]{8}$/.test(id)) return this.#approvalStatus(id);
+		if (CONTROL_REQUEST_ID.test(id)) {
+			const request = this.controlRequests?.get(id);
+			if (!request) throw new PolicyError(404, "unknown_request", "no such confirmation request (it may have expired long ago or the Manager restarted)");
+			return { requestId: id, status: request.status };
+		}
+		if (DOMAIN_APPROVAL_ID.test(id)) {
+			const approval = await this.#domain.getApproval(id).catch(() => undefined);
+			if (!approval) throw new PolicyError(404, "unknown_approval", "no such approval, or the Manager may not read it");
+			return { approvalId: id, status: approval.status, taskId: approval.taskId, action: approval.action };
+		}
 		const deadline = Date.now() + Math.min(Math.max(waitSeconds, 0), 30) * 1000;
 		for (;;) {
 			const view = await this.#domain.getTask(id);
@@ -181,6 +207,8 @@ export class ManagerService {
 
 	/** The owner's decision (from Telegram only). Approving submits exactly what was shown. */
 	async approve(id: string): Promise<{ ok: boolean; message: string }> {
+		if (DOMAIN_APPROVAL_ID.test(id)) return this.#reactionApprovals().decide(id, true);
+		if (CONTROL_REQUEST_ID.test(id)) return this.#controlRequests().decide(id, true);
 		const approval = this.approvals.decide(id, true);
 		if (!approval) return { ok: false, message: this.#whyNotDecidable(id) };
 		const outcome = await this.#submit({ capability: approval.capability, input: approval.input, targetAgentId: approval.targetAgentId });
@@ -188,9 +216,65 @@ export class ManagerService {
 		return { ok: true, message: `Approved ${id}: submitted task ${(outcome as { taskId: string }).taskId}` };
 	}
 
+	/** Local approvals only; `denyAny` also routes domain approvals and confirmation requests. */
 	deny(id: string): { ok: boolean; message: string } {
+		return this.#denyLocal(id);
+	}
+
+	async denyAny(id: string): Promise<{ ok: boolean; message: string }> {
+		if (DOMAIN_APPROVAL_ID.test(id)) return this.#reactionApprovals().decide(id, false);
+		if (CONTROL_REQUEST_ID.test(id)) return this.#controlRequests().decide(id, false);
+		return this.#denyLocal(id);
+	}
+
+	#denyLocal(id: string): { ok: boolean; message: string } {
 		const approval = this.approvals.decide(id, false);
 		return approval ? { ok: true, message: `Denied ${id}. Nothing was submitted.` } : { ok: false, message: this.#whyNotDecidable(id) };
+	}
+
+	#reactionApprovals(): ReactionApprovals {
+		if (!this.reactionApprovals) throw new PolicyError(503, "not_configured", "domain approvals are not configured");
+		return this.reactionApprovals;
+	}
+
+	#controlRequests(): ControlRequests {
+		if (!this.controlRequests) throw new PolicyError(503, "not_configured", "controls are not configured");
+		return this.controlRequests;
+	}
+
+	#controls(): Controls {
+		if (!this.controls) throw new PolicyError(503, "not_configured", "controls are not configured");
+		return this.controls;
+	}
+
+	// ---- controls: reading is free, switching needs the owner -----------------------------------------------------
+	async rules(): Promise<unknown> {
+		return { rules: (await this.#controls().rules()).map((r) => ({ name: r.name, status: r.status, selector: r.selector, kind: r.reaction ? "reaction" : r.wake ? "wake" : "record", fired: r.counters?.fired ?? 0, skipped: r.counters?.skipped ?? {}, lastFiredAt: r.lastFiredAt })) };
+	}
+
+	async sources(): Promise<unknown> {
+		return this.#controls().sources();
+	}
+
+	async handlers(agent: string): Promise<unknown> {
+		return this.#controls().handlers(agent);
+	}
+
+	async domainApprovals(): Promise<unknown> {
+		const pending = await this.#reactionApprovals().pending();
+		return { approvals: pending.map((a) => ({ approvalId: a.approvalId, action: a.action, requestedBy: a.requestedBy, expiresAt: a.expiresAt })) };
+	}
+
+	/** A switch the model asked for: nothing changes until the owner confirms it in Telegram. */
+	async controlRequest(raw: Record<string, unknown>): Promise<unknown> {
+		const action = parseAction(raw);
+		const request = this.#controlRequests().create(action);
+		await this.#owner
+			.tell(`Confirmation ${request.id} needed (expires in ${Math.round(this.#policy.approvalTtlMs / 60_000)} min)\nThe Manager asks to ${describeAction(action)}.\nConfirm with the button, or /approve ${request.id} or /deny ${request.id}`, controlButtons(request.id))
+			.catch(() => {
+				throw new PolicyError(503, "owner_unreachable", "the owner could not be asked, so nothing changed");
+			});
+		return { status: "awaiting_owner", requestId: request.id, note: "The owner has been asked on Telegram. Nothing changes until they confirm. Tell them what you asked for." };
 	}
 
 	#whyNotDecidable(id: string): string {

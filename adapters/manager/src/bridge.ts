@@ -1,7 +1,10 @@
 import { PolicyError } from "./policy.ts";
 import type { InboundMessage } from "./domain.ts";
 import type { Notifications, TaskEvent, TaskTracker } from "./notifier.ts";
-import { scrub } from "./redact.ts";
+import { CONTROL_REQUEST_ID, parseAction, type ControlAction, type Controls } from "./controls.ts";
+import { WindowedLimiter } from "./rate.ts";
+import { DOMAIN_APPROVAL_ID } from "./reaction-approvals.ts";
+import { defang, scrub } from "./redact.ts";
 import type { PiRpc } from "./rpc.ts";
 import type { ManagerService, Owner } from "./service.ts";
 import type { ManagerState, SaveState } from "./state.ts";
@@ -9,7 +12,8 @@ import { isPrivateUserMessage, textChunks, validPairing, type TelegramApi } from
 
 const HELP = [
 	"Ordinary messages go to the Manager (Pi in /workspace). It can find and use the other agents, and asks you before anything that writes.",
-	"Commands: /agents, /tasks, /pending, /approve <id>, /deny <id>, /answer <taskId> <text>, /cancel <taskId>, /status, /stop, /workspace, /help.",
+	"Commands: /agents, /tasks, /pending, /approve <id>, /deny <id>, /approvals, /answer <taskId> <text>, /cancel <taskId>, /status, /stop, /workspace, /help.",
+	"Events: /rules, /pause <rule>, /resume <rule>, /sources, /pausesource <source>, /resumesource <source>, /handlers <agent>, /kill <agent> <handler|all> [reason], /unkill <agent> <handler|all>.",
 	"A reply to a question message answers that task: yes/no approves or denies, anything else is passed as the answer. Text only.",
 ].join("\n");
 
@@ -55,6 +59,9 @@ export interface BridgeDeps {
 	service?: ManagerService;
 	tracker?: TaskTracker;
 	notifications?: Notifications;
+	/** Notices and messages other agents send, per sender and hour, before the rest are only counted (default 10). */
+	noticesPerHour?: number;
+	now?: () => number;
 }
 
 interface ActiveTurn {
@@ -72,8 +79,10 @@ export class TelegramBridge implements Owner {
 	readonly save: SaveState;
 	service: ManagerService | undefined;
 	tracker: TaskTracker | undefined;
+	readonly #notices: WindowedLimiter;
 
 	constructor(deps: BridgeDeps) {
+		this.#notices = new WindowedLimiter(deps.noticesPerHour ?? 10, 3_600_000, deps.now);
 		this.state = deps.state;
 		this.api = deps.api;
 		this.rpc = deps.rpc;
@@ -85,16 +94,20 @@ export class TelegramBridge implements Owner {
 		deps.notifications?.onMessage((message) => this.forwardMessage(message));
 	}
 
-	async reply(chatId: number, text: string): Promise<number | undefined> {
+	async reply(chatId: number, text: string, markup?: unknown): Promise<number | undefined> {
 		let last: number | undefined;
-		for (const chunk of textChunks(text)) last = (await this.api("sendMessage", { chat_id: chatId, text: chunk }))?.message_id ?? last;
+		const chunks = textChunks(text);
+		for (const [index, chunk] of chunks.entries()) {
+			const buttons = markup !== undefined && index === chunks.length - 1 ? { reply_markup: markup } : {};
+			last = (await this.api("sendMessage", { chat_id: chatId, text: chunk, ...buttons }))?.message_id ?? last;
+		}
 		return last;
 	}
 
 	/** Owner channel for the service: refuses while nobody is paired, so nothing waits for an approval that cannot arrive. */
-	async tell(text: string): Promise<number | undefined> {
+	async tell(text: string, markup?: unknown): Promise<number | undefined> {
 		if (!this.state.chatId || !this.state.allowedUserId) throw new Error("owner not paired");
-		return this.reply(this.state.chatId, text);
+		return this.reply(this.state.chatId, text, markup);
 	}
 
 	async announceTask(event: TaskEvent): Promise<number | undefined> {
@@ -107,8 +120,20 @@ export class TelegramBridge implements Owner {
 		return this.tell(scrub([head, detail].filter(Boolean).join("\n")));
 	}
 
+	/**
+	 * What other agents write to the Manager, including the event notices of the agents' handlers (handler decisions to notify, auto-disabled
+	 * handlers, used-up token pools). Shown as plain text after `defang`, limited per sender so one noisy agent cannot flood the chat.
+	 */
 	async forwardMessage(message: InboundMessage): Promise<void> {
-		await this.tell(scrub(`[${message.from}] ${clip(message.text, 3500)}`));
+		const { pass, carried } = this.#notices.take(message.from);
+		if (carried > 0) await this.tell(`${carried} more messages from ${defang(message.from)} were suppressed in the last hour.`);
+		if (!pass) return;
+		const notice = message.labels?.eventNotice === "true";
+		await this.tell(`[${notice ? "events: " : ""}${defang(message.from)}] ${clip(defang(message.text), 3500)}`);
+	}
+
+	async reportSuppressed(): Promise<void> {
+		for (const { key, suppressed } of this.#notices.finished()) await this.tell(`${suppressed} more messages from ${defang(key)} were suppressed in the last hour.`).catch(() => {});
 	}
 
 	onPiEvent(event: any): void {
@@ -133,6 +158,7 @@ export class TelegramBridge implements Owner {
 	}
 
 	async handleUpdate(update: any): Promise<void> {
+		if (update.callback_query) return this.handleCallback(update.callback_query);
 		const message = update.message;
 		if (!isPrivateUserMessage(message)) return;
 		if (!this.state.allowedUserId) {
@@ -159,6 +185,30 @@ export class TelegramBridge implements Owner {
 		const asked = repliedTo === undefined ? undefined : this.tracker?.tasks.find((task) => task.questionMessageId === repliedTo && task.state === "input_required");
 		if (asked) return this.answer(chatId, asked.taskId, text);
 		return this.prompt(chatId, text);
+	}
+
+	/** A tap on an inline button. Only the paired owner, in the paired private chat, is ever answered; anyone else's tap is dropped silently. */
+	async handleCallback(query: any): Promise<void> {
+		const owner = this.state.allowedUserId;
+		const chat = query?.message?.chat;
+		if (!owner || query?.from?.id !== owner || chat?.type !== "private" || chat.id !== this.state.chatId) return;
+		const answer = (text: string) => this.api("answerCallbackQuery", { callback_query_id: query.id, text: text.slice(0, 190) }).catch(() => {});
+		const match = /^(ap|ct):([yn]):([A-Za-z0-9_-]{1,70})$/.exec(String(query.data ?? ""));
+		if (!match || !this.service) return void (await answer("That button does not work any more."));
+		const [, kind, choice, id] = match as unknown as [string, string, string, string];
+		const valid = kind === "ap" ? DOMAIN_APPROVAL_ID.test(id) : CONTROL_REQUEST_ID.test(id);
+		if (!valid) return void (await answer("That button does not work any more."));
+		try {
+			const result = choice === "y" ? await this.service.approve(id) : await this.service.denyAny(id);
+			await answer(result.ok ? "Done." : "Not done.");
+			if (query.message?.message_id !== undefined) {
+				await this.api("editMessageReplyMarkup", { chat_id: chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => {});
+			}
+			await this.reply(chat.id, result.message);
+		} catch (error) {
+			await answer("Failed.");
+			await this.reply(chat.id, `That did not work: ${error instanceof Error ? clip(defang(error.message), 300) : "error"}`);
+		}
 	}
 
 	async command(chatId: number, text: string): Promise<void> {
@@ -197,6 +247,12 @@ export class TelegramBridge implements Owner {
 					const pending = service.pending();
 					return say(pending.length ? pending.map((a) => `${a.id} ${a.capability.id}@${a.capability.version} (${a.sideEffects}) until ${new Date(a.expiresAt).toISOString().slice(11, 16)}Z`).join("\n") : "Nothing waits for approval.");
 				});
+			case "/approvals":
+				return this.needService(say, async (service) => {
+					const local = service.pending().map((a) => `${a.id} ${a.capability.id}@${a.capability.version} (${a.sideEffects}) until ${new Date(a.expiresAt).toISOString().slice(11, 16)}Z`);
+					const domain = service.reactionApprovals ? ((await service.domainApprovals()) as { approvals: any[] }).approvals.map((a) => `${a.approvalId} ${defang(a.action)} requested by ${defang(a.requestedBy)} until ${String(a.expiresAt).slice(11, 16)}Z`) : [];
+					return say([...local, ...domain].join("\n") || "Nothing waits for approval.");
+				});
 			case "/approve":
 				return this.needService(say, async (service) => {
 					if (!argument) return say("Usage: /approve <id>");
@@ -207,7 +263,27 @@ export class TelegramBridge implements Owner {
 					}
 				});
 			case "/deny":
-				return this.needService(say, (service) => (argument ? say(service.deny(argument).message) : say("Usage: /deny <id>")));
+				return this.needService(say, async (service) => (argument ? say((await service.denyAny(argument)).message) : say("Usage: /deny <id>")));
+			case "/rules":
+				return this.needService(say, async (service) => say(this.controlsOf(service).formatRules(await this.controlsOf(service).rules())));
+			case "/sources":
+				return this.needService(say, async (service) => say(this.controlsOf(service).formatSources(await this.controlsOf(service).sources())));
+			case "/handlers":
+				return this.needService(say, async (service) => {
+					if (!/^agent\/[a-z0-9][a-z0-9._-]{0,48}$/.test(argument)) return say("Usage: /handlers <agent>, for example /handlers agent/reviewer");
+					return say(this.controlsOf(service).formatHandlers(argument, await this.controlsOf(service).handlers(argument)));
+				});
+			case "/pause":
+			case "/resume":
+				return this.control(say, { action: name.toLowerCase() === "/pause" ? "pause_rule" : "resume_rule", rule: argument });
+			case "/pausesource":
+			case "/resumesource":
+				return this.control(say, { action: name.toLowerCase() === "/pausesource" ? "pause_source" : "resume_source", source: argument });
+			case "/kill":
+			case "/unkill": {
+				const [agent, handler, ...reason] = rest;
+				return this.control(say, { action: name.toLowerCase() === "/kill" ? "kill_handler" : "unkill_handler", agent, handler, reason: reason.join(" ") || undefined });
+			}
 			case "/answer": {
 				const [taskId, ...words] = rest;
 				if (!taskId || words.length === 0) return say("Usage: /answer <taskId> <text>");
@@ -226,6 +302,24 @@ export class TelegramBridge implements Owner {
 			default:
 				return say("Unknown command. Use /help.");
 		}
+	}
+
+	controlsOf(service: ManagerService): Controls {
+		if (!service.controls) throw new PolicyError(503, "not_configured", "event controls are not configured");
+		return service.controls;
+	}
+
+	/** The owner's own switch commands run at once; only switches the model asks for wait for a confirmation. */
+	async control(say: (text: string) => Promise<void>, raw: Record<string, unknown>): Promise<void> {
+		return this.needService(say, async (service) => {
+			let action: ControlAction;
+			try {
+				action = parseAction(raw);
+			} catch (error) {
+				return say(error instanceof PolicyError ? error.message : "That is not a valid request.");
+			}
+			return say(await this.controlsOf(service).run(action));
+		});
 	}
 
 	async needService(say: (text: string) => Promise<void>, run: (service: ManagerService) => Promise<void> | void): Promise<void> {

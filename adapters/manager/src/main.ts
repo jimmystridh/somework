@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { Identity, SomeWorkClient } from "@somework/sdk";
 import { TelegramBridge } from "./bridge.ts";
 import { loadConfig } from "./config.ts";
+import { Controls } from "./controls.ts";
 import { RestDomain } from "./domain.ts";
+import { EventIntake } from "./event-intake.ts";
+import { ReactionApprovals } from "./reaction-approvals.ts";
 import { createGateway } from "./gateway.ts";
 import { InboxReader, Notifications, PollingFeed, TaskTracker, WakeFeed } from "./notifier.ts";
 import { ChildPiRpc } from "./rpc.ts";
@@ -78,7 +81,18 @@ async function main(): Promise<void> {
 	);
 	const rpc = new ChildPiRpc(child);
 	const bridge = new TelegramBridge({ state, api, rpc, save, tracker, notifications });
-	const service = new ManagerService({ domain, policy: config.policy, owner: bridge, tracker });
+	const reactionApprovals = new ReactionApprovals({ domain, owner: bridge, state, save, log });
+	const controls = new Controls({
+		domain,
+		config: config.controls,
+		state,
+		save,
+		tasks: () => tracker.tasks,
+		localPendingApprovals: () => service.pending().length,
+		domainPendingApprovals: async () => (await reactionApprovals.pending()).length,
+	});
+	const service: ManagerService = new ManagerService({ domain, policy: config.policy, owner: bridge, tracker, reactionApprovals, controls });
+	const eventIntake = new EventIntake({ domain, owner: bridge, state, save, config: config.events, digest: () => controls.digest(), log });
 	bridge.service = service;
 	const gateway = createGateway({ service, token: gatewayTokenValue, log });
 
@@ -123,10 +137,20 @@ async function main(): Promise<void> {
 		void feed.run(controller.signal);
 		const sweep = setInterval(() => void service.announceExpired(), 30_000);
 		sweep.unref();
+		const every = (name: string, ms: number, step: () => Promise<unknown>) => {
+			const timer = setInterval(() => void step().catch((error: unknown) => log(`${name}_failed`, { error: error instanceof Error ? error.message.slice(0, 160) : "error" })), ms);
+			timer.unref();
+			return timer;
+		};
+		const timers = [
+			every("approvals_poll", config.approvals.pollMs, () => reactionApprovals.poll()),
+			every("events_poll", config.events.pollMs, () => eventIntake.poll()),
+			every("notices_report", 60_000, () => bridge.reportSuppressed()),
+		];
 		log("manager_ready", { bot: bot.username, owner: state.allowedUserId ? "paired" : "awaiting secure pairing", gateway: `${config.gateway.bind}:${config.gateway.port}`, agent: domain.selfId });
 		while (!stopping) {
 			try {
-				const updates = await api("getUpdates", { offset: state.lastUpdateId === undefined ? undefined : state.lastUpdateId + 1, limit: 20, timeout: 30, allowed_updates: ["message"] }, controller.signal);
+				const updates = await api("getUpdates", { offset: state.lastUpdateId === undefined ? undefined : state.lastUpdateId + 1, limit: 20, timeout: 30, allowed_updates: ["message", "callback_query"] }, controller.signal);
 				for (const update of updates) {
 					if (stopping) break;
 					state.lastUpdateId = update.update_id;
@@ -144,6 +168,7 @@ async function main(): Promise<void> {
 			}
 		}
 		clearInterval(sweep);
+		for (const timer of timers) clearInterval(timer);
 		clearInterval(bridge.typingTimer);
 		await bridge.delivery;
 	} finally {

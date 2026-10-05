@@ -1,5 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ControlsConfig } from "./controls.ts";
+import { defaultEventIntake, type EventIntakeConfig } from "./event-intake.ts";
 import { defaultPolicy, type PolicyConfig } from "./policy.ts";
 
 export interface Config {
@@ -13,6 +15,10 @@ export interface Config {
 	/** `wake`: the SDK's NATS wake with an HTTP safety net. `polling`: short HTTP lookups on a timer only. */
 	feed: { mode: "wake" | "polling"; taskIntervalMs: number; inboxIntervalMs: number; sweepEveryMs: number };
 	telemetryPath: string;
+	/** Domain approvals for reactions: how often the pending list is looked at. */
+	approvals: { pollMs: number };
+	events: EventIntakeConfig & { pollMs: number };
+	controls: ControlsConfig;
 }
 
 const need = (env: NodeJS.ProcessEnv, name: string): string => {
@@ -28,6 +34,21 @@ const number = (env: NodeJS.ProcessEnv, name: string, fallback: number): number 
 	if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`);
 	return value;
 };
+
+const list = (env: NodeJS.ProcessEnv, name: string, fallback: string[]): string[] => {
+	const raw = env[name];
+	return raw === undefined ? fallback : raw.split(",").map((item) => item.trim()).filter(Boolean);
+};
+
+/** `agent/reviewer=http://10.0.0.1:8081,agent/windows-developer=http://10.0.0.2:8081` */
+export function parseAgentHealth(raw: string | undefined): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const pair of (raw ?? "").split(",")) {
+		const [agent, ...url] = pair.trim().split("=");
+		if (agent && url.length > 0) out[agent] = url.join("=");
+	}
+	return out;
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	const configDir = env.MANAGER_CONFIG_DIR ?? join(homedir(), ".config", "agent-cluster-telegram");
@@ -58,5 +79,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			sweepEveryMs: number(env, "MANAGER_SWEEP_MS", 60_000),
 		},
 		telemetryPath: env.MANAGER_TELEMETRY_PATH ?? join(homedir(), ".local", "state", "agent-cluster", "pi-live.json"),
+		approvals: { pollMs: number(env, "MANAGER_APPROVAL_POLL_MS", 15_000) },
+		events: {
+			pollMs: number(env, "MANAGER_EVENT_POLL_MS", 5000),
+			topics: list(env, "MANAGER_EVENT_TOPICS", defaultEventIntake.topics),
+			digestTopics: list(env, "MANAGER_DIGEST_TOPICS", defaultEventIntake.digestTopics),
+			urgentTopics: list(env, "MANAGER_URGENT_TOPICS", defaultEventIntake.urgentTopics),
+			perTopicPerHour: number(env, "MANAGER_EVENT_RATE_PER_HOUR", defaultEventIntake.perTopicPerHour),
+			timeZone: env.MANAGER_QUIET_TZ ?? defaultEventIntake.timeZone,
+			...(env.MANAGER_QUIET_HOURS ? { quietHours: env.MANAGER_QUIET_HOURS } : {}),
+		},
+		controls: {
+			hubUrl: env.MANAGER_HUB_URL,
+			hubTokenFile: env.MANAGER_HUB_TOKEN_FILE,
+			hubCaFile: env.MANAGER_HUB_CA_FILE ?? env.MANAGER_CA_FILE,
+			agentHealth: parseAgentHealth(env.MANAGER_AGENT_HEALTH),
+			agentCaFile: env.MANAGER_AGENT_CA_FILE,
+		},
 	};
 }

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { SomeWorkError } from "@somework/sdk";
-import type { DomainApi, InboundMessage } from "../src/domain.ts";
+import type { ApprovalDecision, DomainApi, DomainApproval, FeedEvent, InboundMessage, RuleFiring, RuleSummary } from "../src/domain.ts";
 import type { PiRpc } from "../src/rpc.ts";
 
 export const code = "a".repeat(32);
@@ -66,6 +66,15 @@ export class FakeDomain implements DomainApi {
 	sentMessages: any[] = [];
 	unread: InboundMessage[] = [];
 	read: string[] = [];
+	approvals: DomainApproval[] = [];
+	decisions: { approvalId: string; decision: ApprovalDecision }[] = [];
+	decideError: Error | undefined;
+	rules: RuleSummary[] = [];
+	firings: Record<string, RuleFiring[]> = {};
+	rulesPaused: string[] = [];
+	rulesResumed: string[] = [];
+	feed: FeedEvent[] = [];
+	acked: number[] = [];
 
 	async searchCatalog(_query: string) {
 		return { matches: [{ agentId: "agent/reviewer", availability: "online", matchedCapabilities: [{ id: "code.review", version: "2" }] }] };
@@ -117,5 +126,56 @@ export class FakeDomain implements DomainApi {
 
 	async markRead(ids: string[]) {
 		this.read.push(...ids);
+	}
+
+	async listApprovals(status?: string) {
+		return this.approvals.filter((a) => !status || a.status === status);
+	}
+
+	async getApproval(id: string) {
+		const found = this.approvals.find((a) => a.approvalId === id);
+		if (!found) throw new SomeWorkError(404, "not_found", "no such approval");
+		return found;
+	}
+
+	async decideApproval(approvalId: string, decision: ApprovalDecision) {
+		if (this.decideError) throw this.decideError;
+		this.decisions.push({ approvalId, decision });
+		const found = this.approvals.find((a) => a.approvalId === approvalId)!;
+		found.status = decision.decision;
+		return { taskId: found.taskId };
+	}
+
+	async listRules() {
+		return this.rules;
+	}
+
+	async pauseRule(name: string) {
+		const rule = this.rules.find((r) => r.name === name);
+		if (!rule) throw new SomeWorkError(404, "not_found", "no such rule");
+		this.rulesPaused.push(name);
+		rule.status = "paused";
+		return rule;
+	}
+
+	async resumeRule(name: string) {
+		const rule = this.rules.find((r) => r.name === name);
+		if (!rule) throw new SomeWorkError(404, "not_found", "no such rule");
+		this.rulesResumed.push(name);
+		rule.status = "active";
+		return rule;
+	}
+
+	async ruleFirings(name: string) {
+		return this.firings[name] ?? [];
+	}
+
+	async events(after: number | undefined) {
+		const events = this.feed.filter((e) => e.seq > (after ?? 0));
+		return { events, cursor: events.at(-1)?.seq ?? after ?? 0 };
+	}
+
+	async ackEvents(cursor: number) {
+		this.acked.push(cursor);
 	}
 }

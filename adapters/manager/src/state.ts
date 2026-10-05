@@ -24,6 +24,23 @@ export interface ManagerState {
 	pairingCreatedAt?: number;
 	pairingExpiresAt?: number;
 	tasks?: Record<string, TrackedTask>;
+	/** Domain approvals the owner has been told about, so a restart does not ask twice and an outcome is reported once. */
+	reactionApprovals?: Record<string, AnnouncedApproval>;
+	/** Position in the domain event feed and the last event ids handled, so an event is forwarded once. */
+	eventCursor?: number;
+	seenEvents?: string[];
+	/** Forwarded-event lines held back during quiet hours. */
+	quietQueue?: string[];
+	/** Sources the owner paused from here (the hub does not report it). */
+	sourcesPaused?: Record<string, boolean>;
+}
+
+export interface AnnouncedApproval {
+	announcedAt: string;
+	status: string;
+	messageId?: number;
+	/** The outcome (decided elsewhere, expired, superseded) has been reported. */
+	reported?: boolean;
 }
 
 export type SaveState = (state: ManagerState) => Promise<void>;

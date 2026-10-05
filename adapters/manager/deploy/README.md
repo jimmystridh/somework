@@ -24,6 +24,33 @@ ops admin --config /etc/somework/somework.toml enroll-agent --id agent/manager -
 `--side-effects write` lets it submit tasks for `write` capabilities (the gateway still asks the owner first). It cannot submit
 `irreversible` ones. `--may-invoke` takes capability id globs; start with `code.*` and widen with `set-agent-permissions` as needed.
 
+### Events, domain approvals and controls (additional permissions; apply once, by the operator)
+Write-class tasks that event rules start wait for a structured approval in the domain. The domain lets an agent decide an approval only
+when its permissions hold the action `approval.grant` and an `approves` pattern for the capability; it then reads rules and events with
+`ops.read` and pauses or resumes rules with `rules.control`. `rules.control` is the domain's narrow rule permission: it reads rules and
+pauses or resumes them, and the domain refuses `PUT` and `DELETE` for it, so the Manager's key can never create or delete a rule, even
+through the API. Do not grant it `rules.manage`. `PATCH` replaces the whole permission set, so list everything the Manager needs. The patterns in `approves` are the capabilities
+the owner may approve from Telegram (the requester can never approve its own task):
+```bash
+ops admin ... # run the PATCH with the operator key on the domain host; the current set is the default agent actions plus capabilities code.*
+PATCH /v1/admin/principals/agent/agent%2Fmanager
+{"permissions": {"actions": ["catalog.read","catalog.register","message.send","message.read","task.submit","task.read","task.claim","task.update",
+                              "task.cancel","artifact.read","artifact.write","context.read","context.write",
+                              "approval.grant","ops.read","rules.control"],
+                 "capabilities": ["code.*"], "approves": ["qa.*","code.*"],
+                 "sideEffectsAtMost": "write", "classificationMax": "internal"}}
+```
+Check with `GET /v1/admin/whoami` as the Manager. Without these (the domain must be a build that knows `rules.control`), the Manager still works as before; the approval prompts for event rules,
+`/rules`, `/pause` and the digest then report a permission error in Telegram instead of data. The Manager also receives the events of the
+rules that wake it (`alert-grafana-to-manager`, `alert-datadog-to-manager`, `nightly-digest`: their `owner` is `agent/manager`).
+
+Optional hub and handler controls, in `manager.env`: `MANAGER_HUB_URL` (the hub's listener, for `/sources` and `/pausesource`),
+`MANAGER_HUB_TOKEN_FILE` (0600; the hub's admin token, derived from the hub secret:
+`node -e 'import("./packages/events-hub/src/derive.ts").then(m=>process.stdout.write(m.adminToken(require("fs").readFileSync(process.argv[1],"utf8").trim())))' <hub-secret-file>`),
+`MANAGER_HUB_CA_FILE`, and `MANAGER_AGENT_HEALTH` (`agent/reviewer=http://10.10.10.11:8081,...`, the agents' health ports, for `/handlers`).
+`/kill` and `/unkill` need no setting: they send the kit's control message, which an agent accepts from the sender listed in its
+`EVENTS_CONTROLLERS` (default `agent/manager`).
+
 ## 2. Files on VM102
 ```bash
 mkdir -p ~/somework-manager
