@@ -1,4 +1,5 @@
 // The shared agent runtime. Roles import from here (or from a subpath, see package.json `exports`) and never from each other.
+export * from "./chat.ts";
 export * from "./config.ts";
 export * from "./credentials.ts";
 export * from "./git.ts";

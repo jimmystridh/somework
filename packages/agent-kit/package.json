@@ -9,6 +9,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./chat": "./src/chat.ts",
     "./config": "./src/config.ts",
     "./credentials": "./src/credentials.ts",
     "./egress/proxy": "./src/egress/proxy.ts",

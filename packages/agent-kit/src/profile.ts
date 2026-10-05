@@ -1,6 +1,7 @@
 import type { Extension } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import type { Failure, Outcome, ProgressUpdate, SomeWorkClient } from "@somework/sdk";
+import type { ChatConfig } from "./chat.ts";
 import type { FinalizeResult } from "./git.ts";
 import type { Log } from "./log.ts";
 import type { AgentRuntime, Budget, Usage } from "./runtime.ts";
@@ -44,6 +45,11 @@ export interface AgentProfile {
 		/** Directory (on the service host) with `<skill>.md` overlays that state only the differences from the repository's skill. */
 		overlayDir?: string;
 	};
+	/**
+	 * What happens to a direct chat message sent to the agent. By default each sender gets one automatic notice ("I take tasks, not chat",
+	 * with the capability list); no model reads the message. `CHAT_AUTOREPLY=0` in the environment turns it off for a deployment.
+	 */
+	chat?: ChatConfig;
 }
 
 /** A role's decision that the work must not leave the workspace (a failed check, damaged files): no commit, no push, no pull request. */
@@ -168,5 +174,10 @@ export function validateProfile(profile: AgentProfile): AgentProfile {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(profile.git.branchPrefix)) throw new Error(`profile ${profile.id}: branchPrefix must be a plain ref segment`);
 	if (profile.git.pullRequest && !profile.git.push) throw new Error(`profile ${profile.id}: a pull request needs the branch to be pushed`);
 	if (!(profile.defaultBudget.maxTokens > 0) || !(profile.defaultBudget.maxMinutes > 0)) throw new Error(`profile ${profile.id}: defaultBudget must be positive`);
+	if (profile.chat !== undefined) {
+		if (typeof profile.chat !== "object" || profile.chat === null) throw new Error(`profile ${profile.id}: chat must be an object`);
+		if (profile.chat.autoReply !== undefined && typeof profile.chat.autoReply !== "boolean") throw new Error(`profile ${profile.id}: chat.autoReply must be true or false`);
+		if (profile.chat.replyTemplate !== undefined && typeof profile.chat.replyTemplate !== "function") throw new Error(`profile ${profile.id}: chat.replyTemplate must be a function`);
+	}
 	return profile;
 }

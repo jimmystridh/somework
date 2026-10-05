@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { createModels, type Models } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { Identity, SomeWorkClient, Worker } from "@somework/sdk";
+import { runChatResponder } from "./chat.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
@@ -112,7 +113,12 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const stop = new AbortController();
 			for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) process.once(signal, () => stop.abort());
 			const worker = new Worker(client, { handler, concurrency: config.concurrency, leaseSeconds: config.leaseSeconds, shutdownGraceMs: 20_000, logger: (level, message, fields) => log(level, message, fields) });
-			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length });
+			const chat = env.CHAT_AUTOREPLY === "0" ? false : profile.chat?.autoReply !== false;
+			if (chat) {
+				// a courtesy notice for chat messages; it can never fail or delay the claim loop below
+				void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: profile.chat });
+			}
+			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, chat });
 			await worker.run(stop.signal);
 			health.close();
 			await runtime.close();

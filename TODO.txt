@@ -155,16 +155,12 @@ Still open (needs a decision or access I do not have):
 Found 2026-10-05 from telemetry: a message sent to an agent through the manager was delivered (it sits
 in that agent's inbox, 2 unread at the time) but nothing replied. Every agent role only claims and runs
 tasks; none has a message handler. The manager polled the inbox several times and got nothing.
-- Decide what "chat with an agent" means. Options: (a) a short, bounded model turn with the agent's
-  own persona and read-only context, answered in the same conversation; (b) route the message to a
-  task ("answer this question") so budgets and approvals apply as usual; (c) say plainly "I take
-  tasks, not chat" automatically so the sender is not left waiting.
-- Whatever is chosen belongs in the kit once (message wake -> handler -> reply), switched on per role.
-- Needs guards: only answer allow-listed senders, rate limit and a token budget per sender and per
-  day, no replying to automated senders in a loop (two agents answering each other), never act on
-  instructions in a message without the normal approval path, and no tools beyond read-only.
-- Until then the manager should not offer "message an agent" as if a reply would come, and a message
-  with no reader should time out visibly instead of being polled silently.
+- DONE (option c, in the kit, packages/agent-kit/src/chat.ts): every kit service answers a direct chat.message once with a
+  chat.notice ("I take tasks, not chat", the agent id and its capabilities), deterministic, no model, nothing echoed. Loop-safe:
+  chat.notice can only have trigger "never", the notice carries label autoReply and is never answered, one notice per sender and
+  conversation per 10 min, 30 per hour, messages older than 5 min are skipped. Off per role (profile.chat.autoReply=false) or per
+  deployment (CHAT_AUTOREPLY=0). Still open: a real conversational answer (option a/b) if wanted, and the manager telling the owner
+  that a notice came back instead of polling for a reply.
 - Requester inboxes are never read and just grow (one requester shows 92 unread, another 30: old task
   events). Decide a retention or consume-and-discard policy for requesters that do not read them.
 - The manager chose code.review@2 (the demo stub) because it was listed first and its input shape was

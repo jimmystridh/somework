@@ -95,8 +95,24 @@ code it moves here.
 | `sandbox/server`, `sandbox/remote-env`, `egress/proxy` | the sandbox daemon, Pi's `ExecutionEnv` over HTTP, the egress allowlist proxy (their `main.ts` files are the container entry points) |
 | `policy`, `ledger`, `shards`, `metrics`, `log`, `credentials`, `config`, `health` | approvals, daily token ledger, shard table, Prometheus metrics, redacted JSON logs, `auth.json` store, env config, `/live` `/ready` `/metrics` |
 | `windows` | what every role that runs on a Windows machine needs: the confined local `ExecutionEnv` (Git Bash, path confinement, environment allow-list, sweep of the service account's leftover processes), log redaction, the machine settings (`WINDOWS_*`) and `windowsExecutionHooks(settings)` that wires them into a service |
+| `chat` | the automatic answer to direct chat messages (below) |
 | `skills` | the repository knowledge loader (below) |
 | `testing` | `makeRemote` (a local bare repository), `FakeHost`, `sh`: for role tests |
+
+## Chat: agents take tasks, not chat
+
+A message sent to an agent used to sit unread, and the sender never learned that. Every kit service now answers a direct `chat.message`
+once with a `chat.notice`: who this is, that nobody reads the thread, and the capabilities to submit a task for. It is deterministic (no
+model, no tokens) and never echoes what the sender wrote.
+
+* **It cannot loop.** The answer is a `chat.notice`, whose only permitted trigger mode is `never`, so it wakes nobody; it carries the
+  label `autoReply`; and the responder acts only on plain `chat.message`s without that label, never on its own messages. Per sender and
+  conversation there is at most one answer per 10 minutes, at most 30 per hour in total, and a message older than 5 minutes is not
+  answered, so a restart does not answer a backlog.
+* **Switch and wording.** `profile.chat = { autoReply: false }` turns it off for a role; `CHAT_AUTOREPLY=0` turns it off for one
+  deployment; `profile.chat.replyTemplate(context)` replaces the text (it must not include anything the sender sent).
+* **Observability.** Logs `chat_message_received` (with `replied` and `reason`), `chat_reply_sent`, `chat_reply_failed`; the counter
+  `somework_chat_messages_total{result,reason}`.
 
 ## Skills: the repository is the source of truth
 
