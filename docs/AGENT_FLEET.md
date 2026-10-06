@@ -11,6 +11,7 @@ Five agents that cooperate through SomeWork. This document fixes how they are bu
 | **Windows developer** | the Windows build machine | `code.windows` v1 | Changes that must build and run on Windows (the legacy C++ backend): same git protocol, Windows toolchain, encoding-safe edits. |
 | **Reviewer** | agent Docker host | `code.review` v3 | Read-only review of a PR/ref against the ticket and repository rules; produces findings, never writes to the host or repo unless the Manager approves a posted review. |
 | **QA** | machine with a browser and network reach to the test backend | `qa.verify` v1 | Verifies a ticket against a revision in a real browser; returns a verdict plus evidence artifacts. |
+| **Aikido fixer** | agent Docker host (Linux, sandboxed) | `code.fix` v1 | Listens to Aikido events, keeps a fresh mirror of one repository, attempts the smallest fix of a reported security issue and opens a draft PR; built, not deployed (`adapters/aikido-fixer`). |
 
 ## The question: how is code shared?
 
@@ -28,6 +29,7 @@ adapters/pi               the developer role: card.json + src/profile.ts + src/m
 adapters/windows-developer  card.json + profile + main.ts + deploy/        (live)
 adapters/reviewer         card.json + profile + main.ts + deploy/          (live)
 adapters/qa               card.json + profile + main.ts + deploy/          (built, not deployed)
+adapters/aikido-fixer     card.json + profile + hooks + a read-only Aikido tool + a shipped event handler + deploy/ (built, not deployed)
 adapters/manager          Telegram bridge + gateway + Pi extension (a requester: uses the SDK only; live)
 packages/events-receiver  public-edge webhook receiver (no dependencies)
 packages/events-hub       private-side hub: mappings, clock, publishing, forwarding
@@ -91,6 +93,9 @@ operating system and still be a drop-in provider: it only has to honour the cont
 same capability id; agents that differ in a way that matters (Windows vs Linux) provide different ids so routing is explicit.
 
 ## Roles in detail
+
+### Aikido fixer (built, not deployed)
+`code.fix` v1 on the same kit and git protocol as the developer, started by events instead of a requester: the rule `rules/aikido-fixer.yaml` wakes it for `aikido.*` events, its shipped handler turns an eligible issue into one task for itself, and the task works in a fresh clone (from a persistent mirror) at the resolved commit of the default branch. It reads the issue through a host-side, read-only Aikido client, refuses protected paths, secret-like text, oversized changes and a failing check profile, and opens a **draft** pull request on `agent/aikido-<issue>-<sha>`. Approval requests are refused (nobody answers for it). Limits are enforced twice: by the handler in the sandbox as an early filter and by a ledger on the service host as the authority. See `adapters/aikido-fixer/README.md`.
 
 ### Manager (live)
 Existing Telegram bridge (owner pairing, private chat only) retrofitted: SomeWork identity `agent/manager` held by the bridge, a narrow

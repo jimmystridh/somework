@@ -42,9 +42,10 @@ Still open (needs a decision or access I do not have):
   VMs 101,102,104,105,106 keep 3 (02:30), VM 103 keeps 1 (04:00, 73 GB per archive); the old VM 103 archives
   were pruned; the template (110) got one manual backup; the clones are deliberately not backed up. Still
   open: backups sit on the same pool as the VMs and there is no off-host copy (section 8).
-- The QA app on the QA machine cannot create a session until the product's WEB database schema is
-  restored. The owner logged in (az), the two backup files were downloaded and copied to the machine and the
-  restore is in progress (2026-10-05). Delete the backup files on the machine and on the workstation afterwards.
+- (resolved 2026-10-06) The QA app's web database schema is restored on the QA machine from the repository's own backups with its own restore script
+  (Adm_Master and SPCS_Adm_DB1 on .\VISMA, snapshot isolation on): a session is created for an existing tenant and the web app in multi-tenant
+  mode lists the companies in headless Edge. The backup files are deleted on the machine and on the workstation. Not done: a fixture build inside
+  a real verification (the first real ticket will show what the skill needs).
 
 --------------------------------------------------------------------------------------
 1. FLEET DASHBOARD (SomeWork section)
@@ -63,25 +64,34 @@ Still open (needs a decision or access I do not have):
 - The two failed tasks in the 24 h window are history from deployment debugging; they will age out.
 
 --------------------------------------------------------------------------------------
-2. QA AGENT (qa.verify)                                   status: being built, NOT deployed
+2. QA AGENT (qa.verify)                                   status: LIVE (2026-10-06), no real ticket verified yet
 --------------------------------------------------------------------------------------
-- (done) The product's back-end server now runs unattended on the QA machine (as a hidden SYSTEM task,
-  no desktop, no autologon, no stored credential). The exit was a missing config.json (it holds the port
-  and the database connection); the file must be UTF-8 WITHOUT a byte-order mark, or the server hangs
-  silently. `bun` is installed (checksum verified) and the web app runs in auth-less local mode as an
-  unprivileged user. Start/stop scripts are idempotent. It does NOT start by itself at boot (by design;
-  first start after boot takes about 3 minutes because the database starts late).
-- BLOCKER (restore in progress, see section 0): the web database schema. Nothing can be verified until it is
-  restored. Everything after that is mechanical (the QA machine report lists the steps).
-- Not tested: starting and stopping the app as the future unprivileged QA service account (a helper
-  that grants it the run right on the two tasks is written and parse-checked, never run).
+- (done) Deployed on the QA machine: account svc-qa, task SomeWorkQa (started through a SYSTEM helper), smoke 6/6 as the service account including real
+  Edge with a WebM video, firewall allow-list (names plus CIDR blocks for GitHub and the model hosts), own model login, Jira client certificate + the
+  QA personal access token (/ready makes a real call to the ticket system and passes), overlay, profile `local` in multi-tenant mode (profiles.json). The
+  agent heartbeats and qa.verify is `available` in the catalog. A harmless task with a foreign ticket key returns `skipped` (no model, no ticket write).
+  The manager may invoke qa.* and may approve qa.verify; the automation principal qa-on-ticket may invoke qa.verify.
+- (done) qa-on-ticket works up to the approval: a synthetic transition to the status `Test` created a reaction task that waits for approval, the manager
+  announced the approval in Telegram (state shows the message), the task was cancelled. The live rule and the repository file now say `Test` (the
+  workflow's real status; the first version said `Testing` and never matched).
+- NOT proven: a full verification of a real ticket (verified / not_fixed). It needs a ticket in status Test in the allowed pattern (^SAD-[0-9]+$), a repository the
+  machine can clone (a private one needs a read-only git token in secrets\git-token), and the application started from the ticket's checkout. Try one with the owner.
+- The web app, back end and databases run on the QA machine permanently (about 0.75 GB) because the stack is started on demand by the agent only after a
+  reboot (about 3 minutes); QaRestoreRun is a leftover on-demand task of the restore and can be deleted.
+- The firewall pins single addresses for hosts that rotate them: GitHub and Cloudflare are covered by CIDR blocks; the Jira host resolves to ONE address
+  today (18.200.127.90). If that host moves, the refresh task follows within 30 minutes; if tickets fail with "could not connect", check it first.
+- The NATS broker did not pick up the new agent's login by itself (its reloader container prints "reloaded" but the broker only reloaded after a manual
+  SIGHUP). New agents poll over HTTP until the broker is reloaded: send `docker kill -s HUP` to the broker container after enrolling an agent, and look at
+  why the reloader's signal does not reach it.
+- The agent's health endpoint listens on the QA machine's loopback only (like the Windows developer's); showing its handlers and pools in the fleet
+  dashboard needs a narrow inbound rule for the services VM and a bind address (URL would be http://<machine address>:8082/status).
+- [DECISION] The Jira token and certificate in use belong to a person's account (every agent action appears as that person); same as before.
+- Not exercised yet: the QA service account starting and stopping the app stack during a real job (the helper that grants it the Run right on the two
+  tasks was run on 2026-10-06; only the administrator and the smoke test have driven them).
 - The pre-built back-end on the machine is from one fixed commit. Frontend tickets are verified
   against that back-end revision, not the ticket's. The result must report both revisions.
 - Local mode covers the practice companies only, not the shared test back-end's data. Fixtures must
   be built by the agent. This is weaker than the original skill's "all companies" coverage.
-- Deploy steps still open: enroll the identity, register the card, its OWN model login, the Jira
-  certificate/password/token files on the machine, firewall allow-list (incl. the Jira host),
-  skill overlay file (kept outside the repository), start as SYSTEM helper task.
 - [DECISION] The Jira token belongs to a person's account, so every Jira action by the agent
   appears as that person. A dedicated service account would be better.
 - [DECISION] The Jira client certificate in use is the person's/jirast one. A dedicated
@@ -93,10 +103,13 @@ Still open (needs a decision or access I do not have):
   machine; the unit tests use a fake backend.
 
 --------------------------------------------------------------------------------------
-3. WINDOWS DEVELOPER AGENT (code.windows)                 status: live, not useful yet
+3. WINDOWS DEVELOPER AGENT (code.windows)                 status: live (2026-10-06), tooling-check only
 --------------------------------------------------------------------------------------
 - (resolved 2026-10-05) It has its own fine-grained token (one repository, contents + pull requests write,
   expires 2027-01-03), installed on the machine. Never exercised with a real push yet.
+- (done 2026-10-06) Its own model login is installed and the agent runs under the service account (boot trigger, supervisor restarts). A real
+  job ran end to end on it: clone of a public repository, the tooling-check build profile (ok), model call (about 23k tokens), no changes, no
+  stray processes afterwards. Its status endpoint is on the machine's private address (WINDOWS_HEALTH_BIND) and reachable only from the services VM.
 - Only a tooling-check build profile exists. The real product build needs a package-restore
   credential that the service account can read. [DECISION] where that credential lives.
 - The sandbox is a local unprivileged account plus firewall rules: a weaker boundary than the
@@ -108,7 +121,8 @@ Still open (needs a decision or access I do not have):
   account that runs nothing else during a job.
 - Firewall rules match addresses, not names (shared CDN addresses admit sibling sites); a refresh
   task re-resolves every 30 min.
-- Never tested against a real full build or a real push (only the smoke test and unit tests).
+- Never tested against a real full build or a real push (the live smoke job used a read-only request on a public repository).
+- Dashboard: add `{"id":"agent/windows-developer","url":"http://10.10.10.45:8081/status"}` to the dashboard's agents-health.json to show its handlers and pools.
 
 --------------------------------------------------------------------------------------
 4. REVIEWER AGENT (code.review v3)                        status: live
@@ -140,6 +154,23 @@ Still open (needs a decision or access I do not have):
   capture the token from the response.
 - The one real pull request path was exercised once (a draft PR, since closed). No CI interplay
   was observed.
+
+AIKIDO FIXER (adapters/aikido-fixer, code.fix v1; built and tested, NOT deployed)
+- Needs from the owner before it can run: an Aikido OAuth2 client for it (read access to issues only), a model login of its own (device code),
+  a fine-grained token for ONE repository (Contents + Pull requests write, 90 days, passkey check), and the enrolment with
+  `--side-effects write --may-invoke code.fix` (the handler submits to the agent itself). Then rule apply and the runbook in deploy/README.md.
+- The Aikido API shape comes from the local CLI's source (GET /issues/groups/{id}, GET /issues/{id}, client credentials at /api/oauth/token),
+  never from the live API: first contact may need small adjustments. The client's exact scope names are unknown.
+- The hub's aikido mapping is a first cut: the handler needs a numeric `issueId`; events without one are only recorded. Refine the mapping
+  from the first real delivery.
+- No check profile is defined for the target repository (a named command of the repository's own that runs on Linux, probably front-end tests
+  only; the C++ and .NET parts cannot be checked in the sandbox).
+- A skipped task still clones: the kit prepares the workspace before the role's beforeRun. Cheap with the mirror, but a pre-workspace gate
+  in the kit would be cleaner.
+- The mirror and the per-issue clones share the sandbox's workspace volume: size it for the repository (checkouts are removed after the result).
+- Recommended on the target repository: protect the default branch, restrict who may push `agent/*`, require a review before merge.
+- Handler tools are locked for this role (they need an approval that is always refused): changing the handler is an operator action.
+- The dashboard does not know its health port yet (8083); add it to agents-health.json when the host allows it.
 
 --------------------------------------------------------------------------------------
 6. MANAGER AGENT (Telegram)
