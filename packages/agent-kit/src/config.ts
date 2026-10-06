@@ -24,7 +24,7 @@ export interface Config {
 		/** Persistent bare mirrors inside the sandbox (`GIT_MIRROR_DIR`); `repositories` are refreshed on a timer, any other repository only when a task uses it. */
 		mirror?: { dir: string; repositories: string[]; refreshMinutes: number };
 	};
-	limits: { maxTokensCap: number; maxMinutesCap: number; dailyTokenLimit: number };
+	limits: { maxTokensCap: number; maxMinutesCap: number; dailyTokenLimit: number; budgetRaiseCeiling: number; budgetControllers?: string[] };
 	shards?: ShardTable;
 	healthPort: number;
 	concurrency: number;
@@ -67,7 +67,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		allowedModels: allowlist(model, parseModelList(env.PI_ALLOWED_MODELS)),
 		sandbox: { url: required(env, "SANDBOX_URL"), tokenFile: env.SANDBOX_TOKEN_FILE ?? "/run/secrets/sandbox-token", workspaceRoot: env.SANDBOX_WORKSPACES ?? "/workspace", caFile: env.SANDBOX_CA_FILE },
 		git: { tokenFile: env.GIT_TOKEN_FILE, app: appFrom(env), authorFromApp: !env.GIT_AUTHOR_NAME && !env.GIT_AUTHOR_EMAIL, tokenHosts: (env.GIT_TOKEN_HOSTS ?? "github.com").split(/[\s,]+/).filter(Boolean), authorName: env.GIT_AUTHOR_NAME ?? "SomeWork Pi", authorEmail: env.GIT_AUTHOR_EMAIL ?? "pi@somework.invalid", githubApi: env.GITHUB_API || undefined, draftPullRequests: env.GIT_PR_DRAFT === "1", mirror: mirrorFrom(env) },
-		limits: { maxTokensCap: integer(env, "BUDGET_MAX_TOKENS_CAP", 2_000_000), maxMinutesCap: integer(env, "BUDGET_MAX_MINUTES_CAP", 60), dailyTokenLimit: integer(env, "DAILY_TOKEN_LIMIT", 10_000_000) },
+		limits: { maxTokensCap: integer(env, "BUDGET_MAX_TOKENS_CAP", 2_000_000), maxMinutesCap: integer(env, "BUDGET_MAX_MINUTES_CAP", 60), dailyTokenLimit: integer(env, "DAILY_TOKEN_LIMIT", 10_000_000),
+			budgetRaiseCeiling: integer(env, "BUDGET_RAISE_CEILING", integer(env, "DAILY_TOKEN_LIMIT", 10_000_000)),
+			...(env.BUDGET_CONTROLLERS ? { budgetControllers: env.BUDGET_CONTROLLERS.split(/[\s,]+/).filter(Boolean) } : {}) },
 		shards,
 		healthPort: integer(env, "HEALTH_PORT", 8081),
 		concurrency: integer(env, "PI_CONCURRENCY", 2),

@@ -163,6 +163,10 @@ preempted), answers one message at a time (a waiting message is told "busy, queu
 once per 15 seconds and 20 times an hour, and never answers its own messages, replies or automatic notices, so agents cannot loop.
 Replies are redacted and at most 4 KB. An instruction has no task in the domain, so its artifacts are never uploaded: small text results (patch, report, logs) are shown in the reply, everything else stays on the agent host and the reply names where. A second message inside the 15-second window gets one automatic notice telling the sender when to write again. All the settings are in `packages/agent-kit/README.md`.
 
+### Raising a budget
+
+When an agent has used up a token pool, or the owner wants it to be able to do more today, the owner asks the Manager in chat; there is no command for it. The Manager's `somework_control` tool takes `raise_budget` (agent, pool `tasks`, `events` or `chat`, tokens, reason), asks the owner to confirm with a Telegram button (the model cannot raise anything by itself) and, once confirmed, sends the agent a direct message labelled `budgetControl: raise`. The kit applies it only from a controller (`BUDGET_CONTROLLERS`, default the events controllers, that is the Manager), adds the tokens to that pool's limit **for the current day only**, and answers with the new limit. `tasks` is the whole daily limit (`DAILY_TOKEN_LIMIT`), `events` and `chat` are their own pools (and the weekly events cap rises with `events`). One request adds at most 10 million tokens, and an agent accepts at most `BUDGET_RAISE_CEILING` (default one extra daily limit) per pool and day, over all raises. `somework_handlers` shows each pool's used and limit with the amount raised today. The per-job caps (`BUDGET_MAX_TOKENS_CAP`, `BUDGET_MAX_MINUTES_CAP`) and the chat instruction budget are settings in the agent's `.env`, rolled through CI; they are not raised from chat.
+
 ## Observe tools
 
 Any pi-based role can be given read-only access to the central Grafana (Loki logs, alert state, dashboard search) to read its own history or, for

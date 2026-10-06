@@ -186,6 +186,31 @@ test("a denied or foreign confirmation changes nothing, and the model has no way
 	g.close();
 });
 
+test("a budget raise is only a request until the owner confirms, then it rides on a message to the agent", async () => {
+	const b = build({ controls: config, http: hub });
+	const g = await gateway(b);
+	const asked: any = await (await g.call("POST", "/v1/control/request", { action: "raise_budget", agent: "agent/reviewer", pool: "events", tokens: 500000, reason: "acceptance burst" })).json();
+	assert.equal(asked.status, "awaiting_owner");
+	assert.ok(b.telegram.texts().some((t) => t.includes("give agent/reviewer 500000 more events tokens for today (acceptance burst)")));
+	assert.equal(b.domain.sentMessages.length, 0, "nothing is sent before the owner confirms");
+	await tap(b, `ct:y:${asked.requestId}`);
+	assert.deepEqual(b.domain.sentMessages.map((m) => [m.to, m.labels]), [["agent/reviewer", { budgetControl: "raise", budgetPool: "events", budgetTokens: "500000", budgetReason: "acceptance burst" }]]);
+	assert.ok(b.telegram.texts().at(-1)!.includes("Asked agent/reviewer to add 500000 tokens to its events pool for today"));
+	g.close();
+});
+
+test("budget requests with an odd agent, pool or amount are refused", () => {
+	for (const raw of [
+		{ action: "raise_budget", agent: "reviewer", pool: "tasks", tokens: 10 },
+		{ action: "raise_budget", agent: "agent/r", pool: "bank", tokens: 10 },
+		{ action: "raise_budget", agent: "agent/r", pool: "tasks", tokens: 0 },
+		{ action: "raise_budget", agent: "agent/r", pool: "tasks", tokens: 1.5 },
+		{ action: "raise_budget", agent: "agent/r", pool: "tasks", tokens: 10_000_001 },
+		{ action: "raise_budget", agent: "agent/r", pool: "tasks" },
+	]) assert.throws(() => parseAction(raw as never), undefined, JSON.stringify(raw));
+	assert.deepEqual(parseAction({ action: "raise_budget", agent: "agent/r", pool: "chat", tokens: "2000" }), { action: "raise_budget", agent: "agent/r", pool: "chat", tokens: 2000 });
+});
+
 test("a control request that nobody confirms expires", async () => {
 	let clock = Date.now();
 	const b = build({ controls: config, http: hub, now: () => clock });

@@ -19,7 +19,13 @@ export interface ControlsConfig {
 export type ControlAction =
 	| { action: "pause_rule" | "resume_rule"; rule: string }
 	| { action: "pause_source" | "resume_source"; source: string }
-	| { action: "kill_handler" | "unkill_handler"; agent: string; handler: string; reason?: string };
+	| { action: "kill_handler" | "unkill_handler"; agent: string; handler: string; reason?: string }
+	| { action: "raise_budget"; agent: string; pool: BudgetPool; tokens: number; reason?: string };
+
+export const BUDGET_POOLS = ["tasks", "events", "chat"] as const;
+export type BudgetPool = (typeof BUDGET_POOLS)[number];
+/** The most one request can add; the agent has its own daily ceiling on top of this. */
+export const MAX_BUDGET_RAISE = 10_000_000;
 
 const RULE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SOURCE = /^[a-z][a-z0-9-]{0,30}$/;
@@ -48,8 +54,17 @@ export function parseAction(raw: Record<string, unknown>): ControlAction {
 			const reason = text(raw.reason) ? clip(defang(text(raw.reason)), 200) : undefined;
 			return { action, agent: text(raw.agent), handler: text(raw.handler), ...(reason ? { reason } : {}) };
 		}
+		case "raise_budget": {
+			if (!AGENT.test(text(raw.agent))) return bad("agent must be an agent id such as agent/reviewer");
+			const pool = text(raw.pool) as BudgetPool;
+			if (!BUDGET_POOLS.includes(pool)) return bad("pool must be tasks (the whole daily limit), events or chat");
+			const tokens = Number(raw.tokens);
+			if (!Number.isInteger(tokens) || tokens < 1 || tokens > MAX_BUDGET_RAISE) return bad(`tokens must be a whole number from 1 to ${MAX_BUDGET_RAISE}`);
+			const reason = text(raw.reason) ? clip(defang(text(raw.reason)), 200) : undefined;
+			return { action, agent: text(raw.agent), pool, tokens, ...(reason ? { reason } : {}) };
+		}
 		default:
-			return bad("action must be pause_rule, resume_rule, pause_source, resume_source, kill_handler or unkill_handler");
+			return bad("action must be pause_rule, resume_rule, pause_source, resume_source, kill_handler, unkill_handler or raise_budget");
 	}
 }
 
@@ -60,6 +75,7 @@ export const describeAction = (a: ControlAction): string => {
 		case "pause_source": return `pause event source ${a.source}`;
 		case "resume_source": return `resume event source ${a.source}`;
 		case "kill_handler": return `switch off ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
+		case "raise_budget": return `give ${a.agent} ${a.tokens} more ${a.pool} tokens for today${a.reason ? ` (${a.reason})` : ""}`;
 		case "unkill_handler": return `switch on ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
 	}
 };
@@ -230,7 +246,9 @@ export class Controls {
 			const p = pools[name];
 			return p ? `${name} ${p.used}/${p.limit}${p.stopped ? " STOPPED" : p.throttled ? " throttled" : ""}` : undefined;
 		};
-		const poolLine = [pool("tasks"), pool("events")].filter(Boolean).join("; ");
+		const raised = Object.entries(pools.raisedToday ?? {}).filter(([, n]) => Number(n) > 0).map(([name, n]) => `${name} ${Number(n)}`);
+		const listed = [pool("tasks"), pool("events"), pool("chat")].filter(Boolean).join("; ");
+		const poolLine = listed && raised.length ? `${listed} (raised today: ${raised.join(", ")})` : listed;
 		return [`${agent}: ${handlers.length} handlers`, ...lines, ...(poolLine ? [`Token pools: ${poolLine}`] : [])].join("\n");
 	}
 
@@ -243,6 +261,14 @@ export class Controls {
 		return `Asked ${agent} to switch ${off ? "off" : "on"} ${all ? "all handlers" : `handler ${handler}`}. The agent applies it when it reads the message; check with /handlers ${agent}.`;
 	}
 
+	/** The budget rides on a direct message like the handler switch; the agent applies it, caps it per day and answers with what it did. */
+	async raiseBudget(agent: string, pool: BudgetPool, tokens: number, reason?: string): Promise<string> {
+		const labels: Record<string, string> = { budgetControl: "raise", budgetPool: pool, budgetTokens: String(tokens) };
+		if (reason) labels.budgetReason = reason;
+		await this.#deps.domain.sendMessage({ to: agent, text: `budget control: raise ${pool} by ${tokens} tokens for today`, labels });
+		return `Asked ${agent} to add ${tokens} tokens to its ${pool} pool for today. It confirms by message and the raise ends tomorrow; the pools are in somework_handlers.`;
+	}
+
 	// ---- one entry point for commands and confirmed requests --------------------------------------------------------
 	async run(action: ControlAction): Promise<string> {
 		switch (action.action) {
@@ -252,6 +278,7 @@ export class Controls {
 			case "resume_source": return this.setSourcePaused(action.source, false);
 			case "kill_handler": return this.setHandler(action.agent, action.handler, true, action.reason);
 			case "unkill_handler": return this.setHandler(action.agent, action.handler, false);
+			case "raise_budget": return this.raiseBudget(action.agent, action.pool, action.tokens, action.reason);
 		}
 	}
 

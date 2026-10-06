@@ -25,6 +25,8 @@ export interface PoolUsage {
 	events: { used: number; limit: number; weeklyUsed?: number; weeklyLimit?: number; throttled: boolean; stopped: boolean };
 	/** Present only when the role answers chat with a model. */
 	chat?: { used: number; limit: number; throttled: boolean; stopped: boolean };
+	/** Tokens the owner added to each pool for today; the limits above already include them. Present only on a day with a raise. */
+	raisedToday?: Record<Pool, number>;
 }
 
 interface LedgerState {
@@ -35,6 +37,8 @@ interface LedgerState {
 	week?: string;
 	weekEvents?: number;
 	notices?: string[];
+	/** Raises the owner granted for this day only: a new day starts without them. */
+	bonus?: Partial<Record<Pool, number>>;
 }
 
 export const isoWeek = (date: string): string => {
@@ -88,8 +92,17 @@ export class DailyLedger {
 		renameSync(`${this.#path}.tmp`, this.#path);
 	}
 
+	#raised(state: LedgerState, pool: Pool): number {
+		return state.bonus?.[pool] ?? 0;
+	}
+
+	/** The daily limit including today's raise. */
+	get dailyLimit(): number {
+		return this.#limit + this.#raised(this.#read(), "tasks");
+	}
+
 	get eventsLimit(): number {
-		return this.#events ? Math.floor(this.#limit * Math.min(this.#events.share, 1)) : 0;
+		return this.#events ? Math.floor(this.#limit * Math.min(this.#events.share, 1)) + this.#raised(this.#read(), "events") : 0;
 	}
 
 	/** Tokens spent today by requester tasks. */
@@ -98,7 +111,7 @@ export class DailyLedger {
 	}
 
 	get chatLimit(): number {
-		return this.#chat ? Math.floor(this.#limit * Math.min(this.#chat.share, 1)) : 0;
+		return this.#chat ? Math.floor(this.#limit * Math.min(this.#chat.share, 1)) + this.#raised(this.#read(), "chat") : 0;
 	}
 
 	/** What a requester task may still use today: event and chat spend (each up to its share) comes off the daily limit, so tasks keep at least the rest. */
@@ -106,7 +119,7 @@ export class DailyLedger {
 		const state = this.#read();
 		const events = this.#events ? Math.min(state.events ?? 0, this.eventsLimit) : 0;
 		const chat = this.#chat ? Math.min(state.chat ?? 0, this.chatLimit) : 0;
-		return Math.max(0, this.#limit - state.tokens - events - chat);
+		return Math.max(0, this.#limit + this.#raised(state, "tasks") - state.tokens - events - chat);
 	}
 
 	/** What chat answers may still use today. */
@@ -128,7 +141,7 @@ export class DailyLedger {
 		if (!this.#events) return 0;
 		const state = this.#read();
 		const daily = Math.max(0, this.eventsLimit - (state.events ?? 0));
-		const weekly = this.#events.weeklyTokens === undefined ? Number.POSITIVE_INFINITY : Math.max(0, this.#events.weeklyTokens - (state.weekEvents ?? 0));
+		const weekly = this.#events.weeklyTokens === undefined ? Number.POSITIVE_INFINITY : Math.max(0, this.#events.weeklyTokens + this.#raised(state, "events") - (state.weekEvents ?? 0));
 		return Math.min(daily, weekly);
 	}
 
@@ -136,7 +149,7 @@ export class DailyLedger {
 		if (!this.#events) return "ok";
 		const state = this.#read();
 		const used = state.events ?? 0;
-		const weeklyStopped = this.#events.weeklyTokens !== undefined && (state.weekEvents ?? 0) >= this.#events.weeklyTokens;
+		const weeklyStopped = this.#events.weeklyTokens !== undefined && (state.weekEvents ?? 0) >= this.#events.weeklyTokens + this.#raised(state, "events");
 		if (used >= this.eventsLimit || weeklyStopped) return "stopped";
 		if (used >= this.eventsLimit * (this.#events.throttleAt ?? 0.8)) return "throttled";
 		return "ok";
@@ -156,6 +169,22 @@ export class DailyLedger {
 		this.#write(state);
 	}
 
+	/**
+	 * Adds `tokens` to a pool's limit for today (`tasks` is the whole daily limit, `events` and `chat` their own pools) and returns what is raised and the new limit.
+	 * The sum raised in one day stays within `ceiling`, and a pool the role does not have cannot be raised. Nothing carries over to tomorrow.
+	 */
+	raise(pool: Pool, tokens: number, ceiling: number): { pool: Pool; raisedToday: number; limit: number } {
+		if (!Number.isInteger(tokens) || tokens <= 0) throw new RangeError("the raise must be a positive whole number of tokens");
+		if (pool === "events" && !this.#events) throw new RangeError("this agent has no events pool");
+		if (pool === "chat" && !this.#chat) throw new RangeError("this agent has no chat pool");
+		const state = this.#read();
+		const raisedToday = this.#raised(state, pool) + tokens;
+		if (raisedToday > ceiling) throw new RangeError(`a pool can be raised by at most ${ceiling} tokens per day, and ${this.#raised(state, pool)} are raised already`);
+		state.bonus = { ...state.bonus, [pool]: raisedToday };
+		this.#write(state);
+		return { pool, raisedToday, limit: pool === "tasks" ? this.dailyLimit : pool === "events" ? this.eventsLimit : this.chatLimit };
+	}
+
 	/** True the first time it is called for `key` today; used for "tell the owner once a day". */
 	firstNoticeToday(key: string): boolean {
 		const state = this.#read();
@@ -170,15 +199,16 @@ export class DailyLedger {
 		const events = this.eventsState();
 		const chat = this.chatState();
 		return {
-			tasks: { used: state.tokens, limit: this.#limit },
+			tasks: { used: state.tokens, limit: this.#limit + this.#raised(state, "tasks") },
 			events: {
 				used: state.events ?? 0,
 				limit: this.eventsLimit,
-				...(this.#events?.weeklyTokens === undefined ? {} : { weeklyUsed: state.weekEvents ?? 0, weeklyLimit: this.#events.weeklyTokens }),
+				...(this.#events?.weeklyTokens === undefined ? {} : { weeklyUsed: state.weekEvents ?? 0, weeklyLimit: this.#events.weeklyTokens + this.#raised(state, "events") }),
 				throttled: events === "throttled",
 				stopped: events === "stopped",
 			},
 			...(this.#chat ? { chat: { used: state.chat ?? 0, limit: this.chatLimit, throttled: chat === "throttled", stopped: chat === "stopped" } } : {}),
+			...(state.bonus ? { raisedToday: { tasks: this.#raised(state, "tasks"), events: this.#raised(state, "events"), chat: this.#raised(state, "chat") } } : {}),
 		};
 	}
 }

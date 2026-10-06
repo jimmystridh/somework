@@ -156,17 +156,19 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 
 	pi.registerTool({
 		name: "somework_control",
-		label: "Ask To Pause Or Switch Off",
+		label: "Ask To Pause, Switch Off Or Raise A Budget",
 		description:
-			"Ask the owner to pause or resume an event rule, pause or resume an event source, or switch an agent's handler (or all) off or on. This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. Creating rules is not possible.",
-		promptSnippet: "Ask the owner to pause or resume a rule or source, or to switch a handler off",
+			"Ask the owner to pause or resume an event rule, pause or resume an event source, switch an agent's handler (or all) off or on, or give an agent more tokens for today (raise_budget with agent, pool and tokens; pool tasks is the whole daily limit, events and chat are their own pools; the raise ends tomorrow). This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. Creating rules is not possible.",
+		promptSnippet: "Ask the owner to pause or resume a rule or source, switch a handler off, or raise an agent's token budget for today",
 		promptGuidelines: ["Tell the owner what you asked for and why, then stop; never say it has taken effect before they confirm."],
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("pause_rule"), Type.Literal("resume_rule"), Type.Literal("pause_source"), Type.Literal("resume_source"), Type.Literal("kill_handler"), Type.Literal("unkill_handler")]),
+			action: Type.Union([Type.Literal("pause_rule"), Type.Literal("resume_rule"), Type.Literal("pause_source"), Type.Literal("resume_source"), Type.Literal("kill_handler"), Type.Literal("unkill_handler"), Type.Literal("raise_budget")]),
 			rule: Type.Optional(Type.String()),
 			source: Type.Optional(Type.String()),
 			agent: Type.Optional(Type.String()),
 			handler: Type.Optional(Type.String({ description: "handler name, or all" })),
+			pool: Type.Optional(Type.Union([Type.Literal("tasks"), Type.Literal("events"), Type.Literal("chat")], { description: "raise_budget: which pool to raise" })),
+			tokens: Type.Optional(Type.Integer({ description: "raise_budget: how many tokens to add for today" })),
 			reason: Type.Optional(Type.String()),
 		}),
 		async execute(_id: string, params: Record<string, unknown>, signal?: AbortSignal) {

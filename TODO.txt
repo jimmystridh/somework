@@ -16,10 +16,9 @@ A. ROLLOUTS
   0.3.1-logs (agent setup cards, system numbers, log links; agents-health.json now lists developer, reviewer, fixer, Windows developer and QA with
   log selectors, GRAFANA_URL set); the QA machine (status port 8082 opened to the services VM only, mirror on, PowerShell path fixed) and the
   Windows developer machine run the current kit.
-- Still to roll: the manager (pi-manager.service: scratchpad script roll-manager.sh copies adapters/manager/src and test and restarts the unit, backup
-  tarball first; Telegram is silent for seconds). The auto-mode classifier refused it as "Modify Shared Resources", so it waits for the owner or a
-  permission rule. Without it the manager still lists the catalog by ranking only.
-- The three Linux agents' sandbox and egress sidecars of the reviewer and the fixer still run pilot-12 images (only the agent image changed).
+- The manager runs the current code (rolled 2026-10-06 23:20 with /do; backup ~/somework-pilot/manager-before-pilot-13.tgz). It is not rolled by CI: its
+  files go over with rsync and `systemctl --user restart pi-manager.service` (the Pi container reads the extension from the same directory).
+- (resolved 2026-10-07) The sandbox and egress sidecars of the reviewer and the fixer now run the same ci-<sha> tag as their agent.
 - Optional: seed the fixer's ledger from earlier attempts (AIKIDO_LEDGER_IMPORT, file in its config directory; create the file before mounting it).
 
 B. QA AGENT: PROVE A REAL VERIFICATION (section 2)
@@ -74,6 +73,8 @@ F. DECISIONS WAITING FOR THE OWNER (also in sections 11b and 12)
 - Wire the remaining senders: GitHub and Datadog webhooks (Jira and Aikido already deliver); refine the Aikido mapping from a real payload.
 
 G. KNOWN MINOR (nobody blocked)
+- Budgets: the owner asks the Manager to raise a pool for today (somework_control raise_budget, confirmed in Telegram, applied by the agent, ends at the day's rollover;
+  docs/AGENT_FLEET.md "Raising a budget"). Permanent changes (daily limit, per-job caps, chat instruction budget) are .env settings rolled through CI.
 - The developer's events token pool stays throttled until the daily rollover; 163 failed acceptance tasks remain in the domain history;
   the CI runner does not ship logs to Loki yet; chat conversations pile up in each agent's pi.sqlite (Pi Durable has no retention API; pruning
   would mean editing its database directly); requester inboxes are bounded by the 90-day message retention; the Rust stress test ten_times_stress_degrades_gracefully_without_errors is load-sensitive

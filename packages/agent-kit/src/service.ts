@@ -19,6 +19,7 @@ import { createHandler, type HandlerDeps } from "./handler.ts";
 import { describeAgent, isoDateOrUndefined, withChangeMarker } from "./describe.ts";
 import { createHealthServer } from "./health.ts";
 import { JobJournal } from "./journal.ts";
+import { createBudgetIntercept } from "./budget-control.ts";
 import { DailyLedger } from "./ledger.ts";
 import { jsonLogger } from "./log.ts";
 import { Metrics } from "./metrics.ts";
@@ -278,10 +279,17 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) process.once(signal, () => stop.abort());
 			const worker = new Worker(client, { handler, concurrency: config.concurrency, leaseSeconds: config.leaseSeconds, shutdownGraceMs: 20_000, logger: (level, message, fields) => log(level, message, fields) });
 			const chat = env.CHAT_AUTOREPLY === "0" ? false : profile.chat?.autoReply !== false;
-			if (chat || events || chatResponder) {
-				// answers to chat messages (and the kill switch for event handlers); it can never fail or delay the claim loop below
-				void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: chat ? profile.chat : { ...profile.chat, autoReply: false }, ...(events ? { intercept: events.intercept } : {}), ...(chatResponder ? { model: chatResponder } : {}) });
-			}
+			const budgetIntercept = createBudgetIntercept({
+				ledger,
+				controllers: config.limits.budgetControllers ?? eventsConfig.controllers,
+				ceiling: config.limits.budgetRaiseCeiling,
+				reply: async (message, text) => {
+					await client.post("/v1/messages", { type: "chat.notice", recipients: [{ kind: message.sender.kind, id: message.sender.id }], ...(message.conversationId ? { conversationId: message.conversationId } : {}), replyTo: message.messageId, causationId: message.messageId, triggerMode: "never", content: { mediaType: "text/plain", data: text } }, { idempotencyKey: `budget:${message.messageId}` });
+				},
+				log,
+			});
+			// answers to chat messages, the kill switch for event handlers and budget raises; it can never fail or delay the claim loop below
+			void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: chat ? profile.chat : { ...profile.chat, autoReply: false }, intercept: async (message) => (await budgetIntercept(message)) || (events ? await events.intercept(message) : false), ...(chatResponder ? { model: chatResponder } : {}) });
 			if (events) void events.run(stop.signal).catch((error) => log("error", "events_stopped", { error: error instanceof Error ? error.message : String(error) }));
 			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, chat, chatMode: chatSettings ? "model" : "notice", events: eventsConfig.enabled });
 			await worker.run(stop.signal);
