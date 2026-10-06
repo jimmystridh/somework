@@ -79,6 +79,8 @@ services:
       # OBSERVE_SCOPE: own                                   # own = only this agent's streams (OBSERVE_OWN=container="x"); fleet = the whole cluster's agent logs
       # GRAFANA_URL: https://grafana.example
       # GRAFANA_TOKEN_FILE: /run/secrets/grafana-token       # Viewer service account token, deploy/grafana/provision-reader.py; mount it below
+      # GRAFANA_CA_FILE: /run/somework/grafana-ca.pem        # CA of the read-only Grafana route (the logging CA); mount it below
+      # OBSERVE_OWN: 'container="<this agent's container name>"'   # required with the own scope
       CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-15}
       HEALTH_PORT: "8081"
     volumes:
@@ -89,6 +91,7 @@ services:
       - ./skills-overlay:/run/skills-overlay:ro               # <skill>.md overlays (only used with SKILLS_OVERLAY_DIR)
       - ./secrets/git-token:/run/secrets/git-token:ro       # fine-grained PAT, one repository: Contents + Pull requests write
       # - ./secrets/grafana-token:/run/secrets/grafana-token:ro
+      # - ./config/grafana-ca.pem:/run/somework/grafana-ca.pem:ro
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
     ports: ["${HEALTH_BIND:-127.0.0.1}:8081:8081"]      # health, handlers and token pools; HEALTH_BIND is the VM address the dashboard reads (restrict it in DOCKER-USER)
