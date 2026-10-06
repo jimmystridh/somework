@@ -10,7 +10,16 @@ export interface Config {
 	/** Models a job may ask for with `input.model`; the default model is always first. */
 	allowedModels: ModelRef[];
 	sandbox: { url: string; tokenFile: string; workspaceRoot: string; caFile?: string };
-	git: { tokenFile?: string; tokenHosts: string[]; authorName: string; authorEmail: string; githubApi?: string };
+	git: {
+		tokenFile?: string;
+		tokenHosts: string[];
+		authorName: string;
+		authorEmail: string;
+		githubApi?: string;
+		draftPullRequests?: boolean;
+		/** Persistent bare mirrors inside the sandbox (`GIT_MIRROR_DIR`); `repositories` are refreshed on a timer, any other repository only when a task uses it. */
+		mirror?: { dir: string; repositories: string[]; refreshMinutes: number };
+	};
 	limits: { maxTokensCap: number; maxMinutesCap: number; dailyTokenLimit: number };
 	shards?: ShardTable;
 	healthPort: number;
@@ -32,6 +41,9 @@ const integer = (env: NodeJS.ProcessEnv, name: string, fallback: number): number
 	return value;
 };
 
+const mirrorFrom = (env: NodeJS.ProcessEnv): Config["git"]["mirror"] =>
+	env.GIT_MIRROR_DIR ? { dir: env.GIT_MIRROR_DIR, repositories: (env.GIT_MIRROR_REPOS ?? "").split(/[\s,]+/).filter(Boolean), refreshMinutes: integer(env, "GIT_MIRROR_REFRESH_MINUTES", 30) } : undefined;
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	const shardFile = env.SHARD_TABLE_FILE;
 	const shards = shardFile ? (JSON.parse(readFileSync(shardFile, "utf8")) as ShardTable) : undefined;
@@ -43,7 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		model,
 		allowedModels: allowlist(model, parseModelList(env.PI_ALLOWED_MODELS)),
 		sandbox: { url: required(env, "SANDBOX_URL"), tokenFile: env.SANDBOX_TOKEN_FILE ?? "/run/secrets/sandbox-token", workspaceRoot: env.SANDBOX_WORKSPACES ?? "/workspace", caFile: env.SANDBOX_CA_FILE },
-		git: { tokenFile: env.GIT_TOKEN_FILE, tokenHosts: (env.GIT_TOKEN_HOSTS ?? "github.com").split(/[\s,]+/).filter(Boolean), authorName: env.GIT_AUTHOR_NAME ?? "SomeWork Pi", authorEmail: env.GIT_AUTHOR_EMAIL ?? "pi@somework.invalid", githubApi: env.GITHUB_API, draftPullRequests: env.GIT_PR_DRAFT === "1" },
+		git: { tokenFile: env.GIT_TOKEN_FILE, tokenHosts: (env.GIT_TOKEN_HOSTS ?? "github.com").split(/[\s,]+/).filter(Boolean), authorName: env.GIT_AUTHOR_NAME ?? "SomeWork Pi", authorEmail: env.GIT_AUTHOR_EMAIL ?? "pi@somework.invalid", githubApi: env.GITHUB_API, draftPullRequests: env.GIT_PR_DRAFT === "1", mirror: mirrorFrom(env) },
 		limits: { maxTokensCap: integer(env, "BUDGET_MAX_TOKENS_CAP", 2_000_000), maxMinutesCap: integer(env, "BUDGET_MAX_MINUTES_CAP", 60), dailyTokenLimit: integer(env, "DAILY_TOKEN_LIMIT", 10_000_000) },
 		shards,
 		healthPort: integer(env, "HEALTH_PORT", 8081),

@@ -8,6 +8,7 @@ import { loadConfig, type Config } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { createEventsComponent } from "./events/component.ts";
 import { resolveEvents } from "./events/config.ts";
+import { startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
 import { createHandler } from "./handler.ts";
 import { createHealthServer } from "./health.ts";
@@ -107,10 +108,17 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			runtimeRef = runtime;
 			await runtime.start();
 
+			const session: GitSession = {
+				env: envFor(config.sandbox.workspaceRoot),
+				token: gitToken,
+				tokenHosts: config.git.tokenHosts,
+				identity: { name: config.git.authorName, email: config.git.authorEmail },
+				...(config.git.mirror ? { mirrorDir: config.git.mirror.dir } : {}),
+			};
 			const handler = createHandler({
 				runtime: hooks.wrapRuntime ? hooks.wrapRuntime(runtime) : runtime,
 				envFor,
-				session: { env: envFor(config.sandbox.workspaceRoot), token: gitToken, tokenHosts: config.git.tokenHosts, identity: { name: config.git.authorName, email: config.git.authorEmail } },
+				session,
 				host: gitToken ? new GitHubHost({ token: gitToken, apiBase: config.git.githubApi, draft: config.git.draftPullRequests }) : noPullRequests,
 				workspaceRoot: config.sandbox.workspaceRoot,
 				client,
@@ -133,6 +141,9 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			health.listen(config.healthPort, hooks.healthBind ?? "0.0.0.0");
 
 			const stop = new AbortController();
+			if (config.git.mirror && config.git.mirror.repositories.length > 0) {
+				startMirrorRefresh({ session, repositories: config.git.mirror.repositories, everyMinutes: config.git.mirror.refreshMinutes, signal: stop.signal, log: (level, event, fields) => log(level, event, fields) });
+			}
 			for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) process.once(signal, () => stop.abort());
 			const worker = new Worker(client, { handler, concurrency: config.concurrency, leaseSeconds: config.leaseSeconds, shutdownGraceMs: 20_000, logger: (level, message, fields) => log(level, message, fields) });
 			const chat = env.CHAT_AUTOREPLY === "0" ? false : profile.chat?.autoReply !== false;

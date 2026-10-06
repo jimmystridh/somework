@@ -131,8 +131,13 @@ export interface RoleHooks {
 	prepareInput?(input: any, context: { taskId: string; log: Log }): Promise<any> | any;
 	/** Turns the job input into the model's instruction. Throw `InvalidInput` to refuse the job. Default: `input.instruction`. */
 	instruction?(input: any, context: { taskId: string }): string;
-	/** Pull request title and body for a task (called after `beforeFinalize`). */
-	pullRequest?(input: any, context: { taskId: string; instruction: string }): { title: string; body: string };
+	/** Pull request title and body for a task (called after `beforeFinalize`); `commitMessage` replaces the default `agent: <title>`, its first line is the subject. */
+	pullRequest?(input: any, context: { taskId: string; instruction: string }): { title: string; body: string; commitMessage?: string };
+	/**
+	 * The name of the task branch instead of `<branchPrefix>/<taskId>`, given the commit the work starts from. It must stay under
+	 * `<branchPrefix>/` (anything else fails the job) and must give the same answer for the same job on a retry.
+	 */
+	branchName?(context: { input: any; taskId: string; baseSha: string }): string;
 	/** Extra Pi Durable extensions (tools, prompt sections, hooks) for this role. */
 	extensions?: Extension<any>[];
 	/** Extra readiness checks next to the sandbox: name to ok. */

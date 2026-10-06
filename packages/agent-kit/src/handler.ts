@@ -100,7 +100,6 @@ function createJobHandler(deps: HandlerDeps): Handler {
 
 	return async (job: Job, control: JobControl): Promise<Outcome> => {
 		const input = job.input ?? {};
-		const repository = input.repository;
 		const taskId = job.taskId;
 		const served = profile?.capabilities;
 		if (served && typeof job.capability?.id === "string" && !served.some((c) => c.id === job.capability.id && (job.capability.version === undefined || c.version === String(job.capability.version)))) {
@@ -116,13 +115,15 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			log("error", "job_failed", { taskId, error: error instanceof Error ? error.message : String(error) });
 			return fail("job_error", error instanceof Error ? error.message.slice(0, 500) : "unknown error", true);
 		}
+		// what the role's `prepareInput` returned is the job from here on (it may fill in the ref, name the conversation, add context)
+		const repository = prepared.repository;
 		if (typeof instruction !== "string" || typeof repository?.url !== "string" || typeof repository?.ref !== "string") return fail("invalid_input", "instruction and repository {url, ref} are required");
 		if (repository.baseRef !== undefined && typeof repository.baseRef !== "string") return fail("invalid_input", "repository.baseRef must be a branch name");
-		const requested = input.budget && input.budget.maxTokens > 0 && input.budget.maxMinutes > 0 ? input.budget : undefined;
+		const requested = prepared.budget && prepared.budget.maxTokens > 0 && prepared.budget.maxMinutes > 0 ? prepared.budget : undefined;
 		if (!requested && (requireBudget || !profile)) return fail("budget_required", "a job without a token and time budget is not accepted");
 		const asked = requested ?? profile!.defaultBudget;
 		const budget = { maxTokens: Math.min(asked.maxTokens, deps.limits.maxTokensCap), maxMinutes: Math.min(asked.maxMinutes, deps.limits.maxMinutesCap) };
-		const agentKey: string = input.agentKey ?? `${repository.url}#${job.task.conversationId ?? taskId}`;
+		const agentKey: string = prepared.agentKey ?? `${repository.url}#${job.task.conversationId ?? taskId}`;
 		if (deps.shards && !ownsKey(deps.shards.table, deps.shards.agentId, agentKey)) return fail("wrong_shard", "this agent does not own the shard of that agentKey; route the task with targetAgentId from the shard table");
 		if (deps.ledger && deps.ledger.remaining() < budget.maxTokens) {
 			m.jobs({ status: "budget_exhausted" });
@@ -130,7 +131,7 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			return fail("budget_exhausted", "the daily token budget does not cover this job");
 		}
 
-		const model = requestedModel(input.model);
+		const model = requestedModel(prepared.model);
 		if (model === "invalid") return fail("invalid_input", "model must be {provider, id}");
 		if (model && !isAllowed(deps.allowedModels ?? [], model)) return fail("model_not_allowed", `model ${model.provider}/${model.modelId} is not enabled on this agent`);
 
@@ -142,7 +143,16 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		try {
 			let base;
 			try {
-				base = await prepareWorkspace(deps.session, { repoUrl: repository.url, ref: repository.ref, baseRef: repository.baseRef, taskId, workspace, branchPrefix: git.branchPrefix, detach: !git.push });
+				base = await prepareWorkspace(deps.session, {
+					repoUrl: repository.url,
+					ref: repository.ref,
+					baseRef: repository.baseRef,
+					taskId,
+					workspace,
+					branchPrefix: git.branchPrefix,
+					detach: !git.push,
+					...(hooks?.branchName ? { branch: (resolved) => hooks.branchName!({ input: prepared, taskId, baseSha: resolved.sha }) } : {}),
+				});
 			} catch (error) {
 				if (error instanceof RefNotFoundError) {
 					m.jobs({ status: "ref_not_found" });
@@ -220,7 +230,19 @@ function createJobHandler(deps: HandlerDeps): Handler {
 				return await settled({ status: "completed", summary: outcome.answer.slice(0, 4000), usage }, [], outcome.answer, outcome.usage, {});
 			}
 			const pullRequest = hooks?.pullRequest?.(prepared, { taskId, instruction }) ?? { title: instruction.split("\n")[0]!.slice(0, 72), body: `Opened by the SomeWork Pi agent for task ${taskId}.` };
-			const done: FinalizeResult = await finalizeWorkspace(deps.session, host, { repoUrl: repository.url, ref: repository.ref, baseSha: base.baseSha, baseBranch: base.baseBranch, taskId, workspace, title: pullRequest.title, body: pullRequest.body, branchPrefix: git.branchPrefix });
+			const done: FinalizeResult = await finalizeWorkspace(deps.session, host, {
+				repoUrl: repository.url,
+				ref: repository.ref,
+				baseSha: base.baseSha,
+				baseBranch: base.baseBranch,
+				taskId,
+				workspace,
+				title: pullRequest.title,
+				body: pullRequest.body,
+				branchPrefix: git.branchPrefix,
+				branch: base.branch || undefined,
+				...(pullRequest.commitMessage ? { commitMessage: pullRequest.commitMessage } : {}),
+			});
 			const artifacts: unknown[] = [];
 			if (done.patch) artifacts.push(await deps.client.uploadArtifact({ filename: `${taskId}.diff`, mediaType: "text/x-diff", bytes: done.patch, sourceTaskId: taskId }));
 			log("info", "job_done", { ...fields, status: done.status, commits: done.commits.length });

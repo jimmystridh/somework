@@ -47,7 +47,7 @@ handler is the developer's: `input.instruction`, `{repository: {url, ref}, budge
 
 | Hook | When / what |
 |---|---|
-| `prepareInput(input, {taskId, log})` | async, first: enrich the input (fetch context). Throw `InvalidInput` to refuse |
+| `prepareInput(input, {taskId, log})` | async, first: enrich the input (fetch context). Throw `InvalidInput` to refuse. **What it returns is the job from here on**: `repository` (a role may fill in the ref), `agentKey`, `budget` and `model` are read from it, not from the submitted input |
 | `instruction(input, {taskId})` | turn the input into the model's instruction. Throw `InvalidInput` to refuse |
 | `envFactory(cwd)` | the role's own `ExecutionEnv` for the model's tools and the git steps instead of the container sandbox (no sandbox token needed, no sandbox health check) |
 | `healthBind` | interface of the health endpoint (default `0.0.0.0`) |
@@ -55,7 +55,8 @@ handler is the developer's: `input.instruction`, `{repository: {url, ref}, budge
 | `afterRun(ctx)` | after the model run, whatever happened (answer, failure, stop, detach, blocked, a throwing `beforeRun`): stop what `beforeRun` started. Called once per attempt as soon as the workspace was ready; an error it throws is logged (`after_run_failed`) and never changes the outcome |
 | `wrapRuntime(runtime)` | wrap the `AgentRuntime` once (repair turns, output validation) |
 | `beforeFinalize(ctx)` | after the model, before commit/push, for every role. Return `{ blocked: {reason, details?} }` to keep the work in the workspace: the task completes with `status: "blocked"` (metrics label `blocked`, log `job_blocked`, never counted as unanswered) |
-| `pullRequest(input, {taskId, instruction})` | title and body of the pull request (called after `beforeFinalize`) |
+| `pullRequest(input, {taskId, instruction})` | title and body of the pull request (called after `beforeFinalize`); an optional `commitMessage` replaces the default `agent: <title>` (first line is the subject, the rest the body) |
+| `branchName({input, taskId, baseSha})` | the task branch instead of `<prefix>/<taskId>`, from the commit the work starts from. It must stay under `<prefix>/` or the job fails, and it must answer the same for a retry of the same job |
 | `result(base, ctx)` | reshape the result: return `{ result }` (replaces `base`; spread it to extend), `{ artifacts }` (added to the diff artifact), or `{ failure }` to fail the task. Runs for completed, no-changes and blocked runs |
 | `onSettled(taskId, outcome)` | once per finished job (never for a detach): drop per-job state |
 | `extensions`, `readinessChecks` | extra Pi Durable extensions (tools, prompt sections) and `/ready` checks |
@@ -71,8 +72,15 @@ commit the work started from), `baseBranch`, `envFor(cwd)`, `client`, `log`, the
 SHA (a pull request head, a rewritten branch). An abbreviated SHA must be reachable from a branch or tag. An unknown or malformed ref fails
 the task as non-retryable `ref_not_found` before the model runs. Roles that push (developer, Windows developer) create `<prefix>/<taskId>`
 from the commit; read-only roles (`git.push: false`) get it checked out detached, so a review or a QA run is about exactly that code.
-The pull request targets `repository.baseRef` when given, else the ref when it is a branch, else the remote's default branch (a card that
+`repository.ref: "HEAD"` means the remote's default branch at the moment the task runs (the base of the pull request is that branch's name). The pull request targets `repository.baseRef` when given, else the ref when it is a branch, else the remote's default branch (a card that
 wants `baseRef` must declare it in its input schema).
+
+**Persistent mirror (opt-in).** With `GIT_MIRROR_DIR` set (a directory inside the sandbox, for example `/workspace/.mirrors`) the kit keeps a bare mirror of
+each repository it works on (branches and tags only, never the remote's pull request refs), refreshes it before a task that needs a new clone and, for
+the repositories listed in `GIT_MIRROR_REPOS`, every `GIT_MIRROR_REFRESH_MINUTES` (default 30), and clones the workspace from it: the clone is a local copy,
+`origin` is pointed back at the real remote and one `fetch` brings it to the moment of the task. Refreshes of one mirror are serialised, the token goes only
+through the usual credential helper, and an unreachable remote falls back to the stale mirror (the fetch from origin then decides) or to a direct clone.
+`refreshMirror`, `startMirrorRefresh` and `mirrorPathFor` are exported from `git` for roles that need them.
 
 `createAgentService({ profile, hooks })` does the rest: SomeWork identity and claim loop (NATS wake with an HTTP safety net),
 the sandboxed Pi Durable runtime, git workspace, budgets and the daily ledger, shard check, approvals, the model providers and
