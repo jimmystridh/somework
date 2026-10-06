@@ -30,27 +30,26 @@ B. QA AGENT: PROVE A REAL VERIFICATION (section 2)
   read the result. Needs the ticket key from the owner. Watch that the app starts from the ticket's checkout (QA_WEB_ROOT = the admin.web
   directory of that checkout; first database boot about 3 minutes) and that the clone now takes seconds.
 
-C. DATADOG TRIAGE AGENT: ENROL AND START (section 5, DATADOG TRIAGE)
-- [DECISION/owner] replace the unscoped application key with one scoped to monitors_read, logs_read_data, timeseries_query, events_read,
-  incident_read (the current one has no scopes); keep the keys local (~/.somework-pilot/datadog-stage), never in chat.
-- Model login by device code (the owner approves); enrol `agent/datadog-triage --side-effects read --may-invoke ops.triage`; send the NATS
-  broker a SIGHUP by hand only if `nats-reloader` is missing from an old deployment (fixed in the repo, see section 2); register and approve the card; install datadog.json; move the held rule
-  (deploy/rules/datadog-triage.yaml) into rules/ so CI applies it (it is held because the pipeline fails while the agent does not exist);
-  the Datadog webhook template must carry priority and tags; start the compose stack from the pilot images (built; the Dockerfile ARG fix is
-  committed); one supervised triage of a real monitor. Site is the EU one (api.datadoghq.eu).
+C. DATADOG TRIAGE AGENT (LIVE since 2026-10-06; section 5, DATADOG TRIAGE)
+- Done: scoped application key (monitors_read, logs_read_data, timeseries_query, events_read, incident_read; created in the owner's Datadog, checked: monitors,
+  events and incidents answer, an out-of-scope call is refused; the old unscoped key was revoked), the agent enrolled read-only and its card approved, own model
+  login (device code approved by the owner), stack on the agents VM (~/somework-pilot/datadog-triage, pilot-13 images, health port 8084 opened to the services
+  VM), sandbox checked sealed, rules/datadog-triage.yaml applied by CI, the Datadog webhook `somework-hub` created (payload with priority and tags), and the
+  manager may now invoke ops.triage (added to its invocable capabilities; its other grants were kept). A real triage of the one alerting monitor ran end to end
+  (about 75k tokens, one repair of the model's output, result to the manager). The event path was proved with a synthetic delivery (webhook 202, event, wake,
+  handler decision `submit`).
+- The webhook's hub token was rotated after it appeared in a command output (datadog source version 2 in the hub and receiver configs; old URL answers 401).
+  The same slip printed the INTERNAL Grafana contact-point path once; it only works on the private network, rotate it (grafana source version) if that matters.
+- Left for the owner: put `@webhook-somework-hub` into the messages of the monitors that should be triaged (monitors were deliberately not edited), and
+  decide DD_MIN_PRIORITY / DD_DAILY_CAP / DD_COOLDOWN_MINUTES (defaults P3, 20 a day, 60 minutes) before many monitors point at it.
 
-D. GRAFANA OBSERVE TOOLS FOR THE AGENTS (section 7)
-- Done: a read-only service account somework-agents-reader (Viewer) exists in Grafana; its token is in ~/.somework-pilot/grafana-reader-token (0600,
-  not on any agent host).
-- BLOCKED on a network decision: Grafana listens on the observability VM's loopback only (the tailnet gateway admits the owner only), so an agent
-  cannot reach it. The route I designed: a second nginx listener on the private address (own port, same certificate as the log ingest), GET only,
-  three paths (Loki query/labels/series through the datasource proxy, alert rules, dashboard search), fed by a firewall rule for the agents VM
-  alone. The auto-mode classifier refused it as a weakened security boundary, so nothing was changed (a broken first attempt of mine was removed
-  and nginx checked). [DECISION] approve that route (then: mount the token on the developer, OBSERVE_ENABLED=1, OBSERVE_SCOPE=own,
-  OBSERVE_OWN='container="somework-pi-agent-1"', GRAFANA_CA_FILE = the logging CA, ask the agent for its own logs), or give agents a different
-  path to the logs.
-- The manager does not have the tools: its brain is a separate Pi container that only knows the gateway's routes, so it needs gateway routes over
-  the kit's ObserveService and tool definitions in the container's extension.
+D. GRAFANA OBSERVE TOOLS FOR THE AGENTS (LIVE for the three Linux agents since 2026-10-06; section 7)
+- Done: read-only service account somework-agents-reader (Viewer); an nginx listener on the observability VM's private address (port 9444, same certificate as
+  the log ingest, GET only, three API shapes: Loki query/labels/series through the datasource proxy, alert rules, dashboard search; everything else 403) with a
+  firewall rule for the agents VM only (the services VM cannot reach it; checked); the token (0400) and the logging CA on the developer, reviewer and fixer,
+  OBSERVE_ENABLED=1 with the own scope (OBSERVE_OWN = the agent's own container). The developer used the tools through chat with 3 calls and no errors.
+- Not done: the Windows machines (their firewall allow-lists would need the route), the manager (its brain is a separate Pi container that only knows the
+  gateway's routes), the Datadog agent (its container reaches only Datadog and the domain; its own logs are not needed).
 
 E. CI: DEPLOY THROUGH WOODPECKER INSTEAD OF BY HAND (section 00 E of the first version; docs/CI.md "Rolling agents")
 - Done: deploy/agents/roll-agent.sh (backup, new tag, wait for /ready, automatic restore) with tests (npm run test:scripts).
