@@ -138,7 +138,10 @@ describe("the deployment files", () => {
 
 	it("builds the sandbox from the developer sandbox plus python3 and jq, and leaves the shared Dockerfile alone", () => {
 		const dockerfile = read("Dockerfile");
-		assert.match(dockerfile, /ARG SANDBOX_BASE=somework-pi-sandbox:latest\nFROM \$\{SANDBOX_BASE\} AS sandbox\nUSER root\n/);
+		assert.match(dockerfile, /FROM \$\{SANDBOX_BASE\} AS sandbox\nUSER root\n/);
+		const firstFrom = dockerfile.indexOf("\nFROM ");
+		const declared = dockerfile.indexOf("ARG SANDBOX_BASE=somework-pi-sandbox:latest\n");
+		assert.ok(declared >= 0 && declared < firstFrom, "an ARG used in a FROM line must be declared before the first FROM, or the build fails with 'base name should not be blank'");
 		assert.match(dockerfile, /apt-get install -y --no-install-recommends python3 jq/);
 		assert.match(dockerfile, /python3 -c "import json, csv, statistics, datetime, collections, re, math, itertools"/);
 		assert.match(dockerfile, /\nUSER 10002:10002\n$/, "the sandbox ends as the unprivileged user");
