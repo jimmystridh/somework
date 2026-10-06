@@ -167,3 +167,17 @@ test("approval queue ids are unguessable-looking and decided entries are forgott
 	queue.pending();
 	assert.equal(queue.get(a.id), undefined);
 });
+
+test("the catalog lists the highest version of a capability first and marks it", async () => {
+	const { domain, service } = setup();
+	domain.searchCatalog = async () => ({
+		matches: [
+			{ agentId: "agent/reviewer-old", availability: "online", matchedCapabilities: [{ id: "code.review", version: "2" }] },
+			{ agentId: "agent/reviewer", availability: "online", matchedCapabilities: [{ id: "code.review", version: "10" }, { id: "code.review", version: "3" }] },
+			{ agentId: "agent/fixer", availability: "online", matchedCapabilities: [{ id: "code.fix", version: "1" }] },
+		],
+	});
+	domain.capabilities = { "code.review@2": { sideEffects: "read" }, "code.review@3": { sideEffects: "read" }, "code.review@10": { sideEffects: "read" }, "code.fix@1": { sideEffects: "write" } };
+	const { results } = (await service.catalog("review")) as { results: { agentId: string; capability: { id: string; version: string }; latest: boolean }[] };
+	assert.deepEqual(results.map((r) => `${r.capability.id}@${r.capability.version}${r.latest ? "*" : ""}`), ["code.review@10*", "code.review@3", "code.review@2", "code.fix@1*"]);
+});

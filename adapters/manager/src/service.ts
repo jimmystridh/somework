@@ -107,7 +107,7 @@ export class ManagerService {
 				});
 			}
 		}
-		return { results };
+		return { results: highestVersionFirst(results) };
 	}
 
 	async agents(): Promise<{ agentId: string; capabilities: string[]; availability?: string }[]> {
@@ -328,4 +328,32 @@ export class ManagerService {
 		const sent = await this.#domain.sendMessage(request);
 		return { messageId: sent.messageId, conversationId: sent.conversationId };
 	}
+}
+
+/** Dotted numbers compare by value ("10" after "9"); anything else falls back to text. */
+export function compareVersions(a: string, b: string): number {
+	const left = a.split(".");
+	const right = b.split(".");
+	for (let i = 0; i < Math.max(left.length, right.length); i++) {
+		const x = left[i] ?? "0";
+		const y = right[i] ?? "0";
+		const numeric = /^\d+$/.test(x) && /^\d+$/.test(y);
+		const order = numeric ? Number(x) - Number(y) : x.localeCompare(y);
+		if (order !== 0) return order;
+	}
+	return 0;
+}
+
+/** Keeps the search ranking between capabilities, lists each capability's versions highest first and marks the highest, so a model that takes the first hit takes the latest. */
+function highestVersionFirst<T extends { capability: { id: string; version: string } }>(results: T[]): (T & { latest: boolean })[] {
+	const rank = new Map<string, number>();
+	for (const result of results) if (!rank.has(result.capability.id)) rank.set(result.capability.id, rank.size);
+	const latest = new Map<string, string>();
+	for (const { capability } of results) {
+		const known = latest.get(capability.id);
+		if (known === undefined || compareVersions(capability.version, known) > 0) latest.set(capability.id, capability.version);
+	}
+	return results
+		.map((result) => ({ ...result, latest: latest.get(result.capability.id) === result.capability.version }))
+		.sort((a, b) => rank.get(a.capability.id)! - rank.get(b.capability.id)! || compareVersions(b.capability.version, a.capability.version));
 }
