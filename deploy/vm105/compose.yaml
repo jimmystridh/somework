@@ -18,7 +18,22 @@ services:
     <<: *hardened
     image: nats:2.15-alpine@sha256:ac8f88a6494bffc2c2a5289a0ca61cb28a9145c11ba5677cf24265d07f46d8d4
     user: "10001:10001"
-    command: ["-c", "/etc/nats/nats-server.conf"]
+    # The broker re-reads users.conf when the domain rewrites it (enrolling an agent). The watcher runs inside this container, next to
+    # the broker, so it cannot be missing while the broker is up. (It used to be a second container in the broker's PID namespace; after a
+    # broker restart that one did not come back, and new agents could not log in until someone sent the broker a SIGHUP.)
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        (
+          last=""
+          while true; do
+            cur=$$(md5sum /etc/nats/users.conf 2>/dev/null | cut -d" " -f1)
+            if [ -n "$$last" ] && [ "$$cur" != "$$last" ]; then kill -HUP 1 && echo "users.conf changed: broker reloaded"; fi
+            last=$$cur
+            sleep 1
+          done
+        ) &
+        exec nats-server -c /etc/nats/nats-server.conf
     ports:
       - "${PRIVATE_IP:?set PRIVATE_IP to the VM's private address}:4222:4222"
     volumes:
@@ -33,31 +48,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
-
-  # Reloads the broker when the domain rewrites users.conf (enrolling an agent). It shares the broker's PID namespace, not
-  # the domain: a shared namespace dies with its init process, so sharing it with the domain would take the domain down
-  # whenever the broker stops. This container dies with the broker and comes back with it.
-  nats-reloader:
-    <<: *hardened
-    image: nats:2.15-alpine@sha256:ac8f88a6494bffc2c2a5289a0ca61cb28a9145c11ba5677cf24265d07f46d8d4
-    user: "10001:10001"
-    pid: "service:nats"
-    depends_on:
-      nats: {condition: service_healthy}
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        last=""
-        while true; do
-          cur=$$(md5sum /etc/nats/users.conf 2>/dev/null | cut -d" " -f1)
-          if [ -n "$$last" ] && [ "$$cur" != "$$last" ]; then kill -HUP 1 && echo "users.conf changed: broker reloaded"; fi
-          last=$$cur
-          sleep 1
-        done
-    volumes:
-      - nats-conf:/etc/nats:ro
-    mem_limit: 16m
-    pids_limit: 16
 
   domain:
     <<: *hardened

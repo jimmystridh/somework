@@ -35,7 +35,7 @@ Run on the real pilot hosts on 2026-10-05 (images built on VM102, domain stack o
 | Worker over TLS NATS with `wake = "nats"`, `tls.required` | connected first attempt; end-to-end task in 0.4 s |
 | Broker down: domain stays up, task still completes | 8.3 s over HTTP instead of 0.4 s; domain unaffected |
 | Broker back | next task 0.4 s again, no manual action |
-| `users.conf` change reloads the broker (`nats-reloader`) | broker logs `Reloaded: authorization users` |
+| `users.conf` change reloads the broker (a watcher inside the `nats` container) | broker logs `Reloaded: authorization users` |
 | `docker stop` on the worker | exit code 0 in 0.7 s, runtime ended |
 | Key rotation | old key: `401 signature verification failed`, backoff; new key works |
 | Hardening as running | non-root, read-only rootfs, caps dropped (proxy: `NET_BIND_SERVICE` only), no `docker.sock` in any container |
@@ -95,9 +95,9 @@ docker compose up -d domain proxy
 * `master_key` is base64url of 32 random bytes (`openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`). Back it up
   separately: the broker credentials of every agent derive from it, and `somework restore` needs it
   (`SOMEWORK_MASTER_KEY=…`) because backups do not contain it by default.
-* Enrolling an agent rewrites `users.conf`; the `nats-reloader` service notices the change and signals the broker (it shares
-  the broker's PID namespace, never the domain's: a shared namespace dies with its init process, so sharing it with the
-  domain took the domain down whenever the broker stopped).
+* Enrolling an agent rewrites `users.conf`; a watcher that runs inside the `nats` container (next to the broker, so it always restarts with it)
+  notices the change and signals the broker. An earlier design used a second container in the broker's PID namespace; it did not come back
+  after a broker restart, and new agents could not log in until someone sent the broker a SIGHUP.
 * Do not enable `[ui] dev_token_login`. Leave `[ui]` out unless an OIDC login is configured.
 
 ## 4. VM102: the worker
