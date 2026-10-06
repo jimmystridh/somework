@@ -38,3 +38,4 @@ svg.throughput{width:100%;height:auto;max-height:130px}.throughput line{stroke:v
 .platform-card.setup h5{margin:0;padding:10px 16px 4px;font:13px Georgia,serif}.platform-card.setup pre.prompt{margin:0 16px 14px;padding:10px 12px;max-height:340px;overflow:auto;white-space:pre-wrap;font:11px/1.5 var(--mono);background:#eaece3;border:1px solid var(--line)}
 @media(max-width:760px){.platform-card.setup dl{grid-template-columns:1fr}}
 
+.logs-link{font:10px var(--mono);margin-left:10px;color:var(--muted);text-decoration:underline}

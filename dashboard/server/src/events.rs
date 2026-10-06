@@ -214,6 +214,7 @@ fn hub(read: &HubRead, now_ms: i64) -> HubView {
 /// One agent's status endpoint: `None` when it did not answer.
 pub struct AgentRead {
     pub id: String,
+    pub logs: Option<String>,
     pub status: Option<Value>,
     /// The agent's `/profile` document, when its status address ends in `/status` and the agent answered.
     pub profile: Option<Value>,
@@ -281,6 +282,7 @@ fn agents(reads: &[AgentRead]) -> Vec<AgentEvents> {
             handlers: read.status.as_ref().map(handlers).unwrap_or_default(),
             pools: read.status.as_ref().and_then(pools),
             setup: read.profile.as_ref().and_then(crate::setup::setup),
+            logs: read.logs.clone(),
         })
         .collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -374,6 +376,7 @@ pub struct EventInputs {
     pub hub: HubRead,
     pub agents: Vec<AgentRead>,
     pub agents_configured: u64,
+    pub grafana_url: Option<String>,
 }
 
 pub fn assemble(inputs: &EventInputs, domain_metrics: Option<&Metrics>, pending_approvals: Option<u64>, now_ms: i64) -> Events {
@@ -388,6 +391,7 @@ pub fn assemble(inputs: &EventInputs, domain_metrics: Option<&Metrics>, pending_
         hub,
         agents,
         agents_configured: inputs.agents_configured,
+        grafana_url: inputs.grafana_url.clone(),
         alerts,
     }
 }
@@ -440,6 +444,35 @@ impl HubClient {
 pub struct AgentTarget {
     pub id: String,
     pub url: String,
+    /// Optional `logs` of the entry: a stream selector for the agent's logs, shown as a link to Grafana.
+    pub logs: Option<String>,
+}
+
+/// One to three `label="value"` / `label=~"value"` matchers in braces, from a small alphabet: enough for `{container="x"}`, no pipeline stages.
+pub fn log_selector(text: &str) -> Option<String> {
+    let inner = text.trim().strip_prefix('{')?.strip_suffix('}')?;
+    let matchers: Vec<&str> = inner.split(',').map(str::trim).collect();
+    if matchers.is_empty() || matchers.len() > 3 {
+        return None;
+    }
+    for matcher in &matchers {
+        let (name, rest) = matcher.split_once('=')?;
+        let value = rest.strip_prefix('~').unwrap_or(rest);
+        let quoted = value.strip_prefix('"')?.strip_suffix('"')?;
+        let name_ok = !name.is_empty() && name.len() <= 32 && name.chars().all(|c| c.is_ascii_lowercase() || c == '_');
+        let value_ok = !quoted.is_empty() && quoted.len() <= 80 && quoted.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-' | '/' | ':' | '*' | '+' | '|' | ' '));
+        if !name_ok || !value_ok {
+            return None;
+        }
+    }
+    Some(format!("{{{}}}", matchers.join(",")))
+}
+
+/// `GRAFANA_URL`: a plain https address without credentials, path or query.
+pub fn grafana_base(text: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(text.trim()).ok()?;
+    let ok = parsed.scheme() == "https" && parsed.host_str().is_some() && parsed.username().is_empty() && parsed.password().is_none() && parsed.query().is_none() && parsed.fragment().is_none() && matches!(parsed.path(), "" | "/");
+    ok.then(|| parsed.origin().ascii_serialization())
 }
 
 /// `agents-health.json`: `[{"id": "agent/pi-agent", "url": "http://10.10.10.11:8081/status"}, ...]`.
@@ -455,7 +488,7 @@ pub fn parse_agent_targets(contents: &[u8]) -> Result<Vec<AgentTarget>, String> 
             return Err(format!("agents-health.json: {id}: the url must be plain http(s) without credentials or a query"));
         }
         if seen.insert(id.clone()) {
-            out.push(AgentTarget { id, url: url.to_string() });
+            out.push(AgentTarget { id, url: url.to_string(), logs: item.get("logs").and_then(Value::as_str).and_then(log_selector) });
         }
     }
     Ok(out)
@@ -471,7 +504,7 @@ pub async fn read_agents(http: &reqwest::Client, targets: &[AgentTarget]) -> Vec
                 Some(url) if status.is_some() => fetch_json(&http, &url).await,
                 _ => None,
             };
-            AgentRead { id: target.id, status, profile }
+            AgentRead { id: target.id, logs: target.logs, status, profile }
         });
     }
     let mut out = Vec::new();
@@ -589,7 +622,7 @@ hub_inbox_size 0
                 stats: Some(json!({"sources": [{"name": "github", "paused": false, "token": "PRIVATE TOKEN"}], "schedules": [{"name": "nightly_digest", "nextRunAt": "2026-10-06T00:30:00Z", "cron": "PRIVATE CRON"}],
                     "receiver": {"queued": 2, "headers": "PRIVATE HEADERS"}, "extra": "PRIVATE"})),
             },
-            agents: vec![AgentRead { profile: None, id: "agent/triage".into(), status: Some(pool_status(10, false, false)) }],
+            agents: vec![AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(pool_status(10, false, false)) }],
             agents_configured: 1,
             ..Default::default()
         };
@@ -648,7 +681,7 @@ hub_inbox_size 0
 
     #[test]
     fn handlers_and_pools_are_reduced_to_numbers_flags_and_a_reason_code() {
-        let agents = agents(&[AgentRead { profile: None, id: "agent/triage".into(), status: Some(pool_status(250, true, false)) }, AgentRead { profile: None, id: "agent/down".into(), status: None }]);
+        let agents = agents(&[AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(pool_status(250, true, false)) }, AgentRead { logs: None, profile: None, id: "agent/down".into(), status: None }]);
         let triage = agents.iter().find(|a| a.id == "agent/triage").unwrap();
         assert!(triage.reachable);
         let flaky = triage.handlers.iter().find(|h| h.name == "flaky").unwrap();
@@ -667,7 +700,7 @@ hub_inbox_size 0
         let mut inputs = EventInputs {
             rules: Some(domain_rules()),
             hub: HubRead::Read { metrics: metrics(HUB_METRICS), stats: None },
-            agents: vec![AgentRead { profile: None, id: "agent/triage".into(), status: Some(pool_status(300, false, true)) }],
+            agents: vec![AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(pool_status(300, false, true)) }],
             agents_configured: 1,
             ..Default::default()
         };
@@ -688,7 +721,7 @@ hub_inbox_size 0
         let mut inputs = EventInputs {
             rules: Some(domain_rules()),
             hub: HubRead::Read { metrics: metrics("hub_receiver_up 1\nhub_receiver_oldest_pending_age_seconds 4\nhub_dead_letters{source=\"github\"} 0\n"), stats: None },
-            agents: vec![AgentRead { profile: None, id: "agent/triage".into(), status: Some(json!({"handlers": [{"name": "triage", "enabled": true}], "tokenPools": {"tasks": {"used": 1, "limit": 10}, "events": {"used": 1, "limit": 10, "throttled": false, "stopped": false}}})) }],
+            agents: vec![AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(json!({"handlers": [{"name": "triage", "enabled": true}], "tokenPools": {"tasks": {"used": 1, "limit": 10}, "events": {"used": 1, "limit": 10, "throttled": false, "stopped": false}}})) }],
             agents_configured: 1,
             ..Default::default()
         };
@@ -709,7 +742,7 @@ hub_inbox_size 0
     #[test]
     fn agent_targets_must_be_plain_urls_without_credentials() {
         let ok = parse_agent_targets(br#"[{"id":"agent/pi-agent","url":"http://10.10.10.11:8081/status"},{"id":"agent/pi-agent","url":"http://dup/status"}]"#).unwrap();
-        assert_eq!(ok, vec![AgentTarget { id: "agent/pi-agent".into(), url: "http://10.10.10.11:8081/status".into() }]);
+        assert_eq!(ok, vec![AgentTarget { id: "agent/pi-agent".into(), url: "http://10.10.10.11:8081/status".into(), logs: None }]);
         for bad in [
             r#"[{"id":"a b","url":"http://x/status"}]"#,
             r#"[{"id":"agent/x","url":"ftp://x/status"}]"#,
@@ -736,7 +769,7 @@ hub_inbox_size 0
         let client = HubClient::new(base.clone(), None, Some("t".into()), true).unwrap();
         let HubRead::Read { metrics, stats } = client.read().await else { panic!("the hub answered") };
         assert!(stats.is_some());
-        let reads = read_agents(&agent_http_client().unwrap(), &[AgentTarget { id: "agent/triage".into(), url: format!("{base}/status") }, AgentTarget { id: "agent/gone".into(), url: "http://127.0.0.1:9/status".into() }]).await;
+        let reads = read_agents(&agent_http_client().unwrap(), &[AgentTarget { id: "agent/triage".into(), url: format!("{base}/status"), logs: None }, AgentTarget { id: "agent/gone".into(), url: "http://127.0.0.1:9/status".into(), logs: None }]).await;
         let events = assemble(&EventInputs { hub: HubRead::Read { metrics, stats }, agents: reads, agents_configured: 2, ..Default::default() }, None, None, NOW);
         assert_eq!(events.agents.iter().filter(|a| a.reachable).count(), 1);
         assert!(events.alerts.iter().any(|a| a.kind == "agent_unreachable" && a.subject == "agent/gone"));
@@ -751,5 +784,35 @@ hub_inbox_size 0
         assert!(HubClient::new("http://hub:9000".into(), None, None, false).is_err());
         assert!(HubClient::new("https://hub:9000".into(), None, None, false).is_err());
         assert!(HubClient::new("https://hub:9000".into(), Some("not a certificate"), None, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod log_link_tests {
+    use super::*;
+
+    #[test]
+    fn only_plain_stream_selectors_are_accepted() {
+        assert_eq!(log_selector(r#"{container="somework-pi-agent-1"}"#).as_deref(), Some(r#"{container="somework-pi-agent-1"}"#));
+        assert_eq!(log_selector(r#"{ host="admin-cloud-windows-2", service_name=~"windows.*" }"#).as_deref(), Some(r#"{host="admin-cloud-windows-2",service_name=~"windows.*"}"#));
+        for bad in [r#"{container="x"} |= "password""#, r#"{container="a\b"}"#, "{}", r#"{a="1",b="2",c="3",d="4"}"#, r#"{Container="x"}"#, r#"{container="x;y"}"#, r#"{container="<b>"}"#, "container=x", r#"{container=x}"#] {
+            assert_eq!(log_selector(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_grafana_address_must_be_plain_https() {
+        assert_eq!(grafana_base("https://grafana.example/").as_deref(), Some("https://grafana.example"));
+        assert_eq!(grafana_base("https://grafana.example:8443").as_deref(), Some("https://grafana.example:8443"));
+        for bad in ["http://grafana.example", "https://u:p@grafana.example", "https://grafana.example/path", "https://grafana.example/?x=1", "javascript:alert(1)", ""] {
+            assert_eq!(grafana_base(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_target_keeps_a_valid_selector_and_drops_an_invalid_one() {
+        let targets = parse_agent_targets(br#"[{"id":"agent/a","url":"http://10.0.0.1:8081/status","logs":"{container=\"a\"}"},{"id":"agent/b","url":"http://10.0.0.1:8082/status","logs":"{container=\"b\"} |= \"x\""}]"#).unwrap();
+        assert_eq!(targets[0].logs.as_deref(), Some(r#"{container="a"}"#));
+        assert_eq!(targets[1].logs, None);
     }
 }

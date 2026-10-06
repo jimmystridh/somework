@@ -242,6 +242,8 @@ pub struct Events {
     pub agents: Vec<AgentEvents>,
     /// Agents whose health endpoints are configured on this dashboard; 0 means the part stays "not configured".
     pub agents_configured: u64,
+    /// The Grafana the log links point to (`GRAFANA_URL`), only when it is a plain https address.
+    pub grafana_url: Option<String>,
     pub alerts: Vec<EventAlert>,
 }
 
@@ -337,6 +339,8 @@ pub struct AgentEvents {
     pub reachable: bool,
     pub handlers: Vec<HandlerView>,
     pub pools: Option<TokenPools>,
+    /// A log stream selector for this agent (`{container="somework-pi-agent-1"}`), from `agents-health.json`; with `Events::grafana_url` it makes a link.
+    pub logs: Option<String>,
     /// How the agent is set up, from its `/profile` endpoint; `None` when it did not answer or is too old to have one.
     pub setup: Option<AgentSetup>,
 }

@@ -376,8 +376,8 @@ fn EventsPanel(events: Events, now: i64) -> Element {
         EventAlerts { alerts: events.alerts.clone() }
         RulesTable { rules: events.rules.clone(), pipeline: events.pipeline.clone(), skipped_detail, now }
         HubPanel { hub: events.hub.clone() }
-        AgentsEvents { agents: events.agents.clone(), configured: events.agents_configured }
-        AgentSetups { agents: events.agents.clone(), now }
+        AgentsEvents { agents: events.agents.clone(), configured: events.agents_configured, grafana: events.grafana_url.clone() }
+        AgentSetups { agents: events.agents.clone(), now, grafana: events.grafana_url.clone() }
     }
 }
 
@@ -530,7 +530,7 @@ fn SourceRow(source: fleet_shared::somework::HubSource) -> Element {
 }
 
 #[component]
-fn AgentsEvents(agents: Vec<AgentEvents>, configured: u64) -> Element {
+fn AgentsEvents(agents: Vec<AgentEvents>, configured: u64, grafana: Option<String>) -> Element {
     if configured == 0 {
         return rsx! { div { class: "platform-card", h4 { "Agent handlers and token pools", small { "not configured" } }, p { "No agent status endpoints are configured on this dashboard (agents-health.json)." } } };
     }
@@ -540,7 +540,7 @@ fn AgentsEvents(agents: Vec<AgentEvents>, configured: u64) -> Element {
             thead { tr { th { "Agent" }, th { "Events pool, today" }, th { "Handlers" } } }
             tbody {
                 if agents.is_empty() { tr { td { colspan: "3", class: "empty", "No agent answered." } } }
-                for agent in agents { AgentEventsRow { key: "{agent.id}", agent } }
+                for agent in agents { AgentEventsRow { key: "{agent.id}", agent, grafana: grafana.clone() } }
             }
         } }
     }
@@ -548,7 +548,7 @@ fn AgentsEvents(agents: Vec<AgentEvents>, configured: u64) -> Element {
 
 /// How each agent is set up, from its own `/profile`: prompt, tools, budgets, repository access, chat and events. Read-only.
 #[component]
-fn AgentSetups(agents: Vec<AgentEvents>, now: i64) -> Element {
+fn AgentSetups(agents: Vec<AgentEvents>, now: i64, grafana: Option<String>) -> Element {
     let with_setup: Vec<AgentEvents> = agents.into_iter().filter(|agent| agent.setup.is_some()).collect();
     if with_setup.is_empty() {
         return rsx! {};
@@ -556,13 +556,24 @@ fn AgentSetups(agents: Vec<AgentEvents>, now: i64) -> Element {
     rsx! {
         h3 { class: "sub", "Agent setup" }
         div { class: "setup-list",
-            for agent in with_setup { AgentSetupCard { key: "{agent.id}", agent, now } }
+            for agent in with_setup { AgentSetupCard { key: "{agent.id}", agent, now, grafana: grafana.clone() } }
         }
     }
 }
 
 fn changed_recently(setup: &AgentSetup, now: i64) -> bool {
     setup.changed_at.as_deref().and_then(fleet_shared::timestamp_ms).is_some_and(|at| now >= at && now - at < 24 * 3_600_000)
+}
+
+/// A Grafana Explore link on the Loki datasource for one stream selector, for the last hour. Both inputs were checked by the server.
+fn logs_link(base: &str, selector: &str) -> String {
+    let panes = format!(r#"{{"a":{{"datasource":"cluster-loki","queries":[{{"refId":"A","expr":{},"queryType":"range"}}],"range":{{"from":"now-1h","to":"now"}}}}}}"#, js_string(selector));
+    format!("{}/explore?schemaVersion=1&orgId=1&panes={}", base.trim_end_matches('/'), urlencoding::encode(&panes))
+}
+
+/// A JSON string literal: the selector alphabet has quotes in it, nothing else that needs escaping.
+fn js_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn bytes_text(bytes: u64) -> String {
@@ -605,8 +616,9 @@ fn budget_text(setup: &AgentSetup) -> String {
 }
 
 #[component]
-fn AgentSetupCard(agent: AgentEvents, now: i64) -> Element {
+fn AgentSetupCard(agent: AgentEvents, now: i64, grafana: Option<String>) -> Element {
     let Some(setup) = agent.setup.clone() else { return rsx! {} };
+    let logs = grafana.as_deref().zip(agent.logs.as_deref()).map(|(base, selector)| logs_link(base, selector));
     let changed = changed_recently(&setup, now);
     let tools = if setup.all_tools { "all coding tools".to_string() } else { setup.tools.join(", ") };
     let repository = &setup.repository;
@@ -636,6 +648,7 @@ fn AgentSetupCard(agent: AgentEvents, now: i64) -> Element {
                 span { class: "chip", "{setup.version}" }
                 small { "setup {setup.hash}" }
                 if changed { span { class: "chip write", "changed in the last day" } }
+                if let Some(url) = logs { a { class: "logs-link", href: "{url}", target: "_blank", rel: "noopener noreferrer", onclick: |event| event.stop_propagation(), "logs" } }
             }
             dl {
                 dt { "Capabilities" } dd { "{capabilities}" }
@@ -666,7 +679,8 @@ fn AgentSetupCard(agent: AgentEvents, now: i64) -> Element {
 }
 
 #[component]
-fn AgentEventsRow(agent: AgentEvents) -> Element {
+fn AgentEventsRow(agent: AgentEvents, grafana: Option<String>) -> Element {
+    let logs = grafana.as_deref().zip(agent.logs.as_deref()).map(|(base, selector)| logs_link(base, selector));
     let pool = agent.pools.clone();
     let handlers: Vec<(String, String, String)> = agent
         .handlers
@@ -685,7 +699,7 @@ fn AgentEventsRow(agent: AgentEvents) -> Element {
     let state = if !agent.reachable { "offline" } else { "ready" };
     rsx! {
         tr {
-            td { div { class: "machine-name", "{agent.id}" }, Status { value: state.to_string() } }
+            td { div { class: "machine-name", "{agent.id}" }, Status { value: state.to_string() }, if let Some(url) = logs.clone() { a { class: "logs-link", href: "{url}", target: "_blank", rel: "noopener noreferrer", "logs" } } }
             td {
                 if let Some(pool) = pool {
                     {
@@ -769,5 +783,15 @@ mod tests {
     fn sizes_and_uptimes_read_naturally() {
         assert_eq!((bytes_text(512), bytes_text(2048), bytes_text(8_388_608), bytes_text(3 * 1_073_741_824)), ("512 B".to_string(), "2.0 KiB".to_string(), "8.0 MiB".to_string(), "3.00 GiB".to_string()));
         assert_eq!((uptime_text(30), uptime_text(600), uptime_text(3700), uptime_text(200_000)), ("30 s".to_string(), "10 min".to_string(), "1 h 1 min".to_string(), "2 d 7 h".to_string()));
+    }
+
+    #[test]
+    fn the_log_link_opens_the_selector_on_the_loki_datasource() {
+        let link = logs_link("https://grafana.example/", r#"{container="somework-pi-agent-1"}"#);
+        assert!(link.starts_with("https://grafana.example/explore?schemaVersion=1&orgId=1&panes="));
+        let panes = urlencoding::decode(link.split("panes=").nth(1).unwrap()).unwrap().to_string();
+        assert!(panes.contains(r#""datasource":"cluster-loki""#));
+        assert!(panes.contains(r#""expr":"{container=\"somework-pi-agent-1\"}""#), "{panes}");
+        assert!(!link.contains('"') && !link.contains('{') && !link.contains(' '), "everything that is not URL-safe is encoded");
     }
 }

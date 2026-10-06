@@ -572,6 +572,7 @@ pub struct Collector {
     hub: Option<events::HubClient>,
     agent_http: reqwest::Client,
     agent_targets: Vec<events::AgentTarget>,
+    grafana_url: Option<String>,
     /// Recent firings by rule, read again only when the rule's counters moved.
     firings: BTreeMap<String, ((u64, u64), Value)>,
 }
@@ -613,12 +614,18 @@ impl Collector {
             hub: None,
             agent_http: events::agent_http_client()?,
             agent_targets: Vec::new(),
+            grafana_url: None,
             firings: BTreeMap::new(),
         })
     }
 
     pub fn with_hub(mut self, hub: events::HubClient) -> Self {
         self.hub = Some(hub);
+        self
+    }
+
+    pub fn with_grafana(mut self, url: Option<String>) -> Self {
+        self.grafana_url = url;
         self
     }
 
@@ -803,7 +810,7 @@ impl Collector {
             catalog: self.catalog.clone(),
             audit: self.audit.clone(),
             certificates: self.certificates.clone(),
-            events: EventInputs { rules, firings, hub, agents: agent_reads, agents_configured: self.agent_targets.len() as u64 },
+            events: EventInputs { rules, firings, hub, agents: agent_reads, agents_configured: self.agent_targets.len() as u64, grafana_url: self.grafana_url.clone() },
         };
         let mut sample = assemble(&inputs, &self.book, now);
         if !problems.is_empty() {

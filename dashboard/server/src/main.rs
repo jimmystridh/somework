@@ -192,6 +192,7 @@ async fn somework_collector(secrets: &std::path::Path, preview: bool) -> Result<
         let ca = fs::read_to_string(secrets.join("hub-ca.pem")).await.ok();
         collector = collector.with_hub(events::HubClient::new(hub_url, ca.as_deref(), bearer, plain)?);
     }
+    collector = collector.with_grafana(env::var("GRAFANA_URL").ok().and_then(|url| events::grafana_base(&url)));
     if let Ok(contents) = fs::read(secrets.join("agents-health.json")).await {
         collector = collector.with_agent_targets(events::parse_agent_targets(&contents)?);
     }

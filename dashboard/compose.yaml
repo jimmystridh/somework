@@ -21,6 +21,7 @@ services:
       PVE_URL: https://${PVE_HOST}:8006
       SECRETS_DIR: /run/secrets
       DATA_DIR: /data
+      GRAFANA_URL: ${GRAFANA_URL:-}                             # optional: https address of Grafana; with a `logs` selector per agents-health.json entry it makes the log links
       SOMEWORK_URL: ${SOMEWORK_URL:?the domain's TLS address}
     tmpfs: ['/tmp:size=16m,mode=1777']
     healthcheck:
