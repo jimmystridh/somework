@@ -42,3 +42,10 @@ GitHub cannot reach the private network. Webhooks arrive at the public receiver 
 ## Installing dependencies with bun
 
 The `check` pipeline runs on pull requests and on every push to `main` (the plan and its comment only on pull requests), so a code push is checked too. The `check` and `deploy` pipelines install in their own step with the official `oven/bun` image (pinned by digest): `bun install --frozen-lockfile --ignore-scripts`. Bun reads the committed `package-lock.json` (no second lockfile), installs the same package versions as `npm ci`, runs no lifecycle scripts and fails when the lockfile no longer matches a manifest. The other steps run on the node image over the same workspace. `full.yaml` still uses `npm ci`. Timings are in `TODO.txt` (section 11b, F).
+
+## Rolling agents (by hand today, from CI later)
+
+`deploy/agents/roll-agent.sh STACK_DIR VERSION_VARIABLE TAG [READY_URL] [NEW_COMPOSE_FILE]` is the one way an agent stack is moved to a new image tag: it keeps `compose.yaml` and `.env` as `*.before-TAG`, sets the tag, runs `docker compose up -d`, waits for `/ready` and, when the agent does not become ready, puts the old files back and starts the old version again (exit status 1). One-off settings, such as `AIKIDO_RESEED_HANDLER=1`, go in the environment of the command. `npm run test:scripts` tests it with a fake docker.
+
+A Woodpecker deploy pipeline is not enabled: the runner VM holds no SomeWork secrets by design, so it needs a decision first (see TODO.txt, 00 E): build the images on the agents VM over a restricted ssh key whose only permitted command is a wrapper around this script, or push images to a registry that the agents VM pulls from. Either way the pipeline would run on a push to `main` after the checks, roll one agent at a time, and stop at the first rollback.
+

@@ -13,6 +13,7 @@
   },
   "scripts": {
     "test": "npm test --workspaces --if-present",
-    "check:roles": "node scripts/check-roles.ts"
+    "check:roles": "node scripts/check-roles.ts",
+    "test:scripts": "node --test scripts/*.test.ts"
   }
 }
