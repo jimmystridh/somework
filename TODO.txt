@@ -9,30 +9,28 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
 "pilot-N" is the tag of the images built by hand on the agents VM; "rolling" is pointing an agent's .env at the new tag and restarting it
 (the old compose.yaml and .env stay next to it as *.before-pilot-N). Full test suite green on 2026-10-06 (TypeScript workspaces and cargo).
 
-A. FINISH THE pilot-12 ROLLOUT
-- Done 2026-10-06: reviewer, developer and Aikido fixer run pilot-12 (the fixer's handler was reseeded once: version 7). Images for the Datadog
-  triage agent (agent and sandbox) are built under the same tag and not started.
-- The auto-mode classifier denied several rollout steps (it let the reviewer through only after the owner said to proceed). Either add a Bash
-  permission rule for ssh to the agents VM and the Windows machines, or the owner runs the prepared scripts (scratchpad: roll-pilot12-rest.sh was
-  run; roll-pilot12-manager-hub.sh is waiting). Do not work around a denial.
-- Manager: copy the two changed files (adapters/manager/src/controls.ts and its test) and restart pi-manager.service (backup tarball first).
-  Telegram is interrupted for a few seconds.
-- Hub: build somework-events-hub:pilot-4 from the synced source (carries the Aikido mapping fix: kinds such as open_source are not a change)
-  and restart it; rollback is HUB_VERSION=pilot-3 in its .env.
-- Windows developer machine and QA machine: bring the kit code on them up to the repository (chat fixes, observe module); restart through the
-  SYSTEM helper task, verify /ready and one chat question each.
+A. ROLLOUTS
+- Done 2026-10-06: reviewer, developer and Aikido fixer on pilot-12 (the fixer's handler was reseeded once: version 7); hub on pilot-4 (carries the
+  Aikido mapping fix); the QA machine and the Windows developer machine run the current kit (QA: mirror on, PowerShell path fixed).
+- Built after that and committed, NOT deployed yet (images pilot-13 on the agents VM, see below): GitHub App identity, /profile, the workspace gate
+  (beforeWorkspace; the fixer skips an ineligible issue without a clone), catalog change (disabled agents are not offered), the domain's
+  GET /v1/admin/system, the manager's highest-version-first catalog, the dashboard with the agent setup page.
+- Still to roll: manager (pi-manager.service: copy adapters/manager/src and test, restart; backup tarball first; Telegram is interrupted for seconds),
+  the domain image (needs the catalog fix and /v1/admin/system; migrations unchanged), the dashboard image, the three Linux agents to pilot-13 with
+  deploy/agents/roll-agent.sh, the Windows machines once more (kit files, restart through the SYSTEM helper), then add the agents' /status
+  addresses to the dashboard's agents-health.json (developer 8081, reviewer 8082, fixer 8083, Datadog 8084 once it exists, Windows developer
+  http://<machine>:8081/status) so the setup cards appear.
+- The auto-mode classifier denied several rollout steps in this session (it let some through after the owner said to proceed). Either add a Bash
+  permission rule for ssh to the agents VM, or the owner runs prepared scripts. Do not work around a denial.
 - Optional: seed the fixer's ledger from earlier attempts (AIKIDO_LEDGER_IMPORT, file in its config directory; create the file before mounting it).
-- Dashboard: QA and Windows developer status paths; the fixer (8083) and Datadog agent (8084) health ports in agents-health.json (section 1, 3, 5).
 
 B. QA AGENT: PROVE A REAL VERIFICATION (section 2)
 - Fixed 2026-10-06 and live on the QA machine: the profile's start and stop commands call powershell.exe by absolute path (the start failed with
   exit 127 "command not found" on the first real run), and a persistent git mirror is on (GIT_MIRROR_DIR=C:/somework/workspaces/.mirrors; it must
-  be inside the workspace root; first refresh 98 s; examples and README updated; backups *.before-powershell-path and agent.env.before-mirror).
+  be inside the workspace root; first refresh 98 s, later ones 6 s; examples and README updated; backups *.before-powershell-path and agent.env.before-mirror).
 - Still to do: a supervised run on a real ticket in status Test: publish the transition (or let Jira send it), the owner approves in Telegram,
   read the result. Needs the ticket key from the owner. Watch that the app starts from the ticket's checkout (QA_WEB_ROOT = the admin.web
   directory of that checkout; first database boot about 3 minutes) and that the clone now takes seconds.
-- Commit the four uncommitted files after review: adapters/qa/deploy/{README.md,agent.env.example}, adapters/aikido-fixer/deploy/compose.yaml
-  (commented ledger-import mount), adapters/datadog-triage/Dockerfile (ARG moved above the first FROM; the sandbox target did not build without it).
 
 C. DATADOG TRIAGE AGENT: ENROL AND START (section 5, DATADOG TRIAGE)
 - [DECISION/owner] replace the unscoped application key with one scoped to monitors_read, logs_read_data, timeseries_query, events_read,
@@ -40,31 +38,39 @@ C. DATADOG TRIAGE AGENT: ENROL AND START (section 5, DATADOG TRIAGE)
 - Model login by device code (the owner approves); enrol `agent/datadog-triage --side-effects read --may-invoke ops.triage`; send the NATS
   broker a SIGHUP by hand (the reloader does not reach it); register and approve the card; install datadog.json; move the held rule
   (deploy/rules/datadog-triage.yaml) into rules/ so CI applies it (it is held because the pipeline fails while the agent does not exist);
-  the Datadog webhook template must carry priority and tags; start the compose stack from the pilot-12 images; one supervised triage of a
-  real monitor. Site is the EU one (api.datadoghq.eu).
+  the Datadog webhook template must carry priority and tags; start the compose stack from the pilot images (built; the Dockerfile ARG fix is
+  committed); one supervised triage of a real monitor. Site is the EU one (api.datadoghq.eu).
 
 D. GRAFANA OBSERVE TOOLS FOR THE AGENTS (section 7)
-- Run deploy/grafana/provision-reader.py to create the Viewer service account, put the token in the developer's secrets, mount it, set
-  OBSERVE_ENABLED=1 with OBSERVE_SCOPE=own on the developer first (fleet scope only where wanted), open a narrow network rule from the
-  agents VM to Grafana, then ask the agent for its own logs and history. The manager does not have the tools yet.
+- Done: a read-only service account somework-agents-reader (Viewer) exists in Grafana; its token is in ~/.somework-pilot/grafana-reader-token (0600,
+  not on any agent host).
+- BLOCKED on a network decision: Grafana listens on the observability VM's loopback only (the tailnet gateway admits the owner only), so an agent
+  cannot reach it. The route I designed: a second nginx listener on the private address (own port, same certificate as the log ingest), GET only,
+  three paths (Loki query/labels/series through the datasource proxy, alert rules, dashboard search), fed by a firewall rule for the agents VM
+  alone. The auto-mode classifier refused it as a weakened security boundary, so nothing was changed (a broken first attempt of mine was removed
+  and nginx checked). [DECISION] approve that route (then: mount the token on the developer, OBSERVE_ENABLED=1, OBSERVE_SCOPE=own,
+  OBSERVE_OWN='container="somework-pi-agent-1"', GRAFANA_CA_FILE = the logging CA, ask the agent for its own logs), or give agents a different
+  path to the logs.
+- The manager does not have the tools: its brain is a separate Pi container that only knows the gateway's routes, so it needs gateway routes over
+  the kit's ObserveService and tool definitions in the container's extension.
 
-E. CI: DEPLOY THROUGH WOODPECKER INSTEAD OF BY HAND (proposal, owner to confirm)
-- Today Woodpecker only checks pull requests and pushes and applies rules/. Image builds and rollouts are manual. Plan: a deploy pipeline on
-  push to main that builds the images, runs the tests and rolls one agent at a time with a health check and automatic rollback. Start with the
-  reviewer only. Needs: an image registry or a build over a restricted ssh key that may run one fixed script on the agents VM (the CI runner
-  deliberately holds no SomeWork secrets, so a new narrow deploy credential), a record of which tag each agent runs, and CODEOWNERS on the
-  pipeline files. [DECISION] registry vs build on the agents VM.
+E. CI: DEPLOY THROUGH WOODPECKER INSTEAD OF BY HAND (section 00 E of the first version; docs/CI.md "Rolling agents")
+- Done: deploy/agents/roll-agent.sh (backup, new tag, wait for /ready, automatic restore) with tests (npm run test:scripts).
+- Open [DECISION]: how CI reaches the agents VM (restricted ssh key limited to a wrapper around the script, or an image registry), and a
+  pipeline that rolls one agent at a time after the checks. Start with the reviewer.
 
 F. DECISIONS WAITING FOR THE OWNER (also in sections 11b and 12)
 - bun in CI: adopted and committed (check on every push to main, install with bun); keep or revert (section F below).
 - Off-host backup site and a restore drill; hypervisor firewall to default-deny (section 0).
-- Telegram and Slack gateway design (11b D); a separate GitHub identity for the bots (11b A); on-demand Windows machines (11b C);
-  allowing pipes of read-only programs in the reviewer's command check; dedicated Jira account and certificate for the QA agent.
+- Telegram and Slack gateway design (11b D); GitHub Apps for the bots (11b A: register one app per role, then set GITHUB_APP_ID, the key file and
+  the installation id; the kit side is done); on-demand Windows machines (11b C); allowing pipes of read-only programs in the reviewer's command
+  check; dedicated Jira account and certificate for the QA agent; a license for the repository.
 - Wire the remaining senders: GitHub and Datadog webhooks (Jira and Aikido already deliver); refine the Aikido mapping from a real payload.
 
 G. KNOWN MINOR (nobody blocked)
 - The developer's events token pool stays throttled until the daily rollover; 163 failed acceptance tasks remain in the domain history;
-  the CI runner does not ship logs to Loki yet; the Rust stress test ten_times_stress_degrades_gracefully_without_errors is load-sensitive
+  the CI runner does not ship logs to Loki yet; chat conversations pile up in each agent's pi.sqlite (Pi Durable has no retention API; pruning
+  would mean editing its database directly); requester inboxes are bounded by the 90-day message retention; the Rust stress test ten_times_stress_degrades_gracefully_without_errors is load-sensitive
   (passed in the last full run); the NATS reloader does not signal the broker; the QA agent's log-file gap (section 2) is unreproduced.
 
 --------------------------------------------------------------------------------------
@@ -440,6 +446,11 @@ hub restarts lose and duplicate nothing; a Grafana alert reaches the manager. St
 11b. BACKLOG FROM THE OWNER (2026-10-06)
 --------------------------------------------------------------------------------------
 A. A SEPARATE GITHUB IDENTITY FOR THE BOTS (GitHub App?)
+- STATUS 2026-10-06: the kit side is built and committed (packages/agent-kit/src/github-app.ts, README "GitHub App identity"): GITHUB_APP_ID +
+  GITHUB_APP_KEY_FILE (+ GITHUB_APP_INSTALLATION_ID, GITHUB_APP_REPOSITORIES) replace GIT_TOKEN_FILE, installation tokens are minted and renewed before
+  every git command and pull request call, commits use the bot's noreply identity. Left for the owner: register one app per role in the organisation,
+  install it on the one repository, hand over the app id, installation id and private key (0600 file on the agent host), and retire the old tokens.
+  Not decided: branch protection / CODEOWNERS treatment of the bot accounts.
 - Today every agent push and pull request is made with a fine-grained personal token, so the pull request author, the commits' pusher
   and every API call show up as the owner's own account (pull request 5229 is "opened by" the owner). Reviewers cannot tell agent work
   from human work except by the body text.
@@ -457,6 +468,10 @@ A. A SEPARATE GITHUB IDENTITY FOR THE BOTS (GitHub App?)
   developer tokens 2027-01-03, Aikido fixer 90 days from 2026-10-06, developer early November 2026.
 
 B. SHOW THE BOT SETUP AND PROMPTS CLEARLY IN "AGENT OPERATIONS" (the Fleet dashboard)
+- STATUS 2026-10-06: built and committed, not deployed: every kit service serves /profile (packages/agent-kit/src/describe.ts), the dashboard source is now
+  in dashboard/ and shows one setup card per agent (role, tag, setup hash and change time, capabilities, model, budgets, tools and approval patterns,
+  repository access with credential kind and bot login, skills, chat and events, prompt text). Not in the first list yet: egress allow-list (the
+  agent does not know its proxy's list), the rules that wake it, links to its runbook and logs. Needs the rollout in section 00 A.
 - Today the dashboard shows liveness, work, approvals and (new) events, handlers and pools, metadata only. Nothing explains HOW an agent is
   set up. Wanted per agent, on one detail page: identity and role, capability card (id, version, side effects, input schema), the system
   prompt as deployed (read-only text plus a hash and version), allowed tools and approval patterns, budgets and limits (per job, daily,
