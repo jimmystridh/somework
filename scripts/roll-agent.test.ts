@@ -65,6 +65,20 @@ describe("roll-agent.sh", () => {
 		assert.match(readFileSync(join(r.stack, ".env.before-pilot-2"), "utf8"), /AGENT_VERSION=pilot-1/, "the second run must not overwrite the backup with the new state");
 	});
 
+	it("sets every variable of a stack that runs images of more than one tag, and restores them all", () => {
+		const r = rig({ readyWhen: () => false });
+		writeFileSync(join(r.stack, ".env"), "AGENT_VERSION=pilot-1\nSANDBOX_VERSION=pilot-1\nOTHER=1\n");
+		const failed = r.run([r.stack, "AGENT_VERSION,SANDBOX_VERSION", "pilot-2", "http://agent/ready"]);
+		assert.equal(failed.status, 1);
+		assert.equal(readFileSync(join(r.stack, ".env"), "utf8"), "AGENT_VERSION=pilot-1\nSANDBOX_VERSION=pilot-1\nOTHER=1\n", "both are back");
+		const ok = rig({ readyWhen: () => true });
+		writeFileSync(join(ok.stack, ".env"), "AGENT_VERSION=pilot-1\nSANDBOX_VERSION=pilot-1\nOTHER=1\n");
+		assert.equal(ok.run([ok.stack, "AGENT_VERSION,SANDBOX_VERSION", "pilot-2", "http://agent/ready"]).status, 0);
+		assert.equal(readFileSync(join(ok.stack, ".env"), "utf8"), "AGENT_VERSION=pilot-2\nSANDBOX_VERSION=pilot-2\nOTHER=1\n");
+		assert.notEqual(ok.run([ok.stack, "AGENT_VERSION,,SANDBOX_VERSION", "pilot-3"]).status, 0);
+		assert.notEqual(ok.run([ok.stack, "AGENT_VERSION,MISSING_VERSION", "pilot-3"]).status, 0);
+	});
+
 	it("refuses odd arguments before touching anything", () => {
 		const r = rig({ readyWhen: () => true });
 		for (const args of [[r.stack, "agent_version", "pilot-2"], [r.stack, "AGENT_VERSION", "pilot 2; rm -rf /"], [r.stack, "MISSING_VERSION", "pilot-2"], [join(r.root, "nowhere"), "AGENT_VERSION", "pilot-2"], [r.stack]]) {

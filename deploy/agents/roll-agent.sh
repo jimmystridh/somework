@@ -4,7 +4,8 @@
 #   roll-agent.sh STACK_DIR VERSION_VARIABLE TAG [READY_URL] [NEW_COMPOSE_FILE]
 #
 #   STACK_DIR         the directory with compose.yaml and .env of the stack (for example ~/somework-pilot/reviewer)
-#   VERSION_VARIABLE  the .env variable that holds the image tag (PI_VERSION, REVIEWER_VERSION, FIXER_VERSION, ...)
+#   VERSION_VARIABLE  the .env variable that holds the image tag (PI_VERSION, REVIEWER_VERSION, FIXER_VERSION, ...); several, comma separated, when a stack
+#                     runs images of more than one tag (REVIEWER_VERSION,SANDBOX_VERSION)
 #   TAG               the new tag, built beforehand (docker image must exist)
 #   READY_URL         the agent's /ready address; without it only "the containers are running" is checked
 #   NEW_COMPOSE_FILE  a compose file from the repository to install first
@@ -22,17 +23,18 @@ ready_url=${4:-}
 new_compose=${5:-}
 ready_seconds=${READY_SECONDS:-90}
 
-case "$variable" in *[!A-Z0-9_]*|"") echo "the version variable must be an upper-case .env name" >&2; exit 2;; esac
+case "$variable" in *[!A-Z0-9_,]*|""|,*|*,|*,,*) echo "the version variable must be an upper-case .env name (several separated by commas)" >&2; exit 2;; esac
 case "$tag" in *[!A-Za-z0-9._-]*|"") echo "the tag may only hold letters, digits, dot, underscore and hyphen" >&2; exit 2;; esac
 cd "$dir"
 [ -f compose.yaml ] && [ -f .env ] || { echo "$dir has no compose.yaml and .env" >&2; exit 2; }
-grep -q "^$variable=" .env || { echo "$variable is not set in $dir/.env" >&2; exit 2; }
-previous=$(sed -n "s/^$variable=//p" .env | head -n 1)
+for name in $(echo "$variable" | tr , ' '); do grep -q "^$name=" .env || { echo "$name is not set in $dir/.env" >&2; exit 2; }; done
+first=${variable%%,*}
+previous=$(sed -n "s/^$first=//p" .env | head -n 1)
 
 [ -f "compose.yaml.before-$tag" ] || cp compose.yaml "compose.yaml.before-$tag"
 [ -f ".env.before-$tag" ] || cp .env ".env.before-$tag"
 [ -z "$new_compose" ] || cp "$new_compose" compose.yaml
-sed "s/^$variable=.*/$variable=$tag/" .env > .env.next && cat .env.next > .env && rm -f .env.next
+for name in $(echo "$variable" | tr , ' '); do sed "s/^$name=.*/$name=$tag/" .env > .env.next && cat .env.next > .env && rm -f .env.next; done
 
 wait_ready() {
   waited=0

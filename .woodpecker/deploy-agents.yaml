@@ -1,0 +1,31 @@
+when:
+  - event: push
+    branch: main
+    path:
+      include:
+        - adapters/**
+        - packages/**
+        - sdk/**
+        - package-lock.json
+        - deploy/agents/deploy-from-ci.sh
+        - deploy/agents/roll-agent.sh
+        - .woodpecker/deploy-agents.yaml
+  - event: manual
+
+# Runs only when the checks of the same commit passed. The key's only permitted command on the agents VM is deploy/agents/deploy-from-ci.sh, which
+# builds the images there and rolls the four agent stacks one at a time (backup, wait for /ready, automatic restore); the runner holds nothing else.
+depends_on:
+  - check
+
+steps:
+  - name: deploy
+    image: node:22.19.0-bookworm
+    environment:
+      DEPLOY_KEY:
+        from_secret: somework_deploy_key
+    commands:
+      - umask 077
+      - mkdir -p ~/.ssh
+      - printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+      - printf '%s\n' '10.10.10.11 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKwSX4MfRnc0pRw+ZgZfUiy1eKJneBvBnv1YSuSiEMdc' > ~/.ssh/known_hosts
+      - tar czf - --exclude=.git --exclude=node_modules --exclude=target --exclude=dashboard/node_modules . | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes js@10.10.10.11 "deploy $CI_COMMIT_SHA"

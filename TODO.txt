@@ -61,8 +61,9 @@ D. GRAFANA OBSERVE TOOLS FOR THE AGENTS (LIVE for the three Linux agents since 2
 
 E. CI: DEPLOY THROUGH WOODPECKER INSTEAD OF BY HAND (section 00 E of the first version; docs/CI.md "Rolling agents")
 - Done: deploy/agents/roll-agent.sh (backup, new tag, wait for /ready, automatic restore) with tests (npm run test:scripts).
-- Open [DECISION]: how CI reaches the agents VM (restricted ssh key limited to a wrapper around the script, or an image registry), and a
-  pipeline that rolls one agent at a time after the checks. Start with the reviewer.
+- Done 2026-10-06: .woodpecker/deploy-agents.yaml after the checks, over a forced-command ssh key (runner address only) to deploy/agents/deploy-from-ci.sh on
+  VM102, which builds the images as ci-<sha> and rolls datadog-triage, reviewer, fixer and developer one at a time with automatic restore.
+  Rotating the key or changing the wrapper is by hand (docs/CI.md).
 
 F. DECISIONS WAITING FOR THE OWNER (also in sections 11b and 12)
 - bun in CI: adopted and committed (check on every push to main, install with bun); keep or revert (section F below).
