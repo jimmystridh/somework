@@ -417,7 +417,7 @@ describe("beforeRun and afterRun", () => {
 		});
 		const run = () =>
 			handler({ taskId: "task_1", task: {}, input: { repository: { url: remote, ref: "main" }, instruction: "x", budget: { maxTokens: 5000, maxMinutes: 1 } }, capability: { id: "code.agent", version: "1" } } as unknown as Job, { signal: new AbortController().signal, progress() {} } as unknown as JobControl) as Promise<any>;
-		return { run, logs };
+		return { run, logs, workspaceRoot };
 	}
 
 	it("runs before the model with the workspace ready, and after it, in that order", async () => {
@@ -450,6 +450,36 @@ describe("beforeRun and afterRun", () => {
 		assert.deepEqual([outcome.result.status, outcome.result.why, outcome.result.answer, outcome.result.tokens], ["blocked", "the application did not start", "", 0]);
 		assert.deepEqual(order, ["after"]);
 		assert.ok(logs.some((l) => l.event === "job_blocked" && l.fields.before === "run"));
+	});
+
+	it("a blocked beforeWorkspace clones nothing, calls neither the model nor beforeRun nor afterRun, and still reports through result", async () => {
+		const order: string[] = [];
+		let modelCalls = 0;
+		const { run, logs, workspaceRoot } = setup(
+			{
+				beforeWorkspace: (input, { taskId }) => (order.push(`gate:${taskId}:${input.instruction}`), { blocked: { reason: "not worth a checkout" } }),
+				beforeRun: async () => void order.push("beforeRun"),
+				afterRun: async () => void order.push("afterRun"),
+				result: (base, ctx) => ({ result: { ...base, why: ctx.blocked!.reason, workspace: ctx.workspace } }),
+			},
+			async () => (modelCalls++, { status: "done", answer: "ok", usage: emptyUsage() }),
+		);
+		const outcome = await run();
+		assert.equal(outcome.type, "completed");
+		assert.deepEqual([outcome.result.status, outcome.result.why, outcome.result.workspace], ["blocked", "not worth a checkout", ""]);
+		assert.equal(modelCalls, 0);
+		assert.deepEqual(order, ["gate:task_1:x"]);
+		assert.equal(existsSync(workspaceRoot), false, "no workspace was made");
+		assert.ok(logs.some((l) => l.event === "job_blocked" && l.fields.before === "workspace"));
+	});
+
+	it("a beforeWorkspace that passes lets the job run as usual, and one that throws fails it as retryable", async () => {
+		const passing = setup({ beforeWorkspace: () => undefined }, async () => ({ status: "done", answer: "ok", usage: emptyUsage() }));
+		assert.equal((await passing.run()).type, "completed");
+		const throwing = setup({ beforeWorkspace: () => { throw new Error("lookup failed"); } }, async () => ({ status: "done", answer: "ok", usage: emptyUsage() }));
+		const outcome = await throwing.run();
+		assert.equal(outcome.type, "failed");
+		assert.equal(outcome.failure.retryable, true);
 	});
 
 	it("afterRun runs when beforeRun throws, when the model fails and when the run detaches", async () => {

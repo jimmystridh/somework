@@ -125,6 +125,17 @@ describe("preparing a task", () => {
 		assert.match(secondGate.blocked.reason, /less than 180 minutes ago/);
 	});
 
+	it("ends an ineligible task before any clone: the workspace gate skips it with the same reason", async () => {
+		const low = rig({}, async () => ({ group: group({ severity: "low" }), issue }));
+		await prepare(low, "t1");
+		const gate = await low.hooks.beforeWorkspace!({}, { taskId: "t1", log: () => {} });
+		assert.ok(gate && "blocked" in gate);
+		assert.match(gate.blocked.reason, new RegExp(`^${SKIPPED}the severity low is below the threshold high`));
+		const eligible = rig();
+		await prepare(eligible, "a");
+		assert.equal(await eligible.hooks.beforeWorkspace!({}, { taskId: "a", log: () => {} }), undefined);
+	});
+
 	it("chooses one branch name per task, from the issue and the commit, and keeps it when the base moves", async () => {
 		const r = rig();
 		await prepare(r, "t1");

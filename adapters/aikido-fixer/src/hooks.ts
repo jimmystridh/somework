@@ -81,7 +81,7 @@ function parseInput(input: any): FixInput {
  * The role's code on top of the kit's repository handler:
  *  - `prepareInput` checks the repository, reads the issue from Aikido, decides whether the issue is this agent's to fix and counts the
  *    attempt on the service host;
- *  - `beforeRun` ends an ineligible task as `skipped` before a token is spent;
+ *  - `beforeWorkspace` ends an ineligible task as `skipped` before anything is cloned or a token is spent (`beforeRun` keeps the same check);
  *  - `resume` lets a retry of a task whose branch was already pushed open the missing pull request without running the model again;
  *  - `beforeFinalize` turns "no safe fix" into an untouched tree and holds back a change that touches protected paths, is too large,
  *    contains secret-like text or fails the repository's check profile; it judges everything since the base commit, so a commit an earlier
@@ -143,6 +143,11 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 		branchName({ taskId, baseSha }) {
 			const state = stateOf(taskId);
 			return attempts.branchFor(taskId, () => `agent/aikido-${state.summary.groupId}-${baseSha.slice(0, 8)}`);
+		},
+
+		beforeWorkspace(_input, { taskId }) {
+			const state = stateOf(taskId);
+			if (state.skip) return { blocked: { reason: `${SKIPPED}${state.skip}`, details: { issue: state.summary.groupId } } };
 		},
 
 		async beforeRun(context) {

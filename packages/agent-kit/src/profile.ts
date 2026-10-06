@@ -182,6 +182,12 @@ export interface RoleHooks {
 	 */
 	beforeRun?(context: RunContext): Promise<void | { blocked: Blocked }>;
 	/**
+	 * After the input is checked and before anything is cloned: a role that can tell from the input alone that a job is not worth a checkout
+	 * (an ineligible issue, a duplicate) returns `{ blocked }`. The task then completes as `blocked` through the `result` hook, with no workspace,
+	 * no model call, and without `beforeRun` or `afterRun` (nothing was started). Throwing fails the job as a retryable `job_error`.
+	 */
+	beforeWorkspace?(input: any, context: { taskId: string; log: Log }): Promise<void | { blocked: Blocked }> | void | { blocked: Blocked };
+	/**
 	 * After the model run, whatever happened (answer, failure, stop, detach, blocked, a throwing `beforeRun`): stop what `beforeRun` started.
 	 * Called once per attempt as soon as the workspace was ready (not when the ref could not be resolved); an error it throws is logged and
 	 * never changes the outcome.

@@ -162,6 +162,18 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		const fields = { taskId, agentKey };
 		let runStarted: JobContext | undefined;
 		try {
+			if (hooks?.beforeWorkspace) {
+				const gate = await hooks.beforeWorkspace(prepared, { taskId, log });
+				if (gate && "blocked" in gate) {
+					m.duration((Date.now() - started) / 1000, { status: "blocked" });
+					m.jobs({ status: "blocked" });
+					log("info", "job_blocked", { ...fields, reason: gate.blocked.reason.slice(0, 200), before: "workspace" });
+					const unstarted: JobContext = { taskId, input: prepared, instruction, workspace: "", baseSha: "", baseBranch: "", envFor, client: deps.client, log };
+					const patch = await hooks.result?.({ status: "blocked", summary: "", usage: { totalTokens: 0, costUsd: 0 } }, { ...unstarted, answer: "", usage: emptyUsageValue(), blocked: gate.blocked });
+					if (patch?.failure) return { type: "failed", failure: patch.failure };
+					return { type: "completed", result: patch?.result ?? { status: "blocked", summary: "", usage: { totalTokens: 0, costUsd: 0 } }, artifacts: patch?.artifacts ?? [] };
+				}
+			}
 			let base;
 			try {
 				if (scratch) base = await prepareScratchWorkspace(deps.session, workspace);
