@@ -8,7 +8,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-force-exit --test-concurrency=1 test/*.test.ts",
     "start": "node --disable-warning=ExperimentalWarning src/main.ts"
   }
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -12,12 +12,22 @@ import { createHubServer } from "../src/server.ts";
 import { githubPr, MAPPINGS, post, removeDir, SECRET, startEdge, startWorld, tempDir, waitFor, type World } from "./support.ts";
 
 const worlds: World[] = [];
+const servers: Server[] = [];
+const hubServer = (...args: Parameters<typeof createHubServer>) => {
+	const server = createHubServer(...args);
+	servers.push(server);
+	return server;
+};
 const world = async (...args: Parameters<typeof startWorld>) => {
 	const w = await startWorld(...args);
 	worlds.push(w);
 	return w;
 };
 afterEach(async () => {
+	while (servers.length) {
+		const server = servers.pop()!;
+		if (server.listening) await new Promise((r) => { server.closeAllConnections(); server.close(r); });
+	}
 	while (worlds.length) {
 		const w = worlds.pop()!;
 		await w.hub.stop().catch(() => {});
@@ -291,7 +301,7 @@ describe("forward-only sources", () => {
 	it("keeps the query out of the operator's dead-letter listing", async () => {
 		const t = await target([400]);
 		const w = await world({ forwardUrl: t.baseUrl });
-		const server = createHubServer(w.hub, w.store, SECRET);
+		const server = hubServer(w.hub, w.store, SECRET);
 		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 		await post(w.edge.hook("woodpecker", 1, `/api/hook?access_token=${jwt}`), { headers: { "x-github-event": "push", "content-type": "application/json" }, body: "{}" });
 		w.hub.start();
@@ -332,7 +342,7 @@ describe("forward-only sources", () => {
 describe("the internal listener", () => {
 	it("accepts Grafana alerts with the source token and publishes one event per alert", async () => {
 		const w = await world();
-		const server = createHubServer(w.hub, w.store, SECRET);
+		const server = hubServer(w.hub, w.store, SECRET);
 		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 		const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		const token = hookToken(SECRET, "grafana", 1);
@@ -348,7 +358,7 @@ describe("the internal listener", () => {
 		w.hub.start();
 		await waitFor(() => w.domain.uniqueEvents === 2, 8000, "two Grafana events");
 		assert.deepEqual(w.domain.calls.map((c) => c.issuer), ["service:producer/grafana", "service:producer/grafana"]);
-		assert.equal(w.store.inboxSize(), 0);
+		await waitFor(() => w.store.inboxSize() === 0, 8000, "the inbox to drain");
 		await new Promise((r) => { server.closeAllConnections(); server.close(r); });
 	});
 });
@@ -356,7 +366,7 @@ describe("the internal listener", () => {
 describe("operating the hub", () => {
 	it("pauses and resumes a source: webhooks are refused at the edge, and ones already pulled are dropped", async () => {
 		const w = await world();
-		const server = createHubServer(w.hub, w.store, SECRET);
+		const server = hubServer(w.hub, w.store, SECRET);
 		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 		const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		const admin = { authorization: `Bearer ${adminToken(SECRET)}` };
@@ -382,7 +392,7 @@ describe("operating the hub", () => {
 
 	it("reports sources, the clock's next runs and the receiver on /admin/stats, behind the admin bearer", async () => {
 		const w = await world({ clock: { producer: { keyFile: "x" }, schedules: [{ name: "nightly_digest", cron: "0 23 * * *", timeZone: "Europe/Stockholm" }] } });
-		const server = createHubServer(w.hub, w.store, SECRET);
+		const server = hubServer(w.hub, w.store, SECRET);
 		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 		const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		const admin = { authorization: `Bearer ${adminToken(SECRET)}` };
@@ -424,7 +434,7 @@ describe("operating the hub", () => {
 
 	it("exposes health and Prometheus metrics", async () => {
 		const w = await world();
-		const server = createHubServer(w.hub, w.store, SECRET);
+		const server = hubServer(w.hub, w.store, SECRET);
 		await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
 		const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		await post(w.edge.hook("github"), githubPr("m-1"));
