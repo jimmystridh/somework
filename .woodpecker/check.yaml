@@ -1,11 +1,15 @@
 when:
   - event: pull_request
+  - event: push
+    branch: main
 
 steps:
   - name: install
-    image: node:22.19.0-bookworm
+    # bun reads the npm lockfile (package-lock.json), installs the same 127 package versions, runs no lifecycle scripts and fails when the
+    # lockfile is stale; later steps run on node because the tests and tools are written for it
+    image: oven/bun@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895
     commands:
-      - npm ci --ignore-scripts
+      - bun install --frozen-lockfile --ignore-scripts
 
   - name: boundaries
     image: node:22.19.0-bookworm
@@ -26,6 +30,8 @@ steps:
 
   - name: plan-rules
     image: node:22.19.0-bookworm
+    when:
+      - event: pull_request
     environment:
       SOMEWORK_URL:
         from_secret: somework_url
@@ -50,4 +56,5 @@ steps:
       - test -f plan.md
       - node packages/rules-cli/src/main.ts comment --file plan.md --repo "$CI_REPO" --pr "$CI_COMMIT_PULL_REQUEST"
     when:
-      - status: [success, failure]
+      - event: pull_request
+        status: [success, failure]
