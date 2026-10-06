@@ -1,5 +1,0 @@
-name: datadog-triage
-description: Every Datadog monitor event wakes the Datadog triage agent, whose own handler decides whether an alert is worth a triage (state, priority, monitor list, tags, cool-down, daily cap) and starts at most one ops.triage task for itself.
-owner: agent/datadog-triage
-selector: datadog.monitor.*
-wake: true
