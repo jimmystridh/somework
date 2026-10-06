@@ -40,8 +40,13 @@ C. DATADOG TRIAGE AGENT (LIVE since 2026-10-06; section 5, DATADOG TRIAGE)
   handler decision `submit`).
 - The webhook's hub token was rotated after it appeared in a command output (datadog source version 2 in the hub and receiver configs; old URL answers 401).
   The same slip printed the INTERNAL Grafana contact-point path once; it only works on the private network, rotate it (grafana source version) if that matters.
-- Left for the owner: put `@webhook-somework-hub` into the messages of the monitors that should be triaged (monitors were deliberately not edited), and
-  decide DD_MIN_PRIORITY / DD_DAILY_CAP / DD_COOLDOWN_MINUTES (defaults P3, 20 a day, 60 minutes) before many monitors point at it.
+- Monitor wiring (done 2026-10-06 on the owner's instruction "all the monitors", through the Datadog MCP): `@webhook-somework-hub` was appended
+  (after a blank line) to the message of 49 of the 58 monitors; every message was compared with the saved original (old text + the handle, byte for byte;
+  no other field changed). Originals: ~/.somework-pilot/datadog-stage/monitors-before-wiring.json (0600); undo = put each saved message back. The nine
+  Synthetics checks (three Administration API health checks, three AHS health checks, the frontend check and two paused default-template tests on the
+  marketing sites) are NOT wired: Datadog refuses message edits through the monitor API and the MCP's update_synthetics_test fails (it sends read-only
+  fields back, 400); add the handle to those tests in the Datadog UI. Triage cost is bounded by DD_DAILY_CAP (20 a day), the 60-minute cool-down per
+  monitor and DD_MIN_PRIORITY (P3); tune them in the agent's .env if many monitors start firing.
 
 D. GRAFANA OBSERVE TOOLS FOR THE AGENTS (LIVE for the three Linux agents since 2026-10-06; section 7)
 - Done: read-only service account somework-agents-reader (Viewer); an nginx listener on the observability VM's private address (port 9444, same certificate as
