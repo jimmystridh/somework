@@ -820,12 +820,24 @@ impl Domain {
                 continue;
             }
 
+            // disabling the agent's principal is what stops it claiming work; the card's own status does not follow it
+            let principal_status: Option<String> =
+                sqlx::query_scalar("SELECT status FROM principals WHERE domain_id = ? AND kind = 'agent' AND external_id = ?")
+                    .bind(&self.cfg.domain_id)
+                    .bind(&e.agent_id)
+                    .fetch_optional(&mut *conn)
+                    .await
+                    .db()?;
+            let status = if principal_status.as_deref() == Some("disabled") { "disabled".to_string() } else { scol(&e.row, "agent_status") };
             let availability = {
-                let status = scol(&e.row, "agent_status");
                 let ids: Vec<String> = e.card.capabilities.iter().map(|c| c.id.clone()).collect();
                 self.agent_availability(&mut conn, &e.agent_id, &status, &ids).await?
             };
             if !req.availability.is_empty() && !req.availability.contains(&availability.state) {
+                continue;
+            }
+            // A disabled agent will never claim work: offering it would only queue tasks nobody takes. Asking for offline entries shows it.
+            if status == "disabled" && !req.availability.contains(&AvailabilityState::Offline) {
                 continue;
             }
 

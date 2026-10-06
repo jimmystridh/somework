@@ -292,3 +292,17 @@ async fn logical_agents_are_distinct_from_runtime_instances() {
     env.advance(600);
     assert_eq!(find().await, AvailabilityState::Queueable);
 }
+
+#[tokio::test]
+async fn a_disabled_agent_is_not_offered_unless_offline_entries_are_asked_for() {
+    let (env, _r, _d) = env_with_agents().await;
+    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(caller_permissions(&["code.*", "deployment.*"], SideEffects::Read))).await;
+    let s = env.ctx(&seeker).await;
+    let by_cap = || SearchRequest { required_capabilities: vec!["code.review".into()], ..Default::default() };
+    assert_eq!(env.domain.search_catalog(&s, by_cap()).await.unwrap().matches.len(), 1);
+    env.domain.update_principal(&env.admin_ctx().await, ActorKind::Agent, "agent/reviewer", None, Some("disabled".into()), None).await.unwrap();
+    assert!(env.domain.search_catalog(&s, by_cap()).await.unwrap().matches.is_empty(), "a disabled agent is not offered");
+    let offline = env.domain.search_catalog(&s, SearchRequest { availability: vec![AvailabilityState::Offline], ..by_cap() }).await.unwrap();
+    assert_eq!(offline.matches.len(), 1, "it is still found when offline entries are asked for");
+    assert_eq!(offline.matches[0].availability, AvailabilityState::Offline);
+}
