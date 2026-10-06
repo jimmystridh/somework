@@ -12,7 +12,9 @@ import { isPrivateUserMessage, textChunks, validPairing, type TelegramApi } from
 
 const HELP = [
 	"Ordinary messages go to the Manager (Pi in /workspace). It can find and use the other agents, and asks you before anything that writes.",
+	"Chat with an agent: /ask <agent> <text> (the name may be short, like reviewer); its answer arrives here, and you are told if none comes in 3 minutes. 30 messages per hour, 2000 characters each.",
 	"Commands: /agents, /tasks, /pending, /approve <id>, /deny <id>, /approvals, /answer <taskId> <text>, /cancel <taskId>, /status, /stop, /workspace, /help.",
+	"Instructions: a message to an agent that starts with instruct: (/ask reviewer instruct: ...) makes it do work; when it needs your approval for a step you get a question here and answer with /chatapprove <id> or /chatdeny <id>.",
 	"Events: /rules, /pause <rule>, /resume <rule>, /sources, /pausesource <source>, /resumesource <source>, /handlers <agent>, /kill <agent> <handler|all> [reason], /unkill <agent> <handler|all>.",
 	"A reply to a question message answers that task: yes/no approves or denies, anything else is passed as the answer. Text only.",
 ].join("\n");
@@ -125,6 +127,13 @@ export class TelegramBridge implements Owner {
 	 * handlers, used-up token pools). Shown as plain text after `defang`, limited per sender so one noisy agent cannot flood the chat.
 	 */
 	async forwardMessage(message: InboundMessage): Promise<void> {
+		if (await this.service?.chats?.route(message)) return;
+		const chat = this.service?.chats;
+		if (chat && message.type === "chat.message" && message.labels?.eventNotice !== "true") {
+			// a plain direct chat from an agent outside any conversation the owner started: still shown, with the agent's name as title
+			await chat.show(message, false);
+			return;
+		}
 		const { pass, carried } = this.#notices.take(message.from);
 		if (carried > 0) await this.tell(`${carried} more messages from ${defang(message.from)} were suppressed in the last hour.`);
 		if (!pass) return;
@@ -284,6 +293,29 @@ export class TelegramBridge implements Owner {
 				const [agent, handler, ...reason] = rest;
 				return this.control(say, { action: name.toLowerCase() === "/kill" ? "kill_handler" : "unkill_handler", agent, handler, reason: reason.join(" ") || undefined });
 			}
+			case "/chatapprove":
+			case "/chatdeny":
+				return this.needService(say, async (service) => {
+					if (!argument || !service.chats) return say("Usage: /chatapprove <id> or /chatdeny <id>, with the id from the question.");
+					const approved = name.toLowerCase() === "/chatapprove";
+					try {
+						const { agent } = await service.chats.decide(argument, approved);
+						await say(`${approved ? "Approved" : "Denied"} for ${defang(agent)}.`);
+					} catch (error) {
+						await say(error instanceof PolicyError ? error.message : `Could not send the answer: ${error instanceof Error ? clip(defang(error.message), 200) : "error"}`);
+					}
+				});
+			case "/ask":
+				return this.needService(say, async (service) => {
+					const [agent, ...words] = rest;
+					if (!agent || words.length === 0) return say("Usage: /ask <agent> <text>, for example /ask reviewer what can you do?");
+					try {
+						// the service tells the owner "sent, waiting for a reply" itself, so the same text comes from /ask and from the tool
+						await service.ask({ agent, text: words.join(" ") });
+					} catch (error) {
+						await say(error instanceof PolicyError ? error.message : `Could not send: ${error instanceof Error ? clip(defang(error.message), 200) : "error"}`);
+					}
+				});
 			case "/answer": {
 				const [taskId, ...words] = rest;
 				if (!taskId || words.length === 0) return say("Usage: /answer <taskId> <text>");

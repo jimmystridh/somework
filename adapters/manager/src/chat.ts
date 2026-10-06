@@ -1,0 +1,184 @@
+import type { DomainApi, InboundMessage } from "./domain.ts";
+import { PolicyError, RateLimiter } from "./policy.ts";
+import { defang } from "./redact.ts";
+import type { ManagerState, SaveState } from "./state.ts";
+
+export const AUTO_REPLY_LABEL = "autoReply";
+
+export const MAX_ASK_CHARS = 2000;
+export const ASKS_PER_HOUR = 30;
+export const REPLY_TIMEOUT_MS = 3 * 60_000;
+const REPLY_PART_CHARS = 3500;
+const REPLY_MAX_CHARS = 14_000;
+const KEEP_CHATS = 50;
+const KEEP_APPROVALS = 20;
+/** An agent denies an unanswered question after its own timeout (ten minutes by default); an answer later than this is not sent. */
+export const CHAT_APPROVAL_TTL_MS = 30 * 60_000;
+export const CHAT_APPROVAL_REQUEST_LABEL = "chatApprovalRequest";
+export const CHAT_APPROVAL_DECISION_LABEL = "chatApprovalDecision";
+const APPROVAL_ID = /^[0-9a-f]{12}$/;
+
+export interface ChatOwner {
+	tell(text: string): Promise<number | undefined>;
+}
+
+export interface ChatDeps {
+	domain: DomainApi;
+	owner: ChatOwner;
+	state: ManagerState;
+	save: SaveState;
+	/** Agent ids the catalog knows; the only ones the owner may chat with. */
+	knownAgents: () => Promise<string[]>;
+	now?: () => number;
+	limitPerHour?: number;
+}
+
+export type Resolution = { agent: string } | { error: string };
+
+/** `aikido-fixer`, `reviewer` or `agent/reviewer` against the catalog: exact id, `agent/<short>`, then a single unambiguous partial match. */
+export function resolveAgent(reference: string, known: readonly string[]): Resolution {
+	const wanted = reference.trim().toLowerCase();
+	if (!/^[a-z0-9][a-z0-9._/-]{0,60}$/.test(wanted)) return { error: "Name an agent, for example /ask reviewer <text>." };
+	const exact = known.filter((id) => id.toLowerCase() === wanted || id.toLowerCase() === `agent/${wanted}`);
+	if (exact.length === 1) return { agent: exact[0]! };
+	const last = (id: string) => id.toLowerCase().split("/").at(-1)!;
+	const sameName = known.filter((id) => last(id) === wanted);
+	if (sameName.length === 1) return { agent: sameName[0]! };
+	const partial = known.filter((id) => last(id).includes(wanted));
+	if (partial.length === 1) return { agent: partial[0]! };
+	if (partial.length > 1 || sameName.length > 1) return { error: `More than one agent matches "${defang(reference)}": ${[...new Set([...sameName, ...partial])].map(defang).join(", ")}. Use the full id.` };
+	return { error: `No agent "${defang(reference)}" in the catalog. /agents lists them.` };
+}
+
+/** Splits a reply into Telegram-sized parts, cutting at a line or word boundary where it can. */
+export function replyParts(text: string, size = REPLY_PART_CHARS, max = REPLY_MAX_CHARS): string[] {
+	const body = text.length > max ? `${text.slice(0, max)}... [${text.length} characters, cut]` : text;
+	const parts: string[] = [];
+	let rest = body;
+	while (rest.length > size) {
+		const window = rest.slice(0, size);
+		const cut = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
+		const at = cut > size / 2 ? cut : size;
+		parts.push(rest.slice(0, at).trimEnd());
+		rest = rest.slice(at).trimStart();
+	}
+	if (rest) parts.push(rest);
+	return parts;
+}
+
+/**
+ * The owner's conversations with agents. The Manager sends a chat.message, remembers the conversation, and shows whatever the agent
+ * answers there; if nothing comes back within three minutes the owner is told once. The Manager never answers a chat message itself:
+ * replies only ever go to the owner, so two agents (or an agent and the Manager) cannot start a loop.
+ */
+export class ChatSessions {
+	readonly #deps: ChatDeps;
+	readonly #now: () => number;
+	readonly #limiter: RateLimiter;
+
+	constructor(deps: ChatDeps) {
+		this.#deps = deps;
+		this.#now = deps.now ?? Date.now;
+		this.#limiter = new RateLimiter(deps.limitPerHour ?? ASKS_PER_HOUR, 3_600_000, this.#now);
+	}
+
+	get #chats() {
+		return (this.#deps.state.chats ??= {});
+	}
+
+	async ask(reference: string, rawText: string): Promise<{ agent: string; conversationId: string; text: string }> {
+		const text = rawText.trim();
+		if (!text) throw new PolicyError(400, "invalid_request", "there is nothing to send");
+		if (text.length > MAX_ASK_CHARS) throw new PolicyError(413, "message_too_long", `chat messages are limited to ${MAX_ASK_CHARS} characters (this one has ${text.length})`);
+		const resolved = resolveAgent(reference, await this.#deps.knownAgents());
+		if ("error" in resolved) throw new PolicyError(404, "unknown_agent", resolved.error);
+		if (!this.#limiter.take()) throw new PolicyError(429, "rate_limited", "chat limit for this hour reached");
+		const earlier = Object.entries(this.#chats).filter(([, chat]) => chat.agent === resolved.agent).sort((a, b) => b[1].lastSentAt.localeCompare(a[1].lastSentAt))[0];
+		const sent = await this.#deps.domain.sendMessage({ to: resolved.agent, text, ...(earlier ? { conversationId: earlier[0] } : {}) });
+		const conversationId: string | undefined = sent?.conversationId ?? earlier?.[0];
+		if (!conversationId) throw new PolicyError(502, "no_conversation", "the domain did not say which conversation the message went to");
+		const now = new Date(this.#now()).toISOString();
+		const chat = (this.#chats[conversationId] ??= { agent: resolved.agent, startedAt: now, lastSentAt: now });
+		chat.lastSentAt = now;
+		chat.awaitingSince = now;
+		chat.timeoutNotified = false;
+		this.#prune();
+		await this.#deps.save(this.#deps.state);
+		return { agent: resolved.agent, conversationId, text };
+	}
+
+	/** True when the message belongs to a conversation the owner started (it is then shown as a reply); other messages return false. */
+	async route(message: InboundMessage): Promise<boolean> {
+		const chat = message.conversationId ? this.#chats[message.conversationId] : undefined;
+		if (!chat || message.from !== chat.agent) return false;
+		const requestId = message.labels?.[CHAT_APPROVAL_REQUEST_LABEL];
+		if (requestId !== undefined) {
+			await this.#askOwner(message, chat.agent, requestId);
+			return true;
+		}
+		chat.awaitingSince = undefined;
+		chat.repliedAt = new Date(this.#now()).toISOString();
+		await this.#deps.save(this.#deps.state);
+		await this.show(message, true);
+		return true;
+	}
+
+	/**
+	 * An agent asks whether a step of the instruction the owner gave it may go ahead. Only the agent of a conversation the owner started can
+	 * ask, and only the owner's own command (`/chatapprove`, `/chatdeny`) answers: no tool of the model can, and nothing in the question's
+	 * text is ever acted on.
+	 */
+	async #askOwner(message: InboundMessage, agent: string, requestId: string): Promise<void> {
+		if (!APPROVAL_ID.test(requestId) || !message.conversationId) return;
+		const approvals = (this.#deps.state.chatApprovals ??= {});
+		approvals[requestId] = { agent, conversationId: message.conversationId, askedAt: new Date(this.#now()).toISOString() };
+		const entries = Object.entries(approvals).sort((a, b) => a[1].askedAt.localeCompare(b[1].askedAt));
+		for (const [id] of entries.slice(0, Math.max(0, entries.length - KEEP_APPROVALS))) delete approvals[id];
+		await this.#deps.save(this.#deps.state);
+		const question = defang(message.text.split("\n")[0] ?? "");
+		await this.#deps.owner.tell(`${defang(agent)} needs your approval for your instruction:\n${question.slice(0, 600)}\nAnswer with /chatapprove ${requestId} or /chatdeny ${requestId}. Without an answer it is denied.`);
+	}
+
+	/** The owner's answer to an agent's approval question. Sent once, in the same conversation, labelled so the agent can tell it from chat. */
+	async decide(requestId: string, approved: boolean): Promise<{ agent: string }> {
+		const approvals = (this.#deps.state.chatApprovals ??= {});
+		const pending = APPROVAL_ID.test(requestId) ? approvals[requestId] : undefined;
+		if (!pending) throw new PolicyError(404, "unknown_approval", "No such question waits for an answer (it may have been answered or may have expired).");
+		delete approvals[requestId];
+		await this.#deps.save(this.#deps.state);
+		if (this.#now() - Date.parse(pending.askedAt) > CHAT_APPROVAL_TTL_MS) throw new PolicyError(410, "expired", `${defang(pending.agent)} has given up on that question already.`);
+		await this.#deps.domain.sendMessage({ to: pending.agent, text: approved ? "approve" : "deny", conversationId: pending.conversationId, labels: { [CHAT_APPROVAL_DECISION_LABEL]: requestId } });
+		return { agent: pending.agent };
+	}
+
+	/** One Telegram message, or several parts when long, titled with the agent. Plain text only: no parse mode, no tappable commands. */
+	async show(message: InboundMessage, reply: boolean): Promise<void> {
+		const labelled = message.labels?.[AUTO_REPLY_LABEL] !== undefined ? " (automatic notice)" : message.labels?.eventNotice === "true" ? " (event notice)" : "";
+		const title = `${defang(message.from)}${reply ? " replied" : ""}${labelled}`;
+		const parts = replyParts(defang(message.text));
+		for (const [index, part] of parts.entries()) {
+			await this.#deps.owner.tell(`${title}${parts.length > 1 ? ` (${index + 1}/${parts.length})` : ""}:\n${part}`);
+		}
+	}
+
+	/** Tells the owner once about each chat that got no answer within three minutes. Called on a timer. */
+	async sweep(): Promise<void> {
+		const now = this.#now();
+		for (const chat of Object.values(this.#chats)) {
+			if (!chat.awaitingSince || chat.timeoutNotified || now - Date.parse(chat.awaitingSince) < REPLY_TIMEOUT_MS) continue;
+			chat.timeoutNotified = true;
+			await this.#deps.save(this.#deps.state);
+			await this.#deps.owner.tell(`No reply from ${defang(chat.agent)} after 3 minutes. Agents take tasks more than they chat, and a reply may still come; I will show it if it does.`).catch(() => {});
+		}
+	}
+
+	waiting(): { agent: string; since: string }[] {
+		return Object.values(this.#chats).filter((c) => c.awaitingSince).map((c) => ({ agent: c.agent, since: c.awaitingSince! }));
+	}
+
+	#prune(): void {
+		const entries = Object.entries(this.#chats);
+		if (entries.length <= KEEP_CHATS) return;
+		for (const [id] of entries.sort((a, b) => a[1].lastSentAt.localeCompare(b[1].lastSentAt)).slice(0, entries.length - KEEP_CHATS)) delete this.#chats[id];
+	}
+}

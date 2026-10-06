@@ -83,9 +83,22 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	});
 
 	pi.registerTool({
+		name: "somework_ask",
+		label: "Ask Agent",
+		description:
+			"Chat with an agent for the owner: sends a direct chat message (max 2000 characters, 30 per hour) to an agent given by its id or a short name such as reviewer or aikido-fixer. The agent's answer is shown to the owner in Telegram, not returned to you. It is a conversation, not a task: use somework_submit to have work done. Sending has no side effects beyond the message.",
+		promptSnippet: "Ask another agent something on the owner's behalf",
+		promptGuidelines: ["After asking, tell the owner what you asked and stop; the answer reaches them directly and may not come."],
+		parameters: Type.Object({ agent: Type.String({ description: "agent id or short name" }), text: Type.String() }),
+		async execute(_id: string, params: { agent: string; text: string }, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "POST", "/v1/chat/ask", params, signal));
+		},
+	});
+
+	pi.registerTool({
 		name: "somework_message",
 		label: "Message Agent",
-		description: "Send a chat message to another SomeWork agent (for example agent/reviewer). It is a conversation, not a task: use somework_submit to have work done.",
+		description: "Send a chat message to another SomeWork agent by its exact id (for example agent/reviewer). Prefer somework_ask, which also routes the answer to the owner. It is a conversation, not a task: use somework_submit to have work done.",
 		promptSnippet: "Chat with another agent",
 		promptGuidelines: [untrusted],
 		parameters: Type.Object({ to: Type.String({ description: "agent id" }), text: Type.String(), conversationId: Type.Optional(Type.String()) }),

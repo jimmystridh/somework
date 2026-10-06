@@ -2,7 +2,7 @@
   "name": "@somework/aikido-fixer",
   "version": "0.1.0",
   "private": true,
-  "description": "The Aikido fixer role: attempts to fix a security issue Aikido reported, in a fresh clone, and opens a draft pull request (code.fix). A card, a profile, a seeded event handler and a read-only Aikido tool on top of @somework/agent-kit.",
+  "description": "The Aikido fixer role: attempts to fix a security issue Aikido reported, in a fresh clone, and opens a pull request (code.fix). A card, a profile, a seeded event handler and a read-only Aikido tool on top of @somework/agent-kit.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"

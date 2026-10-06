@@ -29,6 +29,8 @@ export interface FixerSettings {
 	budget: { maxTokens: number; maxMinutes: number };
 	apiBase?: string;
 	oauthUrl?: string;
+	/** A JSON file of earlier attempts to seed the account the chat gives of what the agent did (`AIKIDO_LEDGER_IMPORT`). Imported once, harmlessly again. */
+	ledgerImport?: string;
 }
 
 const list = (text: string | undefined, fallback: string[]): string[] => (text === undefined || text.trim() === "" ? fallback : text.split(/[\s,]+/).filter(Boolean));
@@ -100,6 +102,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): FixerSetting
 		cooldownMinutes: integer(env, "AIKIDO_ATTEMPT_COOLDOWN_MINUTES", 180),
 		dailyCap: integer(env, "AIKIDO_DAILY_CAP", 5),
 		budget: { maxTokens: integer(env, "AIKIDO_FIX_BUDGET_TOKENS", 300_000), maxMinutes: integer(env, "AIKIDO_FIX_BUDGET_MINUTES", 30) },
+		...(env.AIKIDO_LEDGER_IMPORT ? { ledgerImport: env.AIKIDO_LEDGER_IMPORT } : {}),
 		...(override && env.AIKIDO_API_BASE ? { apiBase: env.AIKIDO_API_BASE } : {}),
 		...(override && env.AIKIDO_OAUTH_URL ? { oauthUrl: env.AIKIDO_OAUTH_URL } : {}),
 	};
@@ -111,7 +114,7 @@ export function roleEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	return {
 		...env,
 		PI_CONCURRENCY: env.PI_CONCURRENCY ?? "1",
-		GIT_PR_DRAFT: "1",
+		GIT_PR_DRAFT: env.GIT_PR_DRAFT ?? "0",
 		GIT_AUTHOR_NAME: env.GIT_AUTHOR_NAME ?? "SomeWork Aikido fixer",
 		GIT_AUTHOR_EMAIL: env.GIT_AUTHOR_EMAIL ?? "aikido-fixer@somework.invalid",
 		GIT_MIRROR_DIR: env.GIT_MIRROR_DIR ?? `${workspaces.replace(/\/$/, "")}/.mirrors`,

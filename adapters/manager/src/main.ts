@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Identity, SomeWorkClient } from "@somework/sdk";
 import { TelegramBridge } from "./bridge.ts";
 import { loadConfig } from "./config.ts";
+import { ChatSessions } from "./chat.ts";
 import { Controls } from "./controls.ts";
 import { RestDomain } from "./domain.ts";
 import { EventIntake } from "./event-intake.ts";
@@ -91,7 +92,8 @@ async function main(): Promise<void> {
 		localPendingApprovals: () => service.pending().length,
 		domainPendingApprovals: async () => (await reactionApprovals.pending()).length,
 	});
-	const service: ManagerService = new ManagerService({ domain, policy: config.policy, owner: bridge, tracker, reactionApprovals, controls });
+	const chats = new ChatSessions({ domain, owner: bridge, state, save, knownAgents: () => service.knownAgentIds() });
+	const service: ManagerService = new ManagerService({ domain, policy: config.policy, owner: bridge, tracker, reactionApprovals, controls, chats });
 	const eventIntake = new EventIntake({ domain, owner: bridge, state, save, config: config.events, digest: () => controls.digest(), log });
 	bridge.service = service;
 	const gateway = createGateway({ service, token: gatewayTokenValue, log });
@@ -146,6 +148,7 @@ async function main(): Promise<void> {
 			every("approvals_poll", config.approvals.pollMs, () => reactionApprovals.poll()),
 			every("events_poll", config.events.pollMs, () => eventIntake.poll()),
 			every("notices_report", 60_000, () => bridge.reportSuppressed()),
+			every("chat_sweep", 20_000, () => chats.sweep()),
 		];
 		log("manager_ready", { bot: bot.username, owner: state.allowedUserId ? "paired" : "awaiting secure pairing", gateway: `${config.gateway.bind}:${config.gateway.port}`, agent: domain.selfId });
 		while (!stopping) {

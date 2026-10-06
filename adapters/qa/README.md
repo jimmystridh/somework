@@ -133,6 +133,17 @@ machine. Role-specific:
 | `JIRA_CA_FILE` | a private CA that signed the host's certificate |
 | `JIRA_TEST_STATUS`, `JIRA_IN_PROGRESS_STATUS`, `JIRA_VERIFIED_LABEL` | names in that system (defaults `Test`, `In Progress`, `AgentTested`) |
 
+## Chat
+
+QA answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice). A **question** from the manager or a person
+gets one bounded, read-only turn: tools `read, agent_status`, no commands, no changes, no approvals, an answer built from the service's own records
+(`agent_status`) and, where it has one, a read-only checkout. An **instruction** (`instruct: ...`, from `agent/manager` only) becomes a `qa.verify` task for the ticket key named in the text (`instruct: verify ABC-123`), with optional lines `repo:`, `ref:`, `scenario:`, `app:`. Writes to the ticket system still wait for approval, which is asked of the manager.
+It runs as a job of the normal handler, with the role's own tools, guards and approvals, a chat budget of its own (150 000 tokens, 15 minutes by
+default, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES`) and the `chat` share of the daily token limit (`CHAT_TOKEN_SHARE`); a step that needs
+approval is asked of the manager in the conversation. Settings: `CHAT_MODE`, `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS`, `CHAT_REPOSITORY_URL`,
+`CHAT_REPOSITORY_REF`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
+`packages/agent-kit/README.md`).
+
 ## Skills
 
 `profile.skills.allow` is empty: nothing from the repository is shown to the model unless the deployment names it. A deployment that

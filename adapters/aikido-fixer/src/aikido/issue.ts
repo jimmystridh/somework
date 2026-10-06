@@ -17,6 +17,8 @@ export interface IssueSummary {
 	installedVersion?: string;
 	patchedVersions: string[];
 	affectedFile?: string;
+	/** Where the same finding sits, one entry per file and package: a group often spans lockfiles and manifests of several packages. */
+	occurrences: { file: string; package?: string; installedVersion?: string; patchedVersions: string[] }[];
 	lines?: { start: number; end?: number };
 	cves: string[];
 	cwes: string[];
@@ -45,9 +47,26 @@ const severityOf = (value: unknown): IssueSummary["severity"] => {
 	return (SEVERITIES as readonly string[]).includes(lower) ? (lower as Severity) : "unknown";
 };
 
+function uniqueOccurrences(issues: Record<string, any>[]): IssueSummary["occurrences"] {
+	const seen = new Set<string>();
+	const found: IssueSummary["occurrences"] = [];
+	for (const entry of issues) {
+		const file = untrusted(entry?.affected_file, 300);
+		if (!file) continue;
+		const name = untrusted(entry.affected_package, MAX.short);
+		const installedVersion = untrusted(entry.installed_version, 60);
+		const key = [file, name, installedVersion].join("\u0000");
+		if (seen.has(key)) continue;
+		seen.add(key);
+		found.push({ file, ...(name ? { package: name } : {}), ...(installedVersion ? { installedVersion } : {}), patchedVersions: strings(entry.patched_versions, 60) });
+	}
+	return found.slice(0, MAX.list);
+}
+
 /** The summary of an issue group, with the issue's own details (package, file, lines, versions) when the issue was resolved too. */
-export function summariseIssue(found: { group: Record<string, any>; issue?: Record<string, any> }): IssueSummary {
+export function summariseIssue(found: { group: Record<string, any>; issue?: Record<string, any>; issues?: Record<string, any>[] }): IssueSummary {
 	const { group, issue } = found;
+	const occurrences = uniqueOccurrences(found.issues ?? (issue ? [issue] : []));
 	const locations = Array.isArray(group.locations)
 		? group.locations.flatMap((location: any) => {
 				const name = untrusted(location?.name, MAX.short);
@@ -71,6 +90,7 @@ export function summariseIssue(found: { group: Record<string, any>; issue?: Reco
 		...(untrusted(issue?.installed_version, 60) ? { installedVersion: untrusted(issue?.installed_version, 60)! } : {}),
 		patchedVersions: strings(issue?.patched_versions, 60),
 		...(untrusted(issue?.affected_file, 300) ? { affectedFile: untrusted(issue?.affected_file, 300)! } : {}),
+		occurrences,
 		...(start !== undefined ? { lines: { start, ...(integer(issue?.end_line) !== undefined ? { end: integer(issue?.end_line)! } : {}) } } : {}),
 		cves,
 		cwes: strings(issue?.cwe_classes, 30),
@@ -103,6 +123,11 @@ export function eligibility(summary: IssueSummary, settings: Pick<FixerSettings,
 	return { eligible: true };
 }
 
+function renderOccurrence(place: IssueSummary["occurrences"][number]): string {
+	const versions = [place.installedVersion ? `installed ${place.installedVersion}` : "", place.patchedVersions.length ? `patched in ${place.patchedVersions.join(", ")}` : ""].filter(Boolean);
+	return `  - ${place.file}${place.package ? `: ${place.package}` : ""}${versions.length ? ` (${versions.join(", ")})` : ""}`;
+}
+
 /** The issue as text for the model, inside the markers that tell it this is data. */
 export function renderIssue(summary: IssueSummary, boundary: string): string {
 	const lines = [
@@ -112,6 +137,7 @@ export function renderIssue(summary: IssueSummary, boundary: string): string {
 		...(summary.repository ? [`repository: ${summary.repository}`] : []),
 		...(summary.affectedPackage ? [`package: ${summary.affectedPackage}${summary.installedVersion ? ` (installed ${summary.installedVersion})` : ""}${summary.patchedVersions.length ? `, patched in ${summary.patchedVersions.join(", ")}` : ""}`] : []),
 		...(summary.affectedFile ? [`file: ${summary.affectedFile}${summary.lines ? `:${summary.lines.start}${summary.lines.end ? `-${summary.lines.end}` : ""}` : ""}`] : []),
+		...(summary.occurrences.length > 1 ? [`found in ${summary.occurrences.length} places:\n${summary.occurrences.map(renderOccurrence).join("\n")}`] : []),
 		...(summary.locations.length ? [`locations: ${summary.locations.map((location) => `${location.name} (${location.type})`).join(", ")}`] : []),
 		...(summary.cves.length ? [`CVE: ${summary.cves.join(", ")}`] : []),
 		...(summary.cwes.length ? [`CWE: ${summary.cwes.join(", ")}`] : []),

@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { SomeWorkError, sleep } from "@somework/sdk";
 import { ApprovalQueue, type Approval } from "./approvals.ts";
+import type { ChatSessions } from "./chat.ts";
 import type { DomainApi, InboundMessage } from "./domain.ts";
 import type { TaskTracker } from "./notifier.ts";
 import { CONTROL_REQUEST_ID, ControlRequests, describeAction, parseAction, type Controls } from "./controls.ts";
 import { PolicyError, RateLimiter, runsWithoutApproval, withBudget, type PolicyConfig } from "./policy.ts";
 import { DOMAIN_APPROVAL_ID, type ReactionApprovals } from "./reaction-approvals.ts";
-import { summarizeInput } from "./redact.ts";
+import { clip, defang, summarizeInput } from "./redact.ts";
 import { TERMINAL } from "./state.ts";
 
 /** How the Manager reaches its owner. The Telegram bridge implements it; it returns the id of the message it sent. */
@@ -38,6 +39,8 @@ export interface ServiceDeps {
 	/** Approvals the domain asks for (write-class tasks that reactions submit). */
 	reactionApprovals?: ReactionApprovals;
 	controls?: Controls;
+	/** The owner's chats with agents (`/ask`). */
+	chats?: ChatSessions;
 	now?: () => number;
 }
 
@@ -67,6 +70,7 @@ export class ManagerService {
 	readonly approvals: ApprovalQueue;
 	readonly reactionApprovals: ReactionApprovals | undefined;
 	readonly controls: Controls | undefined;
+	readonly chats: ChatSessions | undefined;
 	readonly controlRequests: ControlRequests | undefined;
 	readonly #domain: DomainApi;
 	readonly #policy: PolicyConfig;
@@ -83,6 +87,7 @@ export class ManagerService {
 		this.approvals = deps.approvals ?? new ApprovalQueue(deps.policy.approvalTtlMs, deps.now);
 		this.reactionApprovals = deps.reactionApprovals;
 		this.controls = deps.controls;
+		this.chats = deps.chats;
 		this.controlRequests = deps.controls ? new ControlRequests(deps.controls, deps.policy.approvalTtlMs, deps.now) : undefined;
 		this.#submissions = new RateLimiter(deps.policy.submissionsPerHour, 3_600_000, deps.now);
 		this.#messages = new RateLimiter(deps.policy.messagesPerHour, 3_600_000, deps.now);
@@ -301,6 +306,19 @@ export class ManagerService {
 	async answer(taskId: string, data: unknown): Promise<void> {
 		if (!this.#tracker.get(taskId)) throw new PolicyError(403, "not_submitted_here", "only tasks this Manager submitted can be answered");
 		await this.#domain.provideInput(taskId, data);
+	}
+
+	/** A chat message to an agent whose answer comes back to the owner in Telegram. Sending is the only effect; no approval is needed. */
+	async ask(request: { agent: string; text: string }): Promise<unknown> {
+		if (!this.chats) throw new PolicyError(503, "not_configured", "chat is not configured");
+		const sent = await this.chats.ask(String(request.agent ?? ""), String(request.text ?? ""));
+		await this.#owner.tell(`Asked ${sent.agent}: ${clip(defang(sent.text), 300)}\nSent, waiting for a reply (I will tell you if nothing comes back in 3 minutes).`).catch(() => {});
+		return { status: "sent", agent: sent.agent, conversationId: sent.conversationId, note: "Sent. The agent's answer, if any, is shown to the owner in Telegram; it does not come back to you. Tell the owner you asked and stop." };
+	}
+
+	/** Agent ids from the catalog, for resolving short names. */
+	async knownAgentIds(): Promise<string[]> {
+		return [...new Set((await this.agents()).map((a) => a.agentId).filter((id): id is string => typeof id === "string"))];
 	}
 
 	async message(request: { to: string; text: string; conversationId?: string }): Promise<unknown> {

@@ -104,14 +104,13 @@ describe("the seeded Aikido handler", () => {
 		assert.match(exhausted.reason, /already attempted 2 time/);
 	});
 
-	it("caps the fix tasks per day and starts counting again the next day", async () => {
-		const h = await installed({ AIKIDO_DAILY_CAP: "2" });
-		assert.equal((await h.run({ data: issue({ issueId: "1" }) })).action, "submit");
-		assert.equal((await h.run({ data: issue({ issueId: "2" }) })).action, "submit");
-		const capped = await h.run({ data: issue({ issueId: "3" }) });
-		assert.equal(capped.action, "deliver");
-		assert.match(capped.reason, /daily cap of 2/);
-		assert.equal((await h.run({ data: issue({ issueId: "3" }) }, "2026-10-07T09:00:00.000Z")).action, "submit");
+	it("stops a flood of tasks per day, well above the daily fix cap that the host enforces, and starts counting again the next day", async () => {
+		const h = await installed({ AIKIDO_DAILY_CAP: "1" });
+		for (const id of ["1", "2", "3", "4", "5"]) assert.equal((await h.run({ data: issue({ issueId: id }) })).action, "submit", `task ${id} is under five times the cap`);
+		const flood = await h.run({ data: issue({ issueId: "6" }) });
+		assert.equal(flood.action, "deliver");
+		assert.match(flood.reason, /5 fix tasks were already started today/);
+		assert.equal((await h.run({ data: issue({ issueId: "6" }) }, "2026-10-07T09:00:00.000Z")).action, "submit");
 	});
 
 	it("carries nothing from the event into the task but the issue number, the repository name and an aikido.dev link", async () => {
@@ -151,7 +150,7 @@ describe("installing the handler", () => {
 		assert.deepEqual(store.current(HANDLER)!.topics, ["aikido.*"]);
 		assert.ok(existsSync(join(handlersDir(stateDir), "aikido.mjs")));
 		assert.deepEqual(seedHandler({ stateDir, settings: loadSettings({ ...baseEnv, AIKIDO_DAILY_CAP: "9" }), log }), { seeded: false, version: 1 });
-		assert.match(store.current(HANDLER)!.source, /"dailyCap": 5/, "an operator's or agent's copy is never overwritten by a restart");
+		assert.match(store.current(HANDLER)!.source, /"submitCapPerDay": 25/, "an operator's or agent's copy is never overwritten by a restart");
 	});
 
 	it("saves a new version when asked to reseed, keeping the earlier ones", () => {
@@ -160,8 +159,8 @@ describe("installing the handler", () => {
 		const changed = loadSettings({ ...baseEnv, AIKIDO_DAILY_CAP: "9" });
 		assert.deepEqual(seedHandler({ stateDir, settings: changed, log, reseed: true }), { seeded: true, version: 2 });
 		const store = new HandlerStore(handlersDir(stateDir));
-		assert.match(store.current(HANDLER)!.source, /"dailyCap": 9/);
-		assert.match(store.version(HANDLER, 1)!, /"dailyCap": 5/);
+		assert.match(store.current(HANDLER)!.source, /"submitCapPerDay": 45/);
+		assert.match(store.version(HANDLER, 1)!, /"submitCapPerDay": 25/);
 		assert.deepEqual(seedHandler({ stateDir, settings: changed, log, reseed: true }), { seeded: true, version: 2 }, "the same settings change nothing");
 	});
 

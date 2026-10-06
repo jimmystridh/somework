@@ -101,7 +101,7 @@ const remoteBranches = (): string => sh(remote, "for-each-ref", "--format=%(refn
 const eventData = { issueId: "12", severity: "high", repository: "acme/shop", url: "https://app.aikido.dev/issues/12" };
 
 describe("Aikido fixer end to end", () => {
-	it("an Aikido event becomes a fix: a draft pull request on agent/aikido-<issue>-<sha>, from a mirror, with a commit that cites the issue", async () => {
+	it("an Aikido event becomes a fix: a pull request on agent/aikido-<issue>-<sha>, from a mirror, with a commit that cites the issue", async () => {
 		const s = await stack(["call:aikido_issue:{}", `write:package.json:{"dependencies":{"lodash":"4.17.21"}}`, "final:FIXED: bump lodash to 4.17.21\n\nChanged package.json to the patched version."]);
 		const base = sh(remote, "rev-parse", "refs/heads/main").trim();
 		const task = await s.fixFromEvent(eventData);

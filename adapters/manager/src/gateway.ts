@@ -79,6 +79,10 @@ export function createGateway(options: GatewayOptions): Server {
 		if (method === "GET" && path === "/v1/inbox") {
 			return service.inbox({ conversationId: url.searchParams.get("conversationId") ?? undefined, limit: Number(url.searchParams.get("limit") ?? 20) || 20 });
 		}
+		if (method === "POST" && path === "/v1/chat/ask") {
+			const body = await readJson(request);
+			return service.ask({ agent: String(body.agent ?? ""), text: String(body.text ?? "") });
+		}
 		if (method === "GET" && path === "/v1/control/rules") return service.rules();
 		if (method === "GET" && path === "/v1/control/sources") return service.sources();
 		if (method === "GET" && path === "/v1/control/handlers") return service.handlers(url.searchParams.get("agent") ?? "");

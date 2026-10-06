@@ -3,9 +3,10 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { approvalPolicy } from "@somework/agent-kit";
+import { approvalPolicy, GitHubHost, loadConfig } from "@somework/agent-kit";
 import card from "../card.json" with { type: "json" };
 import { createAikidoTools } from "../src/aikido/tool.ts";
+import { aikidoFixerHooksFor } from "../src/hooks.ts";
 import { FIXER_APPROVAL_PATTERNS, profile } from "../src/profile.ts";
 import { loadSettings, repositoryFullName, roleEnvironment } from "../src/settings.ts";
 
@@ -102,9 +103,9 @@ describe("settings", () => {
 });
 
 describe("environment of the service", () => {
-	it("fills in the kit's settings from the role's, forces draft pull requests, one job at a time and events on", () => {
-		const env = roleEnvironment({ AIKIDO_REPOSITORY_URL: "https://github.com/Acme/Shop.git", AIKIDO_MIRROR_REFRESH_MINUTES: "10", GIT_PR_DRAFT: "0" });
-		assert.equal(env.GIT_PR_DRAFT, "1");
+	it("fills in the kit's settings from the role's: real pull requests by default, one job at a time and events on", () => {
+		const env = roleEnvironment({ AIKIDO_REPOSITORY_URL: "https://github.com/Acme/Shop.git", AIKIDO_MIRROR_REFRESH_MINUTES: "10" });
+		assert.equal(env.GIT_PR_DRAFT, "0");
 		assert.equal(env.PI_CONCURRENCY, "1");
 		assert.equal(env.EVENTS_ENABLED, "1");
 		assert.equal(env.GIT_MIRROR_DIR, "/workspace/.mirrors");
@@ -118,5 +119,54 @@ describe("environment of the service", () => {
 		assert.equal(env.GIT_MIRROR_REPOS, "https://a/b");
 		assert.equal(env.EVENTS_ENABLED, "0");
 		assert.equal(roleEnvironment({ AIKIDO_REPOSITORY_URL: "u/x", SANDBOX_WORKSPACES: "/ws/" }).GIT_MIRROR_DIR, "/ws/.mirrors");
+	});
+});
+
+describe("real pull requests, drafts on request", () => {
+	const base = { AIKIDO_REPOSITORY_URL: "https://github.com/Acme/Shop.git" };
+	it("keeps GIT_PR_DRAFT=1 when the deployment asks for drafts", () => {
+		assert.equal(roleEnvironment({ ...base, GIT_PR_DRAFT: "1" }).GIT_PR_DRAFT, "1");
+		assert.equal(roleEnvironment({ ...base, GIT_PR_DRAFT: "0" }).GIT_PR_DRAFT, "0");
+		assert.equal(roleEnvironment(base).GIT_PR_DRAFT, "0");
+	});
+
+	it("the kit turns the setting into draft: false by default and draft: true on request", () => {
+		const kit = { SOMEWORK_URL: "https://x", SOMEWORK_KEY_FILE: "/k", SANDBOX_URL: "http://s" };
+		assert.equal(loadConfig({ ...kit, ...roleEnvironment(base) }).git.draftPullRequests, false);
+		assert.equal(loadConfig({ ...kit, ...roleEnvironment({ ...base, GIT_PR_DRAFT: "1" }) }).git.draftPullRequests, true);
+	});
+
+	it("the host opens the pull request with draft false by default and draft true when asked", async () => {
+		const sent: any[] = [];
+		const fake = (async (_url: string, init: RequestInit) => {
+			if (init.method === "POST") sent.push(JSON.parse(String(init.body)));
+			return new Response(JSON.stringify({ html_url: "https://github.com/Acme/Shop/pull/1" }), { status: 200, headers: { "content-type": "application/json" } });
+		}) as unknown as typeof fetch;
+		const request = { repoUrl: "https://github.com/Acme/Shop.git", head: "agent/aikido-12-abcd1234", base: "main", title: "t", body: "b" };
+		await new GitHubHost({ token: "t", fetch: fake }).createPullRequest(request);
+		await new GitHubHost({ token: "t", draft: false, fetch: fake }).createPullRequest(request);
+		await new GitHubHost({ token: "t", draft: true, fetch: fake }).createPullRequest(request);
+		assert.deepEqual(sent.map((body) => body.draft), [false, false, true]);
+	});
+
+	const context = (env: NodeJS.ProcessEnv, extra: Record<string, unknown> = {}) => {
+		const dir = mkdtempSync(join(tmpdir(), "aikido-start-"));
+		const client = join(dir, "client.json");
+		writeFileSync(client, JSON.stringify({ clientId: "a", clientSecret: "b" }));
+		return {
+			env: { ...base, AIKIDO_CLIENT_FILE: client, ...env },
+			config: { concurrency: 1, state: { dir }, git: {}, sandbox: { workspaceRoot: "/workspace" } },
+			log: () => undefined,
+			client: {},
+			gitToken: "token",
+			...extra,
+		} as any;
+	};
+	it("starts without GIT_PR_DRAFT, with 0 and with 1", async () => {
+		for (const env of [{}, { GIT_PR_DRAFT: "0" }, { GIT_PR_DRAFT: "1" }]) assert.ok(await aikidoFixerHooksFor(context(env)), JSON.stringify(env));
+	});
+	it("still refuses to start without a git token or with more than one job at a time", async () => {
+		await assert.rejects(aikidoFixerHooksFor(context({}, { gitToken: undefined })), /GIT_TOKEN_FILE/);
+		await assert.rejects(aikidoFixerHooksFor(context({}, { config: { concurrency: 2, state: { dir: tmpdir() }, git: {}, sandbox: { workspaceRoot: "/workspace" } } })), /PI_CONCURRENCY/);
 	});
 });

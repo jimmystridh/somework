@@ -1,5 +1,6 @@
 import { InvalidInput, silent, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
 import type { SomeWorkClient } from "@somework/sdk";
+import { reviewerChat } from "./chat.ts";
 import { fetchPullRequestContext } from "./context.ts";
 import { buildInstruction, CONTEXT_KEY } from "./prompt.ts";
 import { ReviewRuntime } from "./review-runtime.ts";
@@ -79,10 +80,12 @@ async function invalidOutput(context: ResultContext, reason: string, raw: string
 }
 
 /** For `runAgentService`: the hooks of the service being composed (its client, log and optional read-only token). */
-export const reviewerHooksFor = (context: ServiceContext): RoleHooks =>
-	createReviewerHooks({
+export const reviewerHooksFor = (context: ServiceContext): RoleHooks => ({
+	chat: reviewerChat(context.env),
+	...createReviewerHooks({
 		client: context.client,
 		log: context.log,
 		// one read-only token serves the clone and the pull request context; the kit never sends it to a host outside GIT_TOKEN_HOSTS
 		github: context.gitToken ? { token: context.gitToken, apiBase: context.config.git.githubApi, tokenHosts: context.config.git.tokenHosts } : undefined,
-	});
+	}),
+});

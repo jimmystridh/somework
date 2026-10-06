@@ -105,6 +105,24 @@ describe("Aikido client", () => {
 		await assert.rejects(client(f).resolveIssue(2), (error: AikidoError) => error.kind === "unauthorized" && error.permanent);
 	});
 
+	it("adds the open issues of the group: the file and the versions the group alone does not have", async () => {
+		const f = await fake();
+		const issues = [{ id: 5, group_id: 1, affected_file: "bun.lock", affected_package: "ws", installed_version: "1.5.4" }, { id: 6, group_id: 1, affected_file: "package.json" }];
+		f.routes.set("/api/public/v1/issues/groups/1", { status: 200, body: group });
+		f.routes.set("/api/public/v1/issues/export?format=json&filter_status=open&filter_issue_group_id=1", { status: 200, body: issues });
+		const found = await client(f).resolveIssue(1);
+		assert.deepEqual(found.issues, issues);
+		assert.equal(found.issue?.affected_file, "bun.lock");
+	});
+
+	it("still answers with the group when the issues cannot be read", async () => {
+		const f = await fake();
+		f.routes.set("/api/public/v1/issues/groups/1", { status: 200, body: group });
+		f.routes.set("/api/public/v1/issues/export?format=json&filter_status=open&filter_issue_group_id=1", { status: 503, body: {} });
+		const found = await client(f).resolveIssue(1);
+		assert.deepEqual(found, { group });
+	});
+
 	it("falls back from a group to the issue with that id and its group", async () => {
 		const f = await fake();
 		f.routes.set("/api/public/v1/issues/9", { status: 200, body: { id: 9, group_id: 1, affected_package: "lodash" } });

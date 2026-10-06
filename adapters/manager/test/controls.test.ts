@@ -133,6 +133,17 @@ async function gateway(b: ReturnType<typeof build>) {
 	return { call, close: () => (server.closeAllConnections(), server.close()) };
 }
 
+test("/handlers and /sources say which service could not be reached instead of failing", async () => {
+	const down = () => {
+		throw new Error("connect ECONNREFUSED 10.0.0.1:8080");
+	};
+	const b = build({ controls: config, http: down });
+	await say(b, "/handlers agent/reviewer");
+	assert.ok(b.telegram.texts().at(-1)!.includes("agent/reviewer could not be reached"));
+	await say(b, "/sources");
+	assert.ok(b.telegram.texts().at(-1)!.includes("the hub could not be reached"));
+});
+
 test("the model can read rules, sources and handlers, but a switch only becomes a request the owner must confirm", async () => {
 	const b = build({ controls: config, http: hub });
 	b.domain.rules = [rule("qa-on-ticket")];

@@ -12,6 +12,7 @@ const SECRET_LIKE: [RegExp, string][] = [
 ];
 
 const WHOLE = 8_000_000;
+const FULL_SHA = /^[0-9a-f]{40}$/i;
 
 export interface ChangeReview {
 	files: string[];
@@ -20,24 +21,31 @@ export interface ChangeReview {
 }
 
 /**
- * What the model left in the working tree, seen the way the commit will see it: everything is staged (the service stages it anyway), the
- * paths come from the index, and the added lines are scanned. Deleted and renamed files count with both of their paths.
+ * Everything that would be pushed, seen the way the pull request will see it: the work since `baseSha`, that is the commits already in the
+ * workspace (an earlier attempt's, which a retry in a persisted workspace starts from) plus whatever is still uncommitted. Everything is
+ * staged first (the service stages it anyway) and the index is compared with the base commit, so a commit made earlier is held to the same
+ * guards as the model's fresh changes. Paths come one per line; deleted and renamed files count with both of their paths.
  */
-export async function reviewChange(env: ExecutionEnv, workspace: string): Promise<ChangeReview> {
+export async function reviewChange(env: ExecutionEnv, workspace: string, baseSha: string): Promise<ChangeReview> {
+	if (!FULL_SHA.test(baseSha)) throw new Error("the review needs the full commit the work started from");
 	const staged = await git(env, workspace, "add", "-A");
 	if (staged.code !== 0) throw new Error(`git add failed in the workspace: ${staged.output.slice(-200)}`);
-	const names = await run(env, "git -c core.quotepath=false diff --cached --name-only --no-renames", workspace, 60, WHOLE);
+	const names = await run(env, `git -c core.quotepath=false diff --cached --name-only --no-renames ${baseSha}`, workspace, 60, WHOLE);
 	const files = names.output.split("\n").map((name) => name.trim()).filter(Boolean);
 	if (files.length === 0) return { files };
-	const diff = await run(env, "git diff --cached --no-color --unified=0", workspace, 120, WHOLE);
+	const diff = await run(env, `git diff --cached --no-color --unified=0 ${baseSha}`, workspace, 120, WHOLE);
 	const added = diff.output.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).join("\n");
 	const hit = SECRET_LIKE.find(([pattern]) => pattern.test(added));
 	return { files, ...(hit ? { secretLike: hit[1] } : {}) };
 }
 
-/** Puts the working tree back to the commit: used when the agent says there is no safe fix, so nothing speculative survives. */
-export async function discardChange(env: ExecutionEnv, workspace: string): Promise<void> {
-	await git(env, workspace, "reset", "--hard");
+/**
+ * Puts the workspace back to the commit the work started from: used when the agent says there is no safe fix, so nothing speculative
+ * survives, neither in the working tree nor in a commit an earlier attempt left in a persisted workspace.
+ */
+export async function discardChange(env: ExecutionEnv, workspace: string, baseSha: string): Promise<void> {
+	if (!FULL_SHA.test(baseSha)) throw new Error("discarding needs the full commit the work started from");
+	await git(env, workspace, "reset", "--hard", baseSha);
 	await git(env, workspace, "clean", "-fd");
 }
 

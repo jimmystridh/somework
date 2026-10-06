@@ -31,8 +31,28 @@ export interface ManagerState {
 	seenEvents?: string[];
 	/** Forwarded-event lines held back during quiet hours. */
 	quietQueue?: string[];
+	/** Conversations the owner started with agents through /ask, by conversation id. */
+	chats?: Record<string, ChatRecord>;
+	/** Approval questions an agent put to the owner for an instruction the owner gave in chat, by the agent's request id. */
+	chatApprovals?: Record<string, ChatApprovalRecord>;
 	/** Sources the owner paused from here (the hub does not report it). */
 	sourcesPaused?: Record<string, boolean>;
+}
+
+export interface ChatApprovalRecord {
+	agent: string;
+	conversationId: string;
+	askedAt: string;
+}
+
+export interface ChatRecord {
+	agent: string;
+	startedAt: string;
+	lastSentAt: string;
+	/** Set while the last message has no answer yet; cleared by a reply. */
+	awaitingSince?: string;
+	repliedAt?: string;
+	timeoutNotified?: boolean;
 }
 
 export interface AnnouncedApproval {

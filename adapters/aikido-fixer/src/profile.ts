@@ -16,7 +16,7 @@ export const FIXER_APPROVAL_PATTERNS: [RegExp, string][] = [
 const HANDLER_WRITES = "change the agent's event handlers";
 
 /**
- * The Aikido fixer: fixes one reported issue in a fresh clone and opens a draft pull request. The model gets the coding tools and one
+ * The Aikido fixer: fixes one reported issue in a fresh clone and opens a pull request (a draft when GIT_PR_DRAFT=1). The model gets the coding tools and one
  * read-only Aikido tool; bash goes through the patterns above. Events are on: the shipped handler turns Aikido events into `code.fix`
  * tasks for this same agent. The contract is `card.json`.
  */

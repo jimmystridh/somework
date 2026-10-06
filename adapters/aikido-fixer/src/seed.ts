@@ -3,6 +3,8 @@ import { HandlerStore, handlersDir, type Log } from "@somework/agent-kit";
 import type { FixerSettings } from "./settings.ts";
 
 export const HANDLER = "aikido";
+/** Tasks the handler submits per day, as a multiple of the daily fix cap: a task that turns out to be skipped (a pull request is already open, the issue is closed) never counts against the cap on the host, so the handler's own count is only a flood guard. */
+const SUBMIT_FACTOR = 5;
 const TEMPLATE = new URL("../handlers/aikido.mjs", import.meta.url);
 
 /** The settings the handler needs, as the object written into its source. */
@@ -12,7 +14,7 @@ export const handlerConfig = (settings: FixerSettings) => ({
 	minSeverity: settings.minSeverity,
 	maxAttempts: settings.maxAttemptsPerIssue,
 	cooldownMinutes: settings.cooldownMinutes,
-	dailyCap: settings.dailyCap,
+	submitCapPerDay: settings.dailyCap * SUBMIT_FACTOR,
 	budget: settings.budget,
 });
 

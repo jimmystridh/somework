@@ -163,10 +163,20 @@ export class Controls {
 	}
 
 	// ---- the hub ---------------------------------------------------------------------------------------------------
+	/** One request to a service this one does not own: a connection that fails is a 502 with the service named, never an unexplained 500. */
+	async #reach(who: string, code: "hub_unavailable" | "agent_unavailable", url: string, options: Parameters<NonNullable<ControlsDeps["http"]>>[1]) {
+		try {
+			return await this.#http(url, options);
+		} catch (error) {
+			if (error instanceof PolicyError) throw error;
+			throw new PolicyError(502, code, `${who} could not be reached`);
+		}
+	}
+
 	async sources(): Promise<HubStats> {
 		const { hubUrl, hubCaFile } = this.#deps.config;
 		if (!hubUrl) throw new PolicyError(503, "hub_not_configured", "no hub URL is configured (MANAGER_HUB_URL)");
-		const answer = await this.#http(`${hubUrl.replace(/\/$/, "")}/metrics`, { caFile: hubCaFile });
+		const answer = await this.#reach("the hub", "hub_unavailable", `${hubUrl.replace(/\/$/, "")}/metrics`, { caFile: hubCaFile });
 		if (answer.status !== 200) throw new PolicyError(502, "hub_unavailable", `the hub answered ${answer.status}`);
 		return hubStats(parseMetrics(answer.text));
 	}
@@ -184,7 +194,7 @@ export class Controls {
 		const { hubUrl, hubTokenFile, hubCaFile } = this.#deps.config;
 		if (!hubUrl || !hubTokenFile) throw new PolicyError(503, "hub_not_configured", "the hub URL and admin token file are not configured");
 		const token = (await (this.#deps.readToken ?? ((path) => readFile(path, "utf8")))(hubTokenFile)).trim();
-		const answer = await this.#http(`${hubUrl.replace(/\/$/, "")}/admin/sources/${encodeURIComponent(source)}/${paused ? "pause" : "resume"}`, {
+		const answer = await this.#reach("the hub", "hub_unavailable", `${hubUrl.replace(/\/$/, "")}/admin/sources/${encodeURIComponent(source)}/${paused ? "pause" : "resume"}`, {
 			method: "POST",
 			headers: { authorization: `Bearer ${token}` },
 			caFile: hubCaFile,
@@ -201,7 +211,7 @@ export class Controls {
 	async handlers(agent: string): Promise<any> {
 		const base = this.#deps.config.agentHealth[agent];
 		if (!base) throw new PolicyError(404, "unknown_agent", `no health URL is configured for ${agent} (MANAGER_AGENT_HEALTH)`);
-		const answer = await this.#http(`${base.replace(/\/$/, "")}/status`, { caFile: this.#deps.config.agentCaFile });
+		const answer = await this.#reach(agent, "agent_unavailable", `${base.replace(/\/$/, "")}/status`, { caFile: this.#deps.config.agentCaFile });
 		if (answer.status !== 200) throw new PolicyError(502, "agent_unavailable", `${agent} answered ${answer.status}`);
 		try {
 			return JSON.parse(answer.text);

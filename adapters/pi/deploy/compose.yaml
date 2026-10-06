@@ -60,6 +60,20 @@ services:
       EVENTS_MAX_WAKES_PER_HOUR: ${EVENTS_MAX_WAKES_PER_HOUR:-20}
       EVENTS_HANDLER_TIMEOUT_SECONDS: ${EVENTS_HANDLER_TIMEOUT_SECONDS:-10}
       EVENTS_WAKE_MAX_TOKENS: ${EVENTS_WAKE_MAX_TOKENS:-100000}
+      CHAT_MODE: ${CHAT_MODE:-model}                         # model = chat is answered by the model (questions read-only, instructions as jobs); notice = the fixed notice only
+      CHAT_ALLOWED_SENDERS: ${CHAT_ALLOWED_SENDERS:-}        # who may ask: ids or kind:<kind>; empty = agent/manager and every human
+      CHAT_INSTRUCTORS: ${CHAT_INSTRUCTORS:-}                # who may instruct (messages starting with instruct:); empty = agent/manager
+      CHAT_REPOSITORY_URL: ${CHAT_REPOSITORY_URL:-}          # the repository an instruction works on unless it says repo: (empty = it must say)
+      CHAT_REPOSITORY_REF: ${CHAT_REPOSITORY_REF:-}
+      CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.1}             # share of DAILY_TOKEN_LIMIT that chat may use; the model is not called when it is used up
+      CHAT_TOKEN_CAP: ${CHAT_TOKEN_CAP:-40000}               # tokens of one answer to a question
+      CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-150000}  # tokens of one instruction
+      # Observe tools (read-only Grafana/Loki queries: logs_query, my_history, logs_labels, alerts_status, dashboards_search). Off unless enabled:
+      # OBSERVE_ENABLED: "1"
+      # OBSERVE_SCOPE: own                                   # own = only this agent's streams (OBSERVE_OWN=container="x"); fleet = the whole cluster's agent logs
+      # GRAFANA_URL: https://grafana.example
+      # GRAFANA_TOKEN_FILE: /run/secrets/grafana-token       # Viewer service account token, deploy/grafana/provision-reader.py; mount it below
+      CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-15}
       HEALTH_PORT: "8081"
     volumes:
       - ${AGENT_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
@@ -68,6 +82,7 @@ services:
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./skills-overlay:/run/skills-overlay:ro               # <skill>.md overlays (only used with SKILLS_OVERLAY_DIR)
       - ./secrets/git-token:/run/secrets/git-token:ro       # fine-grained PAT, one repository: Contents + Pull requests write
+      # - ./secrets/grafana-token:/run/secrets/grafana-token:ro
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
     ports: ["${HEALTH_BIND:-127.0.0.1}:8081:8081"]      # health, handlers and token pools; HEALTH_BIND is the VM address the dashboard reads (restrict it in DOCKER-USER)

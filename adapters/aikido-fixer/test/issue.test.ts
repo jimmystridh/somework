@@ -22,6 +22,15 @@ describe("summarising an Aikido issue", () => {
 		assert.equal(summary.howToFix, "Upgrade lodash to 4.17.21");
 	});
 
+	it("lists every file the finding sits in once, with the versions of each", () => {
+		const lock = { ...issue, affected_package: "ws", installed_version: "1.5.4", affected_file: "Source/admin.web/bun.lock" };
+		const summary = summariseIssue({ group, issue: lock, issues: [lock, { ...lock }, { ...lock, affected_file: "Source/admin.web/package.json", installed_version: undefined }, { id: 1 }] });
+		assert.deepEqual(summary.occurrences.map((place) => place.file), ["Source/admin.web/bun.lock", "Source/admin.web/package.json"]);
+		const text = renderIssue(summary, "b");
+		assert.match(text, /found in 2 places/);
+		assert.match(text, /- Source\/admin.web\/bun.lock: ws \(installed 1.5.4, patched in 4.17.21\)/);
+	});
+
 	it("works from a bare group, and from something that is not what the API usually sends", () => {
 		const bare = summariseIssue({ group: { id: 5 } });
 		assert.equal(bare.title, "(no title)");

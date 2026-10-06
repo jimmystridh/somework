@@ -12,4 +12,6 @@ export const profile: AgentProfile = validateProfile({
 	// the repository's own skills are opt-in per deployment: SKILLS_ALLOW=name,name (and SKILLS_OVERLAY_DIR)
 	skills: { allow: [] },
 	events: { enabled: false },
+	// read-only Grafana/Loki tools: still off until OBSERVE_ENABLED=1 and GRAFANA_URL/GRAFANA_TOKEN_FILE are set; a developer may look at the whole fleet
+	observe: { scope: { fleet: true } },
 });

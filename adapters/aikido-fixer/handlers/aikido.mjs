@@ -59,7 +59,7 @@ export default async function handle({ event, now }) {
 	if (issue.attempts >= CONFIG.maxAttempts) return deliver(`issue ${id} was already attempted ${issue.attempts} time(s): a person has to look at it`);
 	if (issue.lastAt && Date.parse(now) - Date.parse(issue.lastAt) < CONFIG.cooldownMinutes * 60_000) return drop(`an attempt on issue ${id} started less than ${CONFIG.cooldownMinutes} minutes ago`);
 	const day = String(now).slice(0, 10);
-	if ((Number.isInteger(state.days[day]) ? state.days[day] : 0) >= CONFIG.dailyCap) return deliver(`the daily cap of ${CONFIG.dailyCap} fix attempts is reached; issue ${id} waits for a person`);
+	if ((Number.isInteger(state.days[day]) ? state.days[day] : 0) >= CONFIG.submitCapPerDay) return deliver(`${CONFIG.submitCapPerDay} fix tasks were already started today, which is more than the daily cap allows for; issue ${id} waits for a person`);
 
 	state.issues[id] = { attempts: issue.attempts + 1, lastAt: now };
 	state.days[day] = (Number.isInteger(state.days[day]) ? state.days[day] : 0) + 1;

@@ -172,15 +172,28 @@ export class AikidoClient {
 		}
 	}
 
+	async #groupIssues(groupId: string): Promise<Json[]> {
+		try {
+			const exported = (await this.#get(`/issues/export?format=json&filter_status=open&filter_issue_group_id=${groupId}`)) as unknown;
+			return Array.isArray(exported) ? exported.filter((item): item is Json => typeof item === "object" && item !== null && !Array.isArray(item)).slice(0, 50) : [];
+		} catch (error) {
+			if (error instanceof AikidoError && error.kind === "unauthorized") throw error;
+			return [];
+		}
+	}
+
 	/**
-	 * The issue group with that id; when there is none, the issue with that id and its group. `issue` is only present for the second case.
+	 * The issue group with that id and the open issues in it (file, package, versions: the group alone has none of that); when there is no
+	 * group, the issue with that id and its group. The issues are best effort: a group is still returned when they cannot be read.
 	 * Ids are integers: anything else is refused before a request is made.
 	 */
-	async resolveIssue(id: string | number): Promise<{ group: Json; issue?: Json }> {
+	async resolveIssue(id: string | number): Promise<{ group: Json; issue?: Json; issues?: Json[] }> {
 		const key = String(id);
 		if (!/^[0-9]{1,12}$/.test(key)) throw new AikidoError("not_found", "an Aikido issue id is a whole number");
 		try {
-			return { group: await this.#get(`/issues/groups/${key}`) };
+			const group = await this.#get(`/issues/groups/${key}`);
+			const issues = await this.#groupIssues(key);
+			return { group, ...(issues.length ? { issue: issues[0], issues } : {}) };
 		} catch (error) {
 			if (!(error instanceof AikidoError) || error.kind !== "not_found") throw error;
 		}

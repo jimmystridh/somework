@@ -219,6 +219,92 @@ describe("before the change is committed", () => {
 	});
 });
 
+describe("a workspace that already holds an earlier attempt's commit", () => {
+	/** The state a retry finds: files committed by `finalizeWorkspace` of an earlier attempt, then the model's new changes (if any). */
+	async function persisted(committed: Record<string, string>, fresh: Record<string, string> = {}) {
+		const w = await workspace(committed);
+		sh(w.dir, "add", "-A");
+		sh(w.dir, "commit", "-q", "-m", "earlier attempt");
+		for (const [name, content] of Object.entries(fresh)) {
+			mkdirSync(join(w.dir, name, ".."), { recursive: true });
+			writeFileSync(join(w.dir, name), content);
+		}
+		return w;
+	};
+	const prepared = async (env: NodeJS.ProcessEnv = {}) => {
+		const r = rig(env);
+		await prepare(r, "t");
+		return r;
+	};
+
+	it("counts the files of the earlier commit and of the new changes together, in the pull request text too", async () => {
+		const r = await prepared();
+		const w = await persisted({ "bun.lock": "lock\n" }, { "package.json": "{}\n" });
+		assert.equal(await r.hooks.beforeFinalize!(context(w, "t")), undefined);
+		const body = r.hooks.pullRequest!({}, { taskId: "t", instruction: "" }).body;
+		assert.match(body, /Files changed \(2\): `bun\.lock`, `package\.json`/);
+	});
+
+	it("reports the earlier commit's file when the model changed nothing more (the retry that produced 'Files changed (0)')", async () => {
+		const r = await prepared();
+		const w = await persisted({ "bun.lock": "lock\n" });
+		assert.equal(sh(w.dir, "status", "--porcelain").trim(), "", "nothing is uncommitted");
+		assert.equal(await r.hooks.beforeFinalize!(context(w, "t")), undefined);
+		assert.match(r.hooks.pullRequest!({}, { taskId: "t", instruction: "" }).body, /Files changed \(1\): `bun\.lock`/);
+	});
+
+	it("holds back a protected path that is inside the earlier commit, whatever the new changes are", async () => {
+		const r = await prepared();
+		const w = await persisted({ ".github/workflows/ci.yml": "on: push\n", "package.json": "{}\n" }, { "README.md": "more\n" });
+		const gate = await r.hooks.beforeFinalize!(context(w, "t"));
+		assert.ok(gate && "blocked" in gate);
+		assert.match(gate.blocked.reason, /protected path \(\.github\/workflows\/ci\.yml, rule \.github\/\*\*\); nothing was pushed/);
+	});
+
+	it("holds back a protected path in the earlier commit even when nothing new was changed", async () => {
+		const r = await prepared();
+		const w = await persisted({ "config/.env.production": "A=1\n" });
+		const gate = await r.hooks.beforeFinalize!(context(w, "t"));
+		assert.ok(gate && "blocked" in gate);
+		assert.match(gate.blocked.reason, /protected path/);
+	});
+
+	it("holds back secret-like text that is inside the earlier commit", async () => {
+		const r = await prepared();
+		const w = await persisted({ "src/config.ts": `export const key = "ghp_${"b".repeat(30)}";\n` });
+		const gate = await r.hooks.beforeFinalize!(context(w, "t"));
+		assert.ok(gate && "blocked" in gate);
+		assert.match(gate.blocked.reason, /adds a GitHub token/);
+	});
+
+	it("counts the earlier commit's files against the file limit", async () => {
+		const r = await prepared({ AIKIDO_MAX_FILES: "3" });
+		const w = await persisted({ "a.txt": "1", "b.txt": "2" }, { "c.txt": "3", "d.txt": "4" });
+		const gate = await r.hooks.beforeFinalize!(context(w, "t"));
+		assert.ok(gate && "blocked" in gate);
+		assert.match(gate.blocked.reason, /touches 4 files, more than the limit of 3/);
+	});
+
+	it("runs the check profile over the whole change, the earlier commit included", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "aikido-checks-"));
+		const file = join(dir, "checks.json");
+		writeFileSync(file, JSON.stringify({ lock: { command: "test -f bun.lock" } }));
+		const r = await prepared({ AIKIDO_CHECK_PROFILE: "lock", AIKIDO_CHECK_FILE: file });
+		const w = await persisted({ "bun.lock": "lock\n" });
+		assert.equal(await r.hooks.beforeFinalize!(context(w, "t")), undefined);
+		assert.match(r.hooks.pullRequest!({}, { taskId: "t", instruction: "" }).body, /Check profile `lock`: passed/);
+	});
+
+	it("throws away the earlier commit too when the agent now says there is no safe fix", async () => {
+		const r = await prepared();
+		const w = await persisted({ "bun.lock": "lock\n" }, { "speculative.txt": "maybe\n" });
+		assert.equal(await r.hooks.beforeFinalize!(context(w, "t", "NO_FIX: the patched version is gone\n\nNothing to do.")), undefined);
+		assert.equal(sh(w.dir, "rev-parse", "HEAD").trim(), w.prepared.baseSha, "back at the commit the work started from");
+		assert.equal(sh(w.dir, "status", "--porcelain").trim(), "");
+		assert.equal(existsSync(join(w.dir, "bun.lock")), false);
+	});
+});
+
 describe("approvals", () => {
 	it("are refused for every command that asks, and everything else passes through unchanged", async () => {
 		const r = rig();

@@ -8,8 +8,10 @@ import { AikidoClient, AikidoError, readCredentials } from "./aikido/client.ts";
 import { eligibility, summariseIssue, type IssueSummary } from "./aikido/issue.ts";
 import { createAikidoTools } from "./aikido/tool.ts";
 import { AttemptLedger } from "./attempts.ts";
+import { fixerChat } from "./chat.ts";
 import { discardChange, reviewChange, runCheck, type CheckResult } from "./checks.ts";
 import { matchesAny } from "./paths.ts";
+import { run } from "./sandbox.ts";
 import { aikidoUrl, buildInstruction, parseAnswer, pullRequestText, type FixInput, type ParsedAnswer } from "./prompt.ts";
 import { seedHandler } from "./seed.ts";
 import { loadSettings, normaliseRepositoryUrl, type FixerSettings } from "./settings.ts";
@@ -24,6 +26,8 @@ interface TaskState {
 	workspace?: string;
 	env?: ExecutionEnv;
 	parsed?: ParsedAnswer;
+	/** An earlier attempt of this task pushed the work and only the pull request was missing: the guards ran then. */
+	resumed?: boolean;
 	files: string[];
 	tests?: CheckResult;
 }
@@ -78,9 +82,11 @@ function parseInput(input: any): FixInput {
  *  - `prepareInput` checks the repository, reads the issue from Aikido, decides whether the issue is this agent's to fix and counts the
  *    attempt on the service host;
  *  - `beforeRun` ends an ineligible task as `skipped` before a token is spent;
+ *  - `resume` lets a retry of a task whose branch was already pushed open the missing pull request without running the model again;
  *  - `beforeFinalize` turns "no safe fix" into an untouched tree and holds back a change that touches protected paths, is too large,
- *    contains secret-like text or fails the repository's check profile;
- *  - `pullRequest` and `branchName` give the draft pull request its title, body, commit message and `agent/aikido-<issue>-<sha>`;
+ *    contains secret-like text or fails the repository's check profile; it judges everything since the base commit, so a commit an earlier
+ *    attempt left in a persisted workspace is held to the same guards as the model's fresh changes;
+ *  - `pullRequest` and `branchName` give the pull request its title, body, commit message and `agent/aikido-<issue>-<sha>`;
  *  - `result` reports `pr_opened`, `no_fix`, `skipped` or `blocked`.
  */
 export function createFixerHooks(options: FixerOptions): RoleHooks {
@@ -89,6 +95,10 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 	const now = options.now ?? (() => new Date());
 	const boundary = options.boundary ?? (() => randomBytes(8).toString("hex"));
 	const attempts = new AttemptLedger(join(options.stateDir, "aikido-attempts.json"), { maxAttemptsPerIssue: settings.maxAttemptsPerIssue, cooldownMinutes: settings.cooldownMinutes, dailyCap: settings.dailyCap }, now);
+	if (settings.ledgerImport) {
+		const imported = attempts.importHistory(settings.ledgerImport);
+		log("info", "fixer_ledger_imported", { file: settings.ledgerImport, ...imported });
+	}
 	const allowedRepositories = new Set(settings.repositories.map(normaliseRepositoryUrl));
 	const tasks = new Map<string, TaskState>();
 	let current: string | undefined;
@@ -144,6 +154,18 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 			current = state.summary.groupId;
 		},
 
+		async resume(context) {
+			const state = stateOf(context.taskId);
+			const env = context.envFor(context.workspace);
+			const subject = (await run(env, `git log -1 --format=%s ${context.sha}`, context.workspace, 60)).output.trim();
+			const changed = await run(env, `git -c core.quotepath=false diff --name-only --no-renames ${context.baseSha}..${context.sha}`, context.workspace, 60, 8_000_000);
+			state.files = changed.output.split("\n").map((name) => name.trim()).filter(Boolean);
+			state.resumed = true;
+			log("info", "fixer_resumed", { taskId: context.taskId, issue: state.summary.groupId, branch: context.branch, files: state.files.length });
+			const headline = subject.replace(/^fix\(security\):\s*/, "").replace(/\s*\(Aikido #\d+\)\s*$/, "") || "fix pushed by an earlier attempt";
+			return { answer: `FIXED: ${headline}\n\nThis branch was pushed by an earlier attempt of the same task and only the pull request was missing, so it was opened now without running the model again. The protected-path, size and secret checks ran before that push.` };
+		},
+
 		async afterRun(context) {
 			if (tasks.get(context.taskId)?.summary.groupId === current) current = undefined;
 		},
@@ -152,12 +174,13 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 			const state = stateOf(context.taskId);
 			const env = context.envFor(context.workspace);
 			state.parsed = parseAnswer(context.answer);
+			if (state.resumed) return;
 			if (state.parsed.kind === "no_fix") {
-				await discardChange(env, context.workspace);
+				await discardChange(env, context.workspace, context.baseSha);
 				log("info", "fixer_no_fix", { taskId: context.taskId, issue: state.summary.groupId });
 				return;
 			}
-			const review = await reviewChange(env, context.workspace);
+			const review = await reviewChange(env, context.workspace, context.baseSha);
 			state.files = review.files;
 			if (review.files.length === 0) return;
 			const protectedPath = review.files.map((file) => ({ file, pattern: matchesAny(file, settings.protectedPaths) })).find((hit) => hit.pattern !== undefined);
@@ -186,7 +209,15 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 		result(base, context): ResultPatch {
 			const state = tasks.get(context.taskId);
 			if (!state) return { failure: { code: "job_error", message: "the run finished without its Aikido issue", retryable: true } };
-			return { result: outcomeOf(base, context, state) };
+			const result = outcomeOf(base, context, state);
+			attempts.recordOutcome(context.taskId, {
+				groupId: state.summary.groupId,
+				outcome: String(result.outcome),
+				...(typeof result.branch === "string" ? { branch: result.branch } : {}),
+				...(typeof result.prUrl === "string" ? { prUrl: result.prUrl } : {}),
+				...(tokensOf(result.usage) !== undefined ? { tokens: tokensOf(result.usage)! } : {}),
+			});
+			return { result };
 		},
 
 		onSettled(taskId, outcome: Outcome) {
@@ -198,6 +229,12 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 		},
 	};
 }
+
+const tokensOf = (usage: unknown): number | undefined => {
+	const total = (usage as { totalTokens?: unknown; tokens?: unknown } | undefined);
+	const value = total?.totalTokens ?? total?.tokens;
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+};
 
 /** The card's result for a settled task. */
 export function outcomeOf(base: Record<string, unknown>, context: ResultContext, state: TaskState): Record<string, unknown> {
@@ -214,18 +251,18 @@ export function outcomeOf(base: Record<string, unknown>, context: ResultContext,
 	}
 	const sha = done.commits.at(-1);
 	if (!done.prUrl) return { outcome: "blocked", summary: `the branch ${done.branch} was pushed but no pull request could be opened: ${clip(state.parsed?.headline ?? "", 300)}`, branch: done.branch, ...(sha ? { sha } : {}), ...common };
-	return { outcome: "pr_opened", summary: clip([state.parsed?.headline, state.parsed?.text].filter(Boolean).join("\n\n") || "a draft pull request was opened", 4000), prUrl: done.prUrl, branch: done.branch, ...(sha ? { sha } : {}), ...common };
+	return { outcome: "pr_opened", summary: clip([state.parsed?.headline, state.parsed?.text].filter(Boolean).join("\n\n") || "a pull request was opened", 4000), prUrl: done.prUrl, branch: done.branch, ...(sha ? { sha } : {}), ...common };
 }
 
 /** For `runAgentService`: the hooks of the service being composed. Fails at startup when the deployment cannot work. */
 export async function aikidoFixerHooksFor(context: ServiceContext): Promise<RoleHooks> {
 	const settings = loadSettings(context.env);
 	if (!context.gitToken) throw new Error("the Aikido fixer needs GIT_TOKEN_FILE: a token that can push agent/* branches and open pull requests on its repository");
-	if (context.env.GIT_PR_DRAFT !== "1") throw new Error("the Aikido fixer only opens draft pull requests: GIT_PR_DRAFT must be 1");
 	if (context.config.concurrency !== 1) throw new Error("the Aikido fixer runs one fix at a time: PI_CONCURRENCY must be 1");
 	readCredentials(settings.credentialsFile);
 	const aikido = new AikidoClient({ region: settings.region, credentials: () => readCredentials(settings.credentialsFile), apiBase: settings.apiBase, oauthUrl: settings.oauthUrl });
 	seedHandler({ stateDir: context.config.state.dir, settings, log: context.log, reseed: context.env.AIKIDO_RESEED_HANDLER === "1" });
 	const hooks = createFixerHooks({ settings, aikido, stateDir: context.config.state.dir, log: context.log });
-	return { ...hooks, readinessChecks: { aikido_credentials: async () => !!readCredentials(settings.credentialsFile) } };
+	const chat = fixerChat({ settings, aikido, stateDir: context.config.state.dir, mirrorDir: context.config.git.mirror?.dir, log: context.log });
+	return { ...hooks, chat, readinessChecks: { aikido_credentials: async () => !!readCredentials(settings.credentialsFile) } };
 }

@@ -1,5 +1,6 @@
 import { runAgentService, type AgentProfile, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
 import { windowsExecutionHooks } from "@somework/agent-kit/windows";
+import { windowsDeveloperChat } from "./chat.ts";
 import { profile as defaultProfile } from "./profile.ts";
 import { loadProfiles } from "./profiles.ts";
 import { createRole } from "./role.ts";
@@ -15,6 +16,7 @@ export function windowsHooksFor(settings: WindowsSettings, context: ServiceConte
 	context.log("info", "windows_profiles_loaded", { root: settings.root, build: Object.keys(profiles.build), test: Object.keys(profiles.test) });
 	return {
 		...role.hooks,
+		chat: windowsDeveloperChat(context.env),
 		...windowsExecutionHooks(settings),
 	};
 }

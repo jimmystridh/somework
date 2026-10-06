@@ -65,6 +65,17 @@ only for repositories whose owners accept that.
 | lost lease | outcome discarded, the run keeps going for whoever re-claims |
 | finished but outcome not committed | retry re-attaches, finalize finds the commit and the pull request: nothing is done twice |
 
+## Chat
+
+The developer answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice). A **question** from the manager or a person
+gets one bounded, read-only turn: tools `read, agent_status`, no commands, no changes, no approvals, an answer built from the service's own records
+(`agent_status`) and, where it has one, a read-only checkout. An **instruction** (`instruct: ...`, from `agent/manager` only) becomes a `code.agent` v2 task on `repo:` / `ref:` lines at the top of the message, else `CHAT_REPOSITORY_URL`; the branch and the pull request are made by the service as always.
+It runs as a job of the normal handler, with the role's own tools, guards and approvals, a chat budget of its own (150 000 tokens, 15 minutes by
+default, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES`) and the `chat` share of the daily token limit (`CHAT_TOKEN_SHARE`); a step that needs
+approval is asked of the manager in the conversation. Settings: `CHAT_MODE`, `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS`, `CHAT_REPOSITORY_URL`,
+`CHAT_REPOSITORY_REF`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
+`packages/agent-kit/README.md`).
+
 ## Tests
 Most tests live with the code they test in `packages/agent-kit/test` (run `npm test` there); this package keeps the role-level ones (profile and card,
 the service end to end against a real domain, the crash matrix). `npm test` (needs `git`, and the domain binary `dist/somework` or `SOMEWORK_BIN`) covers: sandbox (isolation, cancellation kills the process

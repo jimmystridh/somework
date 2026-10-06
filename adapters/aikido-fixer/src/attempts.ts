@@ -1,10 +1,54 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
+export interface AttemptOutcome {
+	groupId: string;
+	/** `pr_opened`, `no_fix`, `skipped`, `blocked` or `failed:<code>`. */
+	outcome: string;
+	at: string;
+	branch?: string;
+	prUrl?: string;
+	tokens?: number;
+	/** Seeded from a file of earlier attempts (`AIKIDO_LEDGER_IMPORT`), not recorded by this build. */
+	imported?: true;
+}
+
+/** One row of the file `AIKIDO_LEDGER_IMPORT` points at. */
+export interface PastAttempt {
+	issueId: number | string;
+	outcome: string;
+	at: string;
+	branch?: string;
+	prUrl?: string;
+	tokens?: number;
+}
+
+export interface ImportResult {
+	imported: number;
+	alreadyThere: number;
+	invalid: number;
+}
+
+const OUTCOMES = /^(pr_opened|no_fix|skipped|blocked|failed:[a-z_]{1,40})$/;
+
+function pastAttempt(row: unknown): (AttemptOutcome & { key: string }) | undefined {
+	const r = row as Partial<PastAttempt> | null;
+	if (!r || typeof r !== "object") return undefined;
+	const id = typeof r.issueId === "number" ? String(r.issueId) : typeof r.issueId === "string" ? r.issueId.trim() : "";
+	if (!/^[0-9]{1,12}$/.test(id) || typeof r.outcome !== "string" || !OUTCOMES.test(r.outcome)) return undefined;
+	if (typeof r.at !== "string" || Number.isNaN(Date.parse(r.at))) return undefined;
+	if (r.branch !== undefined && (typeof r.branch !== "string" || r.branch.length > 200 || /\s/.test(r.branch))) return undefined;
+	if (r.prUrl !== undefined && (typeof r.prUrl !== "string" || r.prUrl.length > 300 || !/^https:\/\/[^\s]+$/.test(r.prUrl))) return undefined;
+	if (r.tokens !== undefined && !(typeof r.tokens === "number" && Number.isFinite(r.tokens) && r.tokens >= 0)) return undefined;
+	const at = new Date(r.at).toISOString();
+	return { key: `import:${id}:${at}`, groupId: id, outcome: r.outcome, at, ...(r.branch ? { branch: r.branch } : {}), ...(r.prUrl ? { prUrl: r.prUrl } : {}), ...(r.tokens !== undefined ? { tokens: r.tokens } : {}), imported: true };
+}
+
 interface Stored {
 	issues: Record<string, { attempts: { taskId: string; at: string }[] }>;
 	days: Record<string, string[]>;
 	branches: Record<string, { name: string; at: string }>;
+	outcomes: Record<string, AttemptOutcome>;
 }
 
 export type Begin = { ok: true } | { ok: false; reason: string };
@@ -16,6 +60,7 @@ export interface AttemptLimits {
 }
 
 const MAX_BRANCHES = 500;
+const MAX_OUTCOMES = 200;
 const KEEP_DAYS = 7;
 
 /**
@@ -37,12 +82,12 @@ export class AttemptLedger {
 	}
 
 	#read(): Stored {
-		if (!existsSync(this.#file)) return { issues: {}, days: {}, branches: {} };
+		if (!existsSync(this.#file)) return { issues: {}, days: {}, branches: {}, outcomes: {} };
 		try {
 			const stored = JSON.parse(readFileSync(this.#file, "utf8")) as Partial<Stored>;
-			return { issues: stored.issues ?? {}, days: stored.days ?? {}, branches: stored.branches ?? {} };
+			return { issues: stored.issues ?? {}, days: stored.days ?? {}, branches: stored.branches ?? {}, outcomes: stored.outcomes ?? {} };
 		} catch {
-			return { issues: {}, days: {}, branches: {} };
+			return { issues: {}, days: {}, branches: {}, outcomes: {} };
 		}
 	}
 
@@ -68,6 +113,69 @@ export class AttemptLedger {
 		for (const old of Object.keys(stored.days)) if (Date.parse(`${old}T00:00:00Z`) < now.getTime() - KEEP_DAYS * 86_400_000) delete stored.days[old];
 		this.#write(stored);
 		return { ok: true };
+	}
+
+	/** Notes how a task ended, once (the first record of a task wins), for the chat's account of what the agent did. */
+	recordOutcome(taskId: string, outcome: Omit<AttemptOutcome, "at">): void {
+		const stored = this.#read();
+		if (stored.outcomes[taskId]) return;
+		stored.outcomes[taskId] = { ...outcome, at: this.#now().toISOString() };
+		this.#pruneOutcomes(stored);
+		this.#write(stored);
+	}
+
+	#pruneOutcomes(stored: Stored): void {
+		const oldest = Object.entries(stored.outcomes).sort(([, a], [, b]) => a.at.localeCompare(b.at));
+		if (oldest.length > MAX_OUTCOMES) for (const [key] of oldest.slice(0, oldest.length - MAX_OUTCOMES)) delete stored.outcomes[key];
+	}
+
+	/**
+	 * Seeds the account of past attempts from a JSON file: an array of `{issueId, outcome, at, branch?, prUrl?, tokens?}` (or `{attempts: [...]}`).
+	 * Idempotent: a row is identified by its issue and time, so importing the same file, or an overlapping one, again adds nothing. Imported rows
+	 * only fill in the chat's account; they do not count against the daily cap, the per-issue attempt limit or the cool-down. A row that is not
+	 * valid is skipped and counted. A file that cannot be read or is not a list is an error (it is a startup setting: a typo should be loud).
+	 */
+	importHistory(file: string): ImportResult {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(readFileSync(file, "utf8"));
+		} catch (error) {
+			throw new Error(`AIKIDO_LEDGER_IMPORT ${file} cannot be read as JSON: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		const rows = Array.isArray(parsed) ? parsed : Array.isArray((parsed as { attempts?: unknown })?.attempts) ? (parsed as { attempts: unknown[] }).attempts : undefined;
+		if (!rows) throw new Error(`AIKIDO_LEDGER_IMPORT ${file} must hold a list of attempts`);
+		const stored = this.#read();
+		const result: ImportResult = { imported: 0, alreadyThere: 0, invalid: 0 };
+		for (const row of rows) {
+			const attempt = pastAttempt(row);
+			if (!attempt) {
+				result.invalid += 1;
+				continue;
+			}
+			const { key, ...outcome } = attempt;
+			if (stored.outcomes[key]) {
+				result.alreadyThere += 1;
+				continue;
+			}
+			stored.outcomes[key] = outcome;
+			result.imported += 1;
+		}
+		if (result.imported > 0) {
+			this.#pruneOutcomes(stored);
+			this.#write(stored);
+		}
+		return result;
+	}
+
+	/** What the chat may state: the limits, today's count, and the recent attempts per issue with how they ended. */
+	facts(limit = 10): { dailyCap: number; maxAttemptsPerIssue: number; cooldownMinutes: number; today: number; recent: (AttemptOutcome & { taskId: string; attempts: number })[] } {
+		const stored = this.#read();
+		const today = this.#now().toISOString().slice(0, 10);
+		const recent = Object.entries(stored.outcomes)
+			.sort(([, a], [, b]) => b.at.localeCompare(a.at))
+			.slice(0, limit)
+			.map(([taskId, outcome]) => ({ taskId, ...outcome, attempts: stored.issues[outcome.groupId]?.attempts.length ?? 0 }));
+		return { dailyCap: this.#limits.dailyCap, maxAttemptsPerIssue: this.#limits.maxAttemptsPerIssue, cooldownMinutes: this.#limits.cooldownMinutes, today: stored.days[today]?.length ?? 0, recent };
 	}
 
 	/** The branch a task uses: the first name it was given, forever, so a retry never opens a second branch. */

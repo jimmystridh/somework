@@ -80,6 +80,17 @@ the model's tools and the kit's git steps run in the agent's own process tree on
 If this role ever handles code that must not be able to reach the machine's other data, run it in a Windows container or a throwaway VM
 instead (the `ExecutionEnv` is the only thing that would change).
 
+## Chat
+
+The Windows developer answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice). A **question** from the manager or a person
+gets one bounded, read-only turn: tools `read, agent_status`, no commands, no changes, no approvals, an answer built from the service's own records
+(`agent_status`) and, where it has one, a read-only checkout. An **instruction** (`instruct: ...`, from `agent/manager` only) becomes a `code.windows` task: optional lines `repo:`, `ref:`, `build: <profile>`, `tests: <profile>, <profile>` (names of profiles on the machine only, never commands), the rest is the instruction. It runs in the same confined environment with the same checks.
+It runs as a job of the normal handler, with the role's own tools, guards and approvals, a chat budget of its own (150 000 tokens, 15 minutes by
+default, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES`) and the `chat` share of the daily token limit (`CHAT_TOKEN_SHARE`); a step that needs
+approval is asked of the manager in the conversation. Settings: `CHAT_MODE`, `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS`, `CHAT_REPOSITORY_URL`,
+`CHAT_REPOSITORY_REF`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
+`packages/agent-kit/README.md`).
+
 ## Settings
 
 The kit's own settings apply (`SOMEWORK_*`, `PI_*`, `GIT_*`, `BUDGET_*`, `SKILLS_*`, see `packages/agent-kit/src/config.ts`);

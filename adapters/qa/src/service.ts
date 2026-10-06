@@ -3,6 +3,7 @@ import { jsonLogger, runAgentService, type RoleHooks, type ServiceContext } from
 import { windowsExecutionHooks } from "@somework/agent-kit/windows";
 import { loadAppProfiles, type AppEnv, type AppProfile } from "./app.ts";
 import type { BrowserBackend } from "./browser/backend.ts";
+import { qaChat } from "./chat.ts";
 import { createQaHooks } from "./hooks.ts";
 import { JiraClient } from "./jira.ts";
 import { createJiraTools, jiraToolApprovals } from "./jira-tools.ts";
@@ -39,6 +40,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 	});
 	return {
 		...hooks,
+		chat: qaChat(context.env, settings.ticketPattern),
 		...execution,
 		readinessChecks: {
 			...execution.readinessChecks,

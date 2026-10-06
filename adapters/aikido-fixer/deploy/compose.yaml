@@ -52,7 +52,7 @@ services:
       GIT_TOKEN_FILE: /run/secrets/git-token                # fine-grained, ONE repository: Contents + Pull requests write
       GIT_TOKEN_HOSTS: ${GIT_TOKEN_HOSTS:-github.com}       # the only hosts the token may ever be sent to
       GITHUB_API: ${GITHUB_API:-}                           # only for a GitHub Enterprise API
-      GIT_PR_DRAFT: "1"                                     # draft pull requests only: the role refuses to start otherwise
+      GIT_PR_DRAFT: ${GIT_PR_DRAFT:-0}                      # 0 = real pull requests (default), 1 = drafts; either way only agent/* branches, never merged
       GIT_MIRROR_DIR: /workspace/.mirrors                   # inside the sandbox
       AIKIDO_MIRROR_REFRESH_MINUTES: ${AIKIDO_MIRROR_REFRESH_MINUTES:-30}
       AIKIDO_REPOSITORY_URL: ${AIKIDO_REPOSITORY_URL:?clone URL of the one repository this agent fixes}
@@ -69,6 +69,7 @@ services:
       AIKIDO_DAILY_CAP: ${AIKIDO_DAILY_CAP:-5}
       AIKIDO_FIX_BUDGET_TOKENS: ${AIKIDO_FIX_BUDGET_TOKENS:-300000}
       AIKIDO_FIX_BUDGET_MINUTES: ${AIKIDO_FIX_BUDGET_MINUTES:-30}
+      AIKIDO_LEDGER_IMPORT: ${AIKIDO_LEDGER_IMPORT:-}         # a JSON file of earlier attempts (mount it under /run/config), imported once and idempotently; see the README
       AIKIDO_RESEED_HANDLER: ${AIKIDO_RESEED_HANDLER:-0}     # 1 = write the shipped handler again, with these settings, as a new version
       BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-500000}
       BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-45}
@@ -80,6 +81,18 @@ services:
       EVENTS_THROTTLE_AT: ${EVENTS_THROTTLE_AT:-0.8}
       EVENTS_MAX_FAILURES: ${EVENTS_MAX_FAILURES:-5}
       EVENTS_MAX_WAKES_PER_HOUR: ${EVENTS_MAX_WAKES_PER_HOUR:-20}
+      CHAT_MODE: ${CHAT_MODE:-model}                         # model = chat is answered by the model (questions read-only, instructions as jobs); notice = the fixed notice only
+      CHAT_ALLOWED_SENDERS: ${CHAT_ALLOWED_SENDERS:-}        # who may ask: ids or kind:<kind>; empty = agent/manager and every human
+      CHAT_INSTRUCTORS: ${CHAT_INSTRUCTORS:-}                # who may instruct (messages starting with instruct:); empty = agent/manager
+      CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.1}             # share of DAILY_TOKEN_LIMIT that chat may use; the model is not called when it is used up
+      CHAT_TOKEN_CAP: ${CHAT_TOKEN_CAP:-40000}               # tokens of one answer to a question
+      CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-150000}  # tokens of one instruction
+      # Observe tools (read-only Grafana/Loki queries: logs_query, my_history, logs_labels, alerts_status, dashboards_search). Off unless enabled:
+      # OBSERVE_ENABLED: "1"
+      # OBSERVE_SCOPE: own                                   # own = only this agent's streams (OBSERVE_OWN=container="x"); fleet = the whole cluster's agent logs
+      # GRAFANA_URL: https://grafana.example
+      # GRAFANA_TOKEN_FILE: /run/secrets/grafana-token       # Viewer service account token, deploy/grafana/provision-reader.py; mount it below
+      CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-15}
       HEALTH_PORT: "8081"
     volumes:
       - ${FIXER_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
@@ -88,6 +101,7 @@ services:
       - ./secrets/pi:/run/secrets/pi                         # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./secrets/git-token:/run/secrets/git-token:ro        # fine-grained, ONE repository, Contents + Pull requests: write
+      # - ./secrets/grafana-token:/run/secrets/grafana-token:ro
       - ./secrets/aikido-client.json:/run/secrets/aikido-client.json:ro   # {"clientId": "...", "clientSecret": "..."}; read-only access to issues
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]

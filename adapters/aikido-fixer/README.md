@@ -1,6 +1,6 @@
 # Aikido fixer (`code.fix`)
 
-An agent that listens to Aikido's events, keeps a fresh clone of one repository, tries to fix the issue Aikido reported, and opens a **draft pull request**. It never merges, never approves and never touches another branch. A thin role on `@somework/agent-kit`: this directory is a card, a profile, hooks, one read-only tool, a shipped event handler and the deployment files.
+An agent that listens to Aikido's events, keeps a fresh clone of one repository, tries to fix the issue Aikido reported, and opens a **pull request** (a real one by default; `GIT_PR_DRAFT=1` makes it a draft). It never merges, never approves and never touches another branch. A thin role on `@somework/agent-kit`: this directory is a card, a profile, hooks, one read-only tool, a shipped event handler and the deployment files.
 
 ```
 Aikido ──webhook──► receiver ─► hub ─► event aikido.issue.* ─► (rule aikido-fixer: wake) ─► this agent
@@ -10,7 +10,7 @@ Aikido ──webhook──► receiver ─► hub ─► event aikido.issue.* �
                                                                          │
    mirror refreshed ─► fresh clone at the resolved commit ─► Aikido issue read (host side) ─► eligibility ─► model works in the sandbox
                                                                          │ FIXED: / NO_FIX:
-   guards (protected paths, file count, secret-like text, check profile) ─► commit (cites the issue) ─► push agent/aikido-<issue>-<sha> ─► draft PR
+   guards (protected paths, file count, secret-like text, check profile) ─► commit (cites the issue) ─► push agent/aikido-<issue>-<sha> ─► pull request
 ```
 
 ## The contract (`card.json`)
@@ -23,20 +23,21 @@ Output: `{ outcome, summary, aikidoIssueId, files[], prUrl?, branch?, sha?, base
 
 | outcome | meaning |
 |---|---|
-| `pr_opened` | branch pushed and a draft pull request opened (`prUrl`, `branch`, `sha`) |
+| `pr_opened` | branch pushed and a pull request opened (a draft when `GIT_PR_DRAFT=1`) (`prUrl`, `branch`, `sha`) |
 | `no_fix` | no safe fix: the agent said so (`NO_FIX:`) or changed nothing; whatever it had started was discarded |
 | `skipped` | not this agent's issue: closed, ignored or snoozed, a pull request already open, below the severity threshold, a type it does not fix (a leaked secret has to be rotated), another repository, or the attempt limits were reached. Decided before a token is spent |
 | `blocked` | a guard stopped the change: a protected path, too many files, secret-like text, a failing check profile, or a branch that was pushed without a pull request |
 
 ## How it works
 
-1. **Event to task.** The rule `rules/aikido-fixer.yaml` wakes the agent for every `aikido.*` event. The shipped handler `handlers/aikido.mjs` (installed into the agent's handler directory on first start, versioned like any handler) looks only at the issue number, severity, repository name and an `aikido.dev` link, and decides: **drop** (closed or resolved, below the severity threshold, another repository, already handled), **deliver** (no usable issue id, attempts exhausted or the daily cap reached: a person should look) or **submit** one `code.fix` task to this same agent, with `causedByEvent` set by the kit. Event text is data: nothing else is copied into the task.
-2. **Authoritative limits on the host.** The handler's counters live in the sandbox where the model's tools can reach them, so they are only an early filter. `prepareInput` counts every attempt again on the service host (`aikido-attempts.json` in the state volume): per issue at most `AIKIDO_MAX_ATTEMPTS_PER_ISSUE` with a cool-down, per day at most `AIKIDO_DAILY_CAP`. A task is counted once however often it is retried.
+1. **Event to task.** The rule `rules/aikido-fixer.yaml` wakes the agent for every `aikido.*` event. The shipped handler `handlers/aikido.mjs` (installed into the agent's handler directory on first start, versioned like any handler) looks only at the issue number, severity, repository name and an `aikido.dev` link, and decides: **drop** (closed or resolved, below the severity threshold, another repository, already handled), **deliver** (no usable issue id, attempts exhausted, or five times the daily cap of tasks already started today: a person should look) or **submit** one `code.fix` task to this same agent, with `causedByEvent` set by the kit. Event text is data: nothing else is copied into the task.
+2. **Authoritative limits on the host.** The handler's counters live in the sandbox where the model's tools can reach them, so they are only an early filter (the handler counts tasks it submits, including ones the host later skips, so its daily limit is five times `AIKIDO_DAILY_CAP`). `prepareInput` counts every attempt that is not skipped again on the service host (`aikido-attempts.json` in the state volume): per issue at most `AIKIDO_MAX_ATTEMPTS_PER_ISSUE` with a cool-down, per day at most `AIKIDO_DAILY_CAP`. A task is counted once however often it is retried.
 3. **Read the issue (host side).** The service holds the Aikido OAuth2 client credentials (a file only the harness reads), fetches the issue group, trims and sanitises every text field (control characters, secret-like strings, length) and decides eligibility. The model reads the issue again with the read-only tool `aikido_issue`, which takes no arguments that choose another issue; everything Aikido says is framed as untrusted data inside random markers.
 4. **Fresh clone.** A persistent bare mirror of the repository (`GIT_MIRROR_DIR`, branches and tags only) is refreshed before every task and on a timer (`AIKIDO_MIRROR_REFRESH_MINUTES`, default 30); the workspace is cloned from it at the resolved commit of the default branch, then `origin` is pointed back at the real remote.
 5. **Work.** The model gets `read`, `write`, `edit`, `bash` and `aikido_issue`, a conservative budget (default 300 000 tokens, 30 minutes) and orders to make the smallest change. Commands that would change the branch, the history or the code host, or that match the developer role's patterns, ask for approval; **nobody answers for this agent, so every approval request is refused**.
-6. **Guards, then git.** The service stages the change and refuses it (`blocked`, nothing leaves the workspace) when it touches a protected path (workflows, pipelines, code owners, key and environment files), more than `AIKIDO_MAX_FILES` files, adds secret-like text, or fails the repository's named check profile. Otherwise it commits (`fix(security): … (Aikido #<id>)`, citing the issue), pushes `agent/aikido-<issueId>-<sha8>` (never `main`, never forced) and opens a **draft** pull request whose body says it is generated and unreviewed. A retry keeps its branch name.
-7. **Clean-up.** The checkout is removed once the result is reported.
+6. **Guards, then git.** The service stages everything and judges the whole change since the base commit, so a commit an earlier attempt left in a persisted workspace is checked as strictly as the model's fresh changes (and counts in the file list of the pull request). It refuses the change (`blocked`, nothing leaves the workspace) when it touches a protected path (workflows, pipelines, code owners, key and environment files), more than `AIKIDO_MAX_FILES` files, adds secret-like text, or fails the repository's named check profile. Otherwise it commits (`fix(security): … (Aikido #<id>)`, citing the issue), pushes `agent/aikido-<issueId>-<sha8>` (never `main`, never forced) and opens a pull request whose body says it was generated by an agent and must be reviewed before merge. A retry keeps its branch name.
+7. **Retries and reruns.** The branch on the remote is never rewritten (no force push). If a retry of the same task finds its work already pushed and only the pull request missing, the role's `resume` hook recovers the headline and the files from the pushed commit and the pull request is opened **without another model run** (`job_resumed` in the log; the body says so). If the branch exists with the same tree, it is reused; with different work, the new work goes to `agent/aikido-<issue>-<sha8>-2` (up to `-5`) and the result's `branch` and `prUrl` name that real branch; when all five are taken the task fails `branch_exhausted` (not retried: a person has to look at those branches).
+8. **Clean-up.** The checkout is removed once the result is reported.
 
 ## Settings
 
@@ -56,9 +57,21 @@ All `AIKIDO_*` unless noted; `deploy/.env.example` and `deploy/compose.yaml` lis
 | `AIKIDO_DAILY_CAP` | `5` | fix attempts per UTC day |
 | `AIKIDO_FIX_BUDGET_TOKENS`, `AIKIDO_FIX_BUDGET_MINUTES` | `300000`, `30` | budget the handler puts on the task |
 | `AIKIDO_MIRROR_REFRESH_MINUTES` | `30` | mirror refresh (kit variables `GIT_MIRROR_DIR`, `GIT_MIRROR_REPOS`, `GIT_MIRROR_REFRESH_MINUTES`) |
+| `AIKIDO_LEDGER_IMPORT` | none | path of a JSON file of earlier attempts that seeds the chat's account of what the agent did (below) |
 | `AIKIDO_RESEED_HANDLER` | `0` | `1` writes the shipped handler again, with the current settings, as a new version |
 
-The service refuses to start without a git token, with `GIT_PR_DRAFT` not `1`, or with `PI_CONCURRENCY` above 1. The handler's settings are written into it when it is installed; a restart never overwrites the live copy.
+The service refuses to start without a git token or with `PI_CONCURRENCY` above 1. `GIT_PR_DRAFT` (default `0`) chooses between real pull requests and drafts; the rest of the safety envelope does not depend on it: only `agent/*` branches, never the default branch, never a force push, never a merge or an approval. The handler's settings are written into it when it is installed; a restart never overwrites the live copy.
+
+## Chat
+
+The fixer answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice).
+
+* **Questions** (from `agent/manager` or a person): one read-only turn with `read` (of a checkout of `AIKIDO_REPOSITORY_URL`), `agent_status`, `fixer_status` and `aikido_lookup`. `fixer_status` is the host's own record: today's fix tasks against `AIKIDO_DAILY_CAP`, the per-issue limits, and the recent attempts with their outcome (`pr_opened`, `no_fix`, `skipped`, `blocked`), branch, pull request and tokens, and how fresh the local clone is. `aikido_lookup` reads one Aikido issue by its whole-number id (the same trimmed, framed and secret-stripped answer as `aikido_issue`; it cannot list, search or write). The model cannot start a fix, push or open a pull request from a question.
+* **Instructions** (`instruct: fix issue 1234`, from `agent/manager` only; optional `repo:` line naming an allowed repository; anything else in the sentence is passed as the requester's hint): a `code.fix` task for that issue on the configured repository, run by the same handler as an event's task: eligibility (severity, type, open), the daily cap and per-issue attempt limits with cool-down, protected paths, size, secret and check-profile guards, a real pull request for a person to review. Chat gets no extra power: approval requests stay refused, and `PI_CONCURRENCY=1` is shared with event tasks (tasks first). Exactly one issue number must be named; a version or a number in a URL is not taken as one.
+
+**Seeding the history.** Outcomes are recorded from the build that has chat on; earlier attempts are not known to it. To seed them, put a JSON file in the config directory (mounted at `/run/config/`) and set `AIKIDO_LEDGER_IMPORT=/run/config/past-attempts.json`. The file is an array (or `{"attempts": [...]}`) of rows `{"issueId": 1234, "outcome": "pr_opened", "at": "2026-10-01T09:00:00Z", "branch": "agent/aikido-1234-abcd1234", "prUrl": "https://github.com/ORG/REPO/pull/9", "tokens": 41000}`; `outcome` is `pr_opened`, `no_fix`, `skipped`, `blocked` or `failed:<code>`, `branch`, `prUrl` (https only) and `tokens` are optional. The import runs at every start and is idempotent: a row is identified by its issue and time, so the same or an overlapping file adds nothing twice, and it can stay set. Imported rows only fill in what `fixer_status` reports (marked "imported history"); they do not count against the daily cap, the attempt limit or the cool-down. Invalid rows are skipped and counted in the log line `fixer_ledger_imported {imported, alreadyThere, invalid}`; a file that is missing, not JSON or not a list stops the service at startup. At most the newest 200 outcomes are kept.
+
+The outcome of every task is also written to the host ledger (`aikido-attempts.json` in the state directory), which is what `fixer_status` reports.
 
 ## Decisions and limits
 
