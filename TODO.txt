@@ -34,7 +34,7 @@ C. DATADOG TRIAGE AGENT: ENROL AND START (section 5, DATADOG TRIAGE)
 - [DECISION/owner] replace the unscoped application key with one scoped to monitors_read, logs_read_data, timeseries_query, events_read,
   incident_read (the current one has no scopes); keep the keys local (~/.somework-pilot/datadog-stage), never in chat.
 - Model login by device code (the owner approves); enrol `agent/datadog-triage --side-effects read --may-invoke ops.triage`; send the NATS
-  broker a SIGHUP by hand (the reloader does not reach it); register and approve the card; install datadog.json; move the held rule
+  broker a SIGHUP by hand until the reloader is fixed (root cause below); register and approve the card; install datadog.json; move the held rule
   (deploy/rules/datadog-triage.yaml) into rules/ so CI applies it (it is held because the pipeline fails while the agent does not exist);
   the Datadog webhook template must carry priority and tags; start the compose stack from the pilot images (built; the Dockerfile ARG fix is
   committed); one supervised triage of a real monitor. Site is the EU one (api.datadoghq.eu).
@@ -69,7 +69,7 @@ G. KNOWN MINOR (nobody blocked)
 - The developer's events token pool stays throttled until the daily rollover; 163 failed acceptance tasks remain in the domain history;
   the CI runner does not ship logs to Loki yet; chat conversations pile up in each agent's pi.sqlite (Pi Durable has no retention API; pruning
   would mean editing its database directly); requester inboxes are bounded by the 90-day message retention; the Rust stress test ten_times_stress_degrades_gracefully_without_errors is load-sensitive
-  (passed in the last full run); the NATS reloader does not signal the broker; the QA agent's log-file gap (section 2) is unreproduced.
+  (passed in the last full run); the NATS reload watcher (root cause in section 2); the QA agent's log-file gap (section 2) is unreproduced.
 
 --------------------------------------------------------------------------------------
 0. FINDINGS FROM THE LOG REVIEW (central Grafana/Loki), 2026-10-05
@@ -153,9 +153,15 @@ Still open (needs a decision or access I do not have):
   reboot (about 3 minutes); QaRestoreRun is a leftover on-demand task of the restore and can be deleted.
 - The firewall pins single addresses for hosts that rotate them: GitHub and Cloudflare are covered by CIDR blocks; the Jira host resolves to ONE address
   today (18.200.127.90). If that host moves, the refresh task follows within 30 minutes; if tickets fail with "could not connect", check it first.
-- The NATS broker did not pick up the new agent's login by itself (its reloader container prints "reloaded" but the broker only reloaded after a manual
-  SIGHUP). New agents poll over HTTP until the broker is reloaded: send `docker kill -s HUP` to the broker container after enrolling an agent, and look at
-  why the reloader's signal does not reach it.
+- NATS RELOAD WATCHER (root cause found 2026-10-06): the `nats-reloader` container shares the broker's PID namespace (`pid: service:nats`). When the
+  broker container restarts (it did on 2026-10-05 22:03) the reloader dies with the namespace and Docker does not bring it back (it was down until a
+  `docker compose up` on 2026-10-06 17:26, RestartCount 0), so a new agent's login was not picked up until someone sent the broker a SIGHUP. While the
+  reloader runs it works (checked: a changed users.conf makes the broker log `Trapped "hangup"` and reload within two seconds). Proposed fix, NOT
+  applied: run the watcher inside the broker's own container (`entrypoint: [sh, -c]`, the loop in the background, then `exec nats-server -c ...`) and
+  remove the second container. My first attempt used `/nats-server` as the path (exit 127, the broker was down for about 90 seconds until the old
+  compose file was put back from compose.yaml.before-reload-inside; all agents reconnected); the second attempt (`exec nats-server`) was refused by
+  the permission classifier and the repository was left on the old file. Until then: check `docker ps` for nats-reloader after every broker
+  restart, or send `docker kill -s HUP somework-domain-nats-1` after enrolling an agent.
 - The agent's health endpoint listens on the QA machine's loopback only (like the Windows developer's); showing its handlers and pools in the fleet
   dashboard needs a narrow inbound rule for the services VM and a bind address (URL would be http://<machine address>:8082/status).
 - [DECISION] The Jira token and certificate in use belong to a person's account (every agent action appears as that person); same as before.
