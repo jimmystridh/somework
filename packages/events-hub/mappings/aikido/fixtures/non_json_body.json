@@ -1,0 +1,22 @@
+{
+  "description": "a body that is not JSON: nothing is read from it",
+  "input": {
+    "headers": {
+      "content-type": "text/plain"
+    },
+    "body": "ping from somewhere",
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.event.received",
+      "key": "aikido:h:992473d9bf25b9e647ee691410906056",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": []
+      },
+      "classification": "internal"
+    }
+  ]
+}

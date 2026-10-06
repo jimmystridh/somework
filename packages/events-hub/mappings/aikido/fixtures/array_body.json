@@ -1,0 +1,27 @@
+{
+  "description": "a JSON array: nothing is read from it",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": [
+      1,
+      2,
+      3
+    ],
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.event.received",
+      "key": "aikido:h:793d47b024bbccd0d07854209c1416ea",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": []
+      },
+      "classification": "internal"
+    }
+  ]
+}

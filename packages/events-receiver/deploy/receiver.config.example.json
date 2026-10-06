@@ -3,6 +3,7 @@
     { "name": "github", "version": 1, "verify": "github-hmac" },
     { "name": "jira", "version": 1 },
     { "name": "datadog", "version": 1 },
+    { "name": "aikido", "version": 1 },
     { "name": "woodpecker", "version": 1, "path": "/api/hook" }
   ],
   "limits": {

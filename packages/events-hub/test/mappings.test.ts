@@ -30,8 +30,8 @@ const strings = (value: unknown, out: string[] = []): string[] => {
 };
 
 describe("the mappings", () => {
-	it("covers the four sources", () => {
-		assert.deepEqual(sources, ["datadog", "github", "grafana", "jira"]);
+	it("covers the five sources", () => {
+		assert.deepEqual(sources, ["aikido", "datadog", "github", "grafana", "jira"]);
 	});
 
 	for (const source of sources) {
@@ -40,7 +40,8 @@ describe("the mappings", () => {
 
 			it("has recorded-style fixtures including dropped ones", () => {
 				assert.ok(fixtures.length >= 8, `${source} has ${fixtures.length} fixtures`);
-				assert.ok(fixtures.some(({ fixture }) => fixture.expected.length === 0), "at least one fixture must be dropped");
+				// aikido's shape is unknown: its mapping never drops, so the first real delivery is visible (see its fixtures)
+				if (source !== "aikido") assert.ok(fixtures.some(({ fixture }) => fixture.expected.length === 0), "at least one fixture must be dropped");
 				assert.ok(fixtures.some(({ fixture }) => fixture.expected.length > 0));
 			});
 
@@ -83,13 +84,17 @@ describe("the mappings", () => {
 				}
 			});
 
-			it("drops unknown shapes instead of failing", async () => {
+			it(source === "aikido" ? "shows unknown shapes as a bare aikido.event.received instead of failing or dropping" : "drops unknown shapes instead of failing", async () => {
 				const bodies: unknown[] = [null, 0, 1, true, "", "text", [], [1, 2, 3], {}, { a: { b: { c: [] } } }, "x".repeat(200_000), { alerts: "nope" }, { alerts: [null, 1, "x"] }, { issue: "x", webhookEvent: 5 }, { pull_request: [], action: {} }];
 				const headerSets = [{}, { "x-github-event": "pull_request", "x-github-delivery": "d" }, { "x-github-event": ["push"] as unknown as string }];
 				for (const body of bodies) {
 					for (const headers of headerSets) {
 						const result = await engine.run(source, source, { headers, body, receivedAt: "2026-10-05T10:00:00Z", source }, "internal");
-						assert.deepEqual(result.events, [], `junk produced an event: ${JSON.stringify(body).slice(0, 60)}`);
+						if (source === "aikido") {
+							assert.equal(result.events.length, 1, `junk was not shown: ${JSON.stringify(body)?.slice(0, 60)}`);
+							assert.equal(result.events[0]!.topic, "aikido.event.received");
+							assert.deepEqual(result.events[0]!.data, { receivedAt: "2026-10-05T10:00:00Z", fields: [] });
+						} else assert.deepEqual(result.events, [], `junk produced an event: ${JSON.stringify(body).slice(0, 60)}`);
 					}
 				}
 			});
@@ -138,5 +143,36 @@ describe("the normalisation of a mapping's output", () => {
 		const [event] = normalize({ ...ok, data: { note: "use ghp_" + "A".repeat(30) + " now", nested: ["Bearer abcdefghijklmnop"] } }, "github", "internal").events;
 		assert.ok(!JSON.stringify(event).includes("ghp_"));
 		assert.ok(!JSON.stringify(event).includes("abcdefghijklmnop"));
+	});
+});
+
+describe("the aikido first-cut mapping", () => {
+	const run = (body: unknown, receivedAt = "2026-10-06T08:00:00.000Z") => engine.run("aikido", "aikido", { headers: {}, body, receivedAt, source: "aikido" }, "internal");
+
+	it("keys an id-less payload by its content, not its key order", async () => {
+		const a = await run({ title: "t", severity: "low" });
+		const b = await run({ severity: "low", title: "t" });
+		assert.equal(a.events[0]!.key, b.events[0]!.key);
+		assert.notEqual(a.events[0]!.key, (await run({ title: "other", severity: "low" })).events[0]!.key);
+	});
+
+	it("shows every unrecognised delivery once: the receive time is part of the key when no field was recognised", async () => {
+		const a = await run({}, "2026-10-06T08:00:00.000Z");
+		const b = await run({}, "2026-10-06T08:00:01.000Z");
+		assert.notEqual(a.events[0]!.key, b.events[0]!.key);
+		assert.equal((await run({}, "2026-10-06T08:00:00.000Z")).events[0]!.key, a.events[0]!.key);
+	});
+
+	it("never builds a topic from anything outside letters, digits and _ . : -", async () => {
+		for (const type of ["../../etc", "a b", "x".repeat(41), "ünï", "", "issue.created; drop"]) {
+			assert.equal((await run({ type })).events[0]!.topic, "aikido.event.received", JSON.stringify(type));
+		}
+		assert.equal((await run({ type: "Issue.Created" })).events[0]!.topic, "aikido.issue.created");
+		assert.equal((await run({ action: "scan:finished" })).events[0]!.topic, "aikido.issue.scan_finished");
+	});
+
+	it("carries only https urls", async () => {
+		assert.equal((await run({ url: "https://app.example/x" })).events[0]!.data.url, "https://app.example/x");
+		for (const url of ["http://x", "javascript:alert(1)", "//x", "https://a b"]) assert.equal((await run({ url })).events[0]!.data.url, undefined, url);
 	});
 });

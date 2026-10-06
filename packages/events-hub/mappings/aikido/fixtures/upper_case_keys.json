@@ -1,0 +1,34 @@
+{
+  "description": "keys are matched case-insensitively",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": {
+      "Type": "ISSUE_RESOLVED",
+      "Severity": "medium",
+      "Issue_Id": 77
+    },
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.issue.resolved",
+      "key": "aikido:77:resolved",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": [
+          "type",
+          "severity",
+          "issueId"
+        ],
+        "type": "ISSUE_RESOLVED",
+        "severity": "medium",
+        "issueId": "77"
+      },
+      "classification": "internal"
+    }
+  ]
+}

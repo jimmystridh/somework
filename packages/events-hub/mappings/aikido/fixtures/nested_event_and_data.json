@@ -1,0 +1,38 @@
+{
+  "description": "type under event, severity under data: found one level down",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": {
+      "event": {
+        "type": "scan.finished"
+      },
+      "data": {
+        "severity": "low",
+        "title": "Weekly scan"
+      }
+    },
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.issue.scan_finished",
+      "key": "aikido:h:aeee4c464bb64dbd4ea0020a13212bb4",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": [
+          "type",
+          "severity",
+          "title"
+        ],
+        "type": "scan.finished",
+        "severity": "low",
+        "title": "Weekly scan"
+      },
+      "classification": "internal"
+    }
+  ]
+}

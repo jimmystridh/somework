@@ -46,8 +46,17 @@ Per source:
   {"id":"$ID","alert_id":"$ALERT_ID","title":"$EVENT_TITLE","transition":"$ALERT_TRANSITION","status":"$ALERT_STATUS","tags":"$TAGS","link":"$LINK","date":"$DATE","priority":"$ALERT_PRIORITY"}
   ```
   Only Alert, Warn and Recovered transitions become events (`datadog.monitor.alert|warn|recovered`); renotifications and No Data are dropped.
+* **aikido** (a first-cut mapping, written without knowing Aikido's payload): it never drops. Every delivery becomes `aikido.event.received`, or `aikido.issue.<change>` when a `type`/`event`/`event_type`/`action`/`kind` field holds a short plain value; the data carries only `receivedAt`, `fields` (which allow-listed fields were found) and, when present, `type`, `severity`, `title`, `issueId`, `repository` and an https `url`. The key is `aikido:<id>:<change>`, or a hash of the payload.
 * **grafana** (contact point of type webhook, URL from `somework-hub urls`): `grafana.alert.firing|resolved`, one event per alert; the rule uid comes from the generator URL.
 * **woodpecker**: forward only, no mapping.
+
+## Refining a mapping
+
+A mapping written before a real payload exists (today: `aikido`) is refined from a real delivery:
+
+1. Let the sender deliver once. The receiver keeps the raw delivery for 24 hours (queue file on the DMZ VM) and the hub acknowledges it right away, so the quickest way to see one is the published event (`aikido.event.received`, `data.fields` shows what the mapping recognised) in the domain's event list, or, if the hub failed to publish it, `somework-hub dead-letters show <id>` (body start, no query). To capture the full body of a live delivery without waiting for a failure, pause the source (`POST /admin/sources/<source>/pause`): the delivery stays queued at the receiver and can be read with the pull API (`GET /v1/pull?after=<seq>` on the private listener, bearer `HMAC(secret, "pull")`) before it is acknowledged; resume afterwards.
+2. Save the body (and the headers) as a fixture under `mappings/<source>/fixtures/` and run `somework-hub mapping test <source> payload.json --header name=value` until the output is what a rule needs.
+3. Change `mappings/<source>.jsonata`, keep the safety fixtures green (`npm test`), rebuild the hub image and restart the hub. Events that were already published keep their old shape; nothing is replayed automatically.
 
 ## Operating it
 

@@ -1,0 +1,29 @@
+{
+  "description": "a type with spaces and punctuation is not used for the topic",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": {
+      "type": "Bad Type!!",
+      "id": 7
+    },
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.event.received",
+      "key": "aikido:7:event",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": [
+          "issueId"
+        ],
+        "issueId": "7"
+      },
+      "classification": "internal"
+    }
+  ]
+}

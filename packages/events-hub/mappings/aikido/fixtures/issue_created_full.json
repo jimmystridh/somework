@@ -1,0 +1,55 @@
+{
+  "description": "a plausible issue payload: type, severity, title, id, repository and an https url are carried",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": {
+      "type": "issue.created",
+      "severity": "high",
+      "title": "SQL injection in login handler",
+      "id": "iss_1001",
+      "repository": {
+        "name": "admin.web",
+        "owner": "someone"
+      },
+      "url": "https://app.aikido.dev/issues/1001",
+      "assignee": "canary-person@example.com",
+      "extra": {
+        "token": "canary-secret-value"
+      }
+    },
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.issue.created",
+      "key": "aikido:iss_1001:created",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": [
+          "type",
+          "severity",
+          "title",
+          "issueId",
+          "repository",
+          "url"
+        ],
+        "type": "issue.created",
+        "severity": "high",
+        "title": "SQL injection in login handler",
+        "issueId": "iss_1001",
+        "repository": "admin.web",
+        "url": "https://app.aikido.dev/issues/1001"
+      },
+      "classification": "internal"
+    }
+  ],
+  "canaries": [
+    "canary-person",
+    "canary-secret-value",
+    "someone"
+  ]
+}

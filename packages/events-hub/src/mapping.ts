@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import jsonata from "jsonata";
@@ -80,10 +81,22 @@ export function normalize(raw: unknown, source: string, defaultClassification: s
 	return { events, rejected };
 }
 
+const canonical = (value: unknown): unknown => {
+	if (Array.isArray(value)) return value.map(canonical);
+	if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, v]) => [k, canonical(v)]));
+	return value;
+};
+
+/** A stable id for a payload that carries none: SHA-256 over its canonical JSON (keys sorted), plus an optional salt, first 32 hex characters. */
+export function digest(value: unknown, salt?: unknown): string {
+	return createHash("sha256").update(JSON.stringify([canonical(value) ?? null, salt === undefined || salt === null ? null : String(salt)])).digest("hex").slice(0, 32);
+}
+
 type Compiled = ReturnType<typeof jsonata>;
 
 function register(expression: Compiled): Compiled {
 	expression.registerFunction("clip", (value: unknown, max: unknown) => clip(value, Number(max ?? 200)), "<x-n?:s>");
+	expression.registerFunction("digest", (value: unknown, salt: unknown) => digest(value, salt), "<x-x?:s>");
 	expression.registerFunction("excerpt", (value: unknown, max: unknown) => excerpt(value, max === undefined ? EXCERPT_CHARS : Number(max)), "<x-n?:x>");
 	return expression;
 }

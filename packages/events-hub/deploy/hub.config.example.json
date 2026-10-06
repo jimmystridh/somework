@@ -15,6 +15,7 @@
       }
     },
     { "name": "datadog", "version": 1, "mapping": "datadog", "producer": { "keyFile": "/run/hub/keys/datadog.key.json" } },
+    { "name": "aikido", "version": 1, "mapping": "aikido", "producer": { "keyFile": "/run/hub/keys/aikido.key.json" } },
     { "name": "grafana", "version": 1, "internal": true, "mapping": "grafana", "producer": { "keyFile": "/run/hub/keys/grafana.key.json" } },
     { "name": "woodpecker", "version": 1, "forward": { "baseUrl": "https://10.10.10.14:9445", "caFile": "/etc/agent-cluster-observability/ca.crt" } }
   ],

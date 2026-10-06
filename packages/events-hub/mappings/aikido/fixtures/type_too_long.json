@@ -1,0 +1,29 @@
+{
+  "description": "a type longer than 40 characters is not used for the topic",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": {
+      "type": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "title": "long type"
+    },
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.event.received",
+      "key": "aikido:h:2e3d7706d505fd763b2ccdbb358facab",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": [
+          "title"
+        ],
+        "title": "long type"
+      },
+      "classification": "internal"
+    }
+  ]
+}
