@@ -10,18 +10,16 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
 (the old compose.yaml and .env stay next to it as *.before-pilot-N). Full test suite green on 2026-10-06 (TypeScript workspaces and cargo).
 
 A. ROLLOUTS
-- Done 2026-10-06: reviewer, developer and Aikido fixer on pilot-12 (the fixer's handler was reseeded once: version 7); hub on pilot-4 (carries the
-  Aikido mapping fix); the QA machine and the Windows developer machine run the current kit (QA: mirror on, PowerShell path fixed).
-- Built after that and committed, NOT deployed yet (images pilot-13 on the agents VM, see below): GitHub App identity, /profile, the workspace gate
-  (beforeWorkspace; the fixer skips an ineligible issue without a clone), catalog change (disabled agents are not offered), the domain's
-  GET /v1/admin/system, the manager's highest-version-first catalog, the dashboard with the agent setup page.
-- Still to roll: manager (pi-manager.service: copy adapters/manager/src and test, restart; backup tarball first; Telegram is interrupted for seconds),
-  the domain image (needs the catalog fix and /v1/admin/system; migrations unchanged), the dashboard image, the three Linux agents to pilot-13 with
-  deploy/agents/roll-agent.sh, the Windows machines once more (kit files, restart through the SYSTEM helper), then add the agents' /status
-  addresses to the dashboard's agents-health.json (developer 8081, reviewer 8082, fixer 8083, Datadog 8084 once it exists, Windows developer
-  http://<machine>:8081/status) so the setup cards appear.
-- The auto-mode classifier denied several rollout steps in this session (it let some through after the owner said to proceed). Either add a Bash
-  permission rule for ssh to the agents VM, or the owner runs prepared scripts. Do not work around a denial.
+- Done 2026-10-06 (all rolled with deploy/agents/roll-agent.sh or by hand, each with its *.before-* backups on the host): developer, reviewer and Aikido
+  fixer on pilot-13 (GitHub App identity, /profile, the workspace gate); the hub on pilot-4 (Aikido mapping fix); the domain on pilot-4 (disabled
+  agents are no longer offered, GET /v1/admin/system; backup in ~/somework-pilot/backups/pre-pilot-4-20261006 on the services VM); the dashboard on
+  0.3.1-logs (agent setup cards, system numbers, log links; agents-health.json now lists developer, reviewer, fixer, Windows developer and QA with
+  log selectors, GRAFANA_URL set); the QA machine (status port 8082 opened to the services VM only, mirror on, PowerShell path fixed) and the
+  Windows developer machine run the current kit.
+- Still to roll: the manager (pi-manager.service: scratchpad script roll-manager.sh copies adapters/manager/src and test and restarts the unit, backup
+  tarball first; Telegram is silent for seconds). The auto-mode classifier refused it as "Modify Shared Resources", so it waits for the owner or a
+  permission rule. Without it the manager still lists the catalog by ranking only.
+- The three Linux agents' sandbox and egress sidecars of the reviewer and the fixer still run pilot-12 images (only the agent image changed).
 - Optional: seed the fixer's ledger from earlier attempts (AIKIDO_LEDGER_IMPORT, file in its config directory; create the file before mounting it).
 
 B. QA AGENT: PROVE A REAL VERIFICATION (section 2)
