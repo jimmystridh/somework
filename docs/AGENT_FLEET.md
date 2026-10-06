@@ -96,7 +96,7 @@ same capability id; agents that differ in a way that matters (Windows vs Linux) 
 
 ## Roles in detail
 
-### Aikido fixer (built, not deployed)
+### Aikido fixer (live)
 `code.fix` v1 on the same kit and git protocol as the developer, started by events instead of a requester: the rule `rules/aikido-fixer.yaml` wakes it for `aikido.*` events, its shipped handler turns an eligible issue into one task for itself, and the task works in a fresh clone (from a persistent mirror) at the resolved commit of the default branch. It reads the issue through a host-side, read-only Aikido client, refuses protected paths, secret-like text, oversized changes and a failing check profile, and opens a pull request (a real one by default, a draft with `GIT_PR_DRAFT=1`) on `agent/aikido-<issue>-<sha>`. Approval requests are refused (nobody answers for it). Limits are enforced twice: by the handler in the sandbox as an early filter and by a ledger on the service host as the authority. See `adapters/aikido-fixer/README.md`.
 
 ### Datadog triage (built, not deployed)
@@ -171,6 +171,19 @@ default (`OBSERVE_ENABLED=1`, `GRAFANA_URL`, `GRAFANA_TOKEN_FILE`); the token be
 `deploy/grafana/provision-reader.py` and never enters the sandbox. A role with own scope has its matchers added to every query. Queries are parsed and
 rebuilt (no aggregations, sub-queries or `offset`), answers are redacted, size-capped and framed as untrusted data. Allowed in ASK and INSTRUCT
 chat. Limits: Loki logs only (no Prometheus, no traces), history reaches as far as Loki retention, at most 168 hours per query. Settings: `packages/agent-kit/README.md`.
+
+## Identity on the code host, and how an agent shows its setup
+
+* **GitHub identity.** By default a role pushes with a fine-grained personal token and everything shows up as the token's owner. A role can instead be a
+  GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_KEY_FILE`): the kit mints one-hour installation tokens, renews them before every git command and API call and
+  commits as `<app>[bot]` (`packages/agent-kit/README.md`, "GitHub App identity"). One app per role keeps permissions separate; registering the apps is
+  an organisation owner's step.
+* **`/profile`.** Every kit service describes its own setup on its health port: prompt (hash and text), tools and approval patterns, budgets, model,
+  credential kind, skills, chat and event settings, plus a hash and the time the setup last changed. The fleet dashboard shows it as one card per agent
+  (`dashboard/`). No secret is in it, and the dashboard reads it through a restricted reader as well.
+* **Gates before work.** `beforeWorkspace` lets a role end a job from its input alone (the fixer skips an ineligible issue) before anything is cloned;
+  `beforeRun` runs once the workspace exists.
+* **Rolling.** `deploy/agents/roll-agent.sh` moves a stack to a new tag, waits for `/ready` and restores the old files when the agent does not come up.
 
 ## Cross-cutting rules
 
