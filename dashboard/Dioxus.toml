@@ -1,0 +1,23 @@
+[application]
+name = "fleet-ui"
+sub_package = "fleet-ui"
+asset_dir = "public"
+
+[web.app]
+title = "Fleet — Agent operations"
+base_path = "fleet"
+
+[web.resource]
+style = ["/fleet/style.css"]
+script = []
+
+[web.resource.dev]
+style = []
+script = []
+
+[web]
+pre_compress = false
+
+[web.wasm_opt]
+level = "s"
+debug = false

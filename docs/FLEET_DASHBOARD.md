@@ -41,11 +41,19 @@ verifies the domain against that CA.
 Every value that reaches the dashboard's own API is picked **by name** from the domain's JSON and passed through a short, restricted-alphabet
 identifier or a number. Tests feed responses stuffed with content-bearing fields and assert none of it appears in the output.
 
+## Agent setup
+
+Each agent entry of `agents-health.json` whose address ends in `/status` is also asked for `/profile` (the agent kit's setup document, no
+secrets). `server/src/setup.rs` copies it by name through restricted readers and the page shows one card per agent: role, image tag, setup hash
+and when it changed, capabilities, model, budgets, tools and approval patterns, repository access (credential kind, the app's bot login, a token
+expiry note), skills, chat and event settings, and the prompt text. The prompt is operator wording, shown as plain text only through the private
+gateway. The dashboard's source is in `dashboard/` (see its README for the build).
+
 ## What it cannot show
 
 - Backup age (the domain does not record it).
-- Until the dashboard reads `GET /v1/admin/system` (it needs only `ops.read`; added 2026-10-06 in the domain, not yet used by the dashboard): whether a
-  principal is enabled and its side-effect ceiling, database size, domain version and uptime.
+- With a domain that predates `GET /v1/admin/system` (needs only `ops.read`; 2026-10-06): whether a principal is enabled and its side-effect
+  ceiling, database size, domain version and uptime. The dashboard reads it when it exists and shows those numbers; otherwise they stay "—".
 - JetStream storage use (only consumer lag is available through the metrics).
 
 ## Authentication wire format
