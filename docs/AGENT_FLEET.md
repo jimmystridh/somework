@@ -1,5 +1,7 @@
 # Agent fleet: manager, developers, reviewer, QA
 
+Status 2026-10-06: the manager, developer, Windows developer and reviewer are live; QA is built and waits for its machine's web database (`TODO.txt`). `SYSTEM.md` is the map of the whole system; this document is the design of the fleet.
+
 Five agents that cooperate through SomeWork. This document fixes how they are built and, above all, **what they share and how**.
 
 | Agent | Where it runs | Capability it provides | What it does |
@@ -7,7 +9,7 @@ Five agents that cooperate through SomeWork. This document fixes how they are bu
 | **Manager** | agent Docker host | none (requester); talks Telegram | Takes requests from the owner, routes work, enforces approvals, reports back. Owns the pipeline order. |
 | **Developer** | agent Docker host (Linux, sandboxed) | `code.agent` v1 (exists) | Frontend/TypeScript and general changes: branch, commit, push, draft PR. |
 | **Windows developer** | the Windows build machine | `code.windows` v1 | Changes that must build and run on Windows (the legacy C++ backend): same git protocol, Windows toolchain, encoding-safe edits. |
-| **Reviewer** | agent Docker host | `code.review` v2 | Read-only review of a PR/ref against the ticket and repository rules; produces findings, never writes to the host or repo unless the Manager approves a posted review. |
+| **Reviewer** | agent Docker host | `code.review` v3 | Read-only review of a PR/ref against the ticket and repository rules; produces findings, never writes to the host or repo unless the Manager approves a posted review. |
 | **QA** | machine with a browser and network reach to the test backend | `qa.verify` v1 | Verifies a ticket against a revision in a real browser; returns a verdict plus evidence artifacts. |
 
 ## The question: how is code shared?
@@ -23,10 +25,13 @@ The agents are the same program with different profiles. Everything that is not 
 sdk/typescript            @somework/sdk        client, worker loop, wake (NATS + sweep), identity
 packages/agent-kit        @somework/agent-kit  the shared agent runtime (below)
 adapters/pi               the developer role: card.json + src/profile.ts + src/main.ts + Dockerfile + deploy/
-adapters/windows-developer  card.json + profile + main.ts + deploy/        (to do)
-adapters/reviewer         card.json + profile + main.ts + deploy/          (to do)
-adapters/qa               card.json + profile + main.ts + deploy/          (to do)
-adapters/manager          Telegram bridge + gateway + Pi extension (a requester: uses the SDK only)
+adapters/windows-developer  card.json + profile + main.ts + deploy/        (live)
+adapters/reviewer         card.json + profile + main.ts + deploy/          (live)
+adapters/qa               card.json + profile + main.ts + deploy/          (built, not deployed)
+adapters/manager          Telegram bridge + gateway + Pi extension (a requester: uses the SDK only; live)
+packages/events-receiver  public-edge webhook receiver (no dependencies)
+packages/events-hub       private-side hub: mappings, clock, publishing, forwarding
+packages/rules-cli        somework-rules: validate, plan, apply, comment
 ```
 
 An npm workspace (root `package.json`, one `package-lock.json`) ties them together, so every agent is built from the same tree,
@@ -87,11 +92,11 @@ same capability id; agents that differ in a way that matters (Windows vs Linux) 
 
 ## Roles in detail
 
-### Manager (in progress)
+### Manager (live)
 Existing Telegram bridge (owner pairing, private chat only) retrofitted: SomeWork identity `agent/manager` held by the bridge, a narrow
 local gateway that the Pi process reaches through tools (catalog, submit, task, cancel, message, inbox). Write-side-effect submissions
 need owner approval in Telegram; budgets are capped; task results, questions and agent messages are pushed to the chat.
-It also encodes the pipeline: ticket triage, developer, reviewer, (autofix loop), QA, Windows build when C++ is touched.
+It also relays domain approvals (reactions that need a write capability), forwards events from the alert rules and the nightly digest without a model, and offers owner-only controls to pause or resume rules and hub sources and to switch an agent's handlers off (`EVENTS.md`). It encodes the pipeline: ticket triage, developer, reviewer, (autofix loop), QA, Windows build when C++ is touched.
 
 ### Developer (exists)
 `code.agent`: durable Pi run in a sandbox, git steps done by service code, approvals through `input_required`, budgets, draft PRs.
@@ -108,7 +113,7 @@ Same kit and the same protocol (clone, branch `agent/<task>`, commit, push, PR) 
   tool) and a check step before commit (the repository's own encoding check, configured as a test profile).
 
 ### Reviewer
-`code.review` v2 (kept compatible; adds `pr` and `ticket`): checks out the ref read-only, loads the allowed review skills, gathers PR
+`code.review` v3 (compatible with v2; adds `pr` and `ticket`): checks out the ref read-only, loads the allowed review skills, gathers PR
 context (diff, checks, existing threads), and returns `{verdict, summary, findings[{severity,file,line,text}]}` plus the full report
 as an artifact. Drafted inline comments are **returned, not posted**; posting is a separate approved action (Manager).
 
@@ -118,7 +123,7 @@ remote test backend, drives a real browser, builds fixtures, records a short vid
 `{verdict: verified|not_fixed|blocked|skipped, evidence[], fixtures[], notes}`.
 **The ticket-system writes of the original skill (comment, label, transitions) become Manager-approved follow-up actions**, because
 they are visible side effects; the "never move to Done" rule is kept as a hard constraint in the tool layer, not only in the prompt.
-It needs infrastructure that does not exist yet (see open decisions).
+The role is built and tested; its machine (a Windows clone with a browser and the product's local back end) is prepared, and it waits for the product's web database to be restored before it can verify a ticket.
 
 ## Cross-cutting rules
 
@@ -132,19 +137,16 @@ It needs infrastructure that does not exist yet (see open decisions).
 
 ## Build order
 
-1. Workspace + `agent-kit` extraction (behaviour-preserving; the developer agent keeps passing its tests). **Done.**
-2. Skill loader with allowlist and overlay support. **Done** (`packages/agent-kit/src/skills.ts`; Pi Durable has no native discovery,
-   so it renders a prompt section from the sandbox workspace; `AgentProfile` and `createAgentService` are the extension points).
-3. Reviewer (smallest: read-only, no sandbox writes, reuses everything).
-4. Windows developer (local `ExecutionEnv`, Windows service packaging, Windows-specific test run on the machine).
-5. QA (after the infrastructure decisions below).
-6. Manager pipeline orchestration on top of the finished capabilities.
+1. Workspace + `agent-kit` extraction. **Done.**
+2. Skill loader with allowlist and overlay support. **Done** (`packages/agent-kit/src/skills.ts`).
+3. Reviewer. **Done and live.**
+4. Windows developer (local `ExecutionEnv`, Windows service packaging). **Done and live.**
+5. QA. **Built; deployment waits for the web database restore.**
+6. Manager orchestration, approvals and controls. **Done and live.**
+7. Events and reactions, event handlers and token pools in the kit. **Done and live** (`EVENTS.md`).
 
-## Open decisions
+## Decisions taken since
 
-1. **QA environment.** The skill needs a browser, the app's dev server, a login to the test backend through the identity provider, and ticket
-   system access. Options: (a) the Windows machine (has Edge; reaches the ticket system and the domain) with a dedicated test user and
-   headless Playwright, (b) a Linux VM with headless Chromium and a dedicated test user. Either needs a **non-personal test account**
-   and a ticket-system API token with the minimum scope; the human Chrome profile is not reusable.
-2. **Windows sandbox strength** (local account + firewall vs. a Windows container/VM).
-3. **Where the adapted QA overlay lives**: in the target repository next to the base skill (recommended) or only in deployment config.
+1. **QA environment:** a Windows clone with Edge and headless Playwright, a dedicated test user and a ticket-system token with minimal scope; the human Chrome profile is not reused.
+2. **Windows sandbox strength:** local unprivileged account plus firewall allow-list, accepted as the weaker boundary and documented as such.
+3. **QA overlay:** kept in deployment configuration outside the repository (company content), applied on top of the repository's base skill.

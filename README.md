@@ -46,6 +46,12 @@ See `docs/QUICKSTART.md` for running it and connecting an agent (worker or MCP c
 
 | Document | Topic |
 |---|---|
+| `docs/SYSTEM.md` | **start here**: what is built and how the pieces fit (platform, fleet, events, CI, observability, infrastructure) |
+| `docs/AGENT_FLEET.md` | the fleet design: roles, what is shared and how |
+| `docs/EVENTS.md` · `docs/RULES.md` · `docs/EVENTS_ACCEPTANCE.md` | events and reactions: contract, writing rules, acceptance evidence |
+| `docs/CI.md` · `docs/FLEET_DASHBOARD.md` | Woodpecker and rule deployment; the fleet dashboard integration |
+| `docs/adr/` · `CONTEXT.md` | decision records and the glossary |
+| `TODO.txt` | everything known and still open |
 | `docs/ARCHITECTURE.md` | canonical-state rule, SQLite adaptations, trust model |
 | `docs/CONVENTIONS.md` | crate map, rules, migrations, how to run things |
 | `docs/api.md` | REST + gRPC reference |
