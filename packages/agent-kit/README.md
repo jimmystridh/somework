@@ -182,6 +182,10 @@ Aikido fixer takes its repository from `AIKIDO_REPOSITORY_URL`. Logs: `chat_rece
 `chat_instruction_refused`, `chat_approval_*`; counters `somework_chat_model_total{result,reason}`, `somework_chat_tokens_total{tier}`,
 `somework_chat_instructions_total{outcome}`. `/status` of the health endpoint shows the chat mode, askers and instructors and the `chat` pool.
 
+## `/profile`: how an agent is set up
+
+Next to `/status` the health port serves `/profile`, a read-only JSON document the service builds from its loaded profile and settings (`describe.ts`): role and agent id, the image tag (`AGENT_VERSION`), the capability card ids, model and allowed models, the system prompt with its SHA-256 and length (`PROFILE_PROMPT=0` leaves the text out), allowed tools, command approval patterns (the deployment's own patterns are only counted) and tools that wait for approval, budgets and caps, concurrency, repository settings (push, pull request, branch prefix, the credential kind `token`, `github-app` or `none`, the bot's GitHub login with an app, token hosts, mirror, `GIT_TOKEN_EXPIRES` when set to a plain date), skills, chat settings (who may ask and instruct), events and observe state. Live handlers and token pools stay on `/status`. It holds no key, token, file path or environment value. `hash` identifies the setup (the version and the prompt text are not part of it) and `changedAt` is when this hash was first seen, kept in `profile-hash.json` in the state directory, so a dashboard can mark "changed since last seen". The port is private to the cluster; the prompt is company wording, so show it only through the private gateway.
+
 ## GitHub App identity instead of a personal token
 
 By default a role pushes and opens pull requests with a fine-grained personal access token (`GIT_TOKEN_FILE`): everything it does shows up as the token's owner. A role can use a GitHub App instead, and then its commits, pushes and pull requests are made by `<app name>[bot]`.

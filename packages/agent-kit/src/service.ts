@@ -16,6 +16,7 @@ import { GitHubAppCredentials } from "./github-app.ts";
 import { prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
 import { createHandler, type HandlerDeps } from "./handler.ts";
+import { describeAgent, isoDateOrUndefined, withChangeMarker } from "./describe.ts";
 import { createHealthServer } from "./health.ts";
 import { JobJournal } from "./journal.ts";
 import { DailyLedger } from "./ledger.ts";
@@ -221,9 +222,36 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				});
 			}
 
+			const description = withChangeMarker(
+				describeAgent({
+					profile,
+					agentId: identity.agentId,
+					version: env.AGENT_VERSION,
+					model: config.model,
+					allowedModels: config.allowedModels,
+					limits: config.limits,
+					concurrency: config.concurrency,
+					approvalPatterns: config.approvalPatterns,
+					git: {
+						app: Boolean(gitApp),
+						token: Boolean(gitToken) && !gitApp,
+						tokenHosts: config.git.tokenHosts,
+						tokenExpires: isoDateOrUndefined(env.GIT_TOKEN_EXPIRES),
+						draft: Boolean(config.git.draftPullRequests),
+						identity: gitApp ? gitIdentity.name : undefined,
+						mirror: config.git.mirror ? { repositories: config.git.mirror.repositories, refreshMinutes: config.git.mirror.refreshMinutes } : undefined,
+					},
+					chat: chatSettings ? { mode: "model", askers: chatSettings.askers, instructors: chatSettings.instructors } : { mode: "notice" },
+					events: { enabled: eventsConfig.enabled, notifyTo: eventsConfig.notifyTo },
+					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
+					includePrompt: env.PROFILE_PROMPT !== "0",
+				}),
+				join(config.state.dir, "profile-hash.json"),
+			);
 			const health = createHealthServer({
 				runtime,
 				metrics,
+				profile: () => description,
 				status: () => ({ ...(events ? events.status() : { handlers: [], tokenPools: ledger.usage() }), ...(chatResponder ? { chat: { mode: "model", askers: chatSettings!.askers, instructors: chatSettings!.instructors } } : {}), ...(observe ? { observe: observe.status() } : {}) }),
 				checks: { ...(hooks.envFactory ? {} : { sandbox: async () => (await fetch(`${config.sandbox.url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok }), ...hooks.readinessChecks },
 			});

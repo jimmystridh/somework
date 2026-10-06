@@ -9,14 +9,17 @@ export interface HealthOptions {
 	checks?: Record<string, () => Promise<boolean>>;
 	/** Extra fields for `/status` and `/ready` (event handlers and token pools). */
 	status?: () => Record<string, unknown>;
+	/** The agent's setup as a document (no secrets, see `describe.ts`): served on `/profile`. */
+	profile?: () => unknown;
 }
 
-/** `/live`: the process is up. `/ready`: it can accept a job (storage open and resumed, dependencies reachable). `/status`: handlers and token pools. `/metrics`: Prometheus. */
+/** `/live`: the process is up. `/ready`: it can accept a job (storage open and resumed, dependencies reachable). `/status`: handlers and token pools. `/profile`: how the agent is set up. `/metrics`: Prometheus. */
 export function createHealthServer(options: HealthOptions): Server {
 	return createServer(async (req, res) => {
 		if (req.url === "/live") return void res.writeHead(200).end("live\n");
 		if (req.url === "/metrics") return void res.writeHead(200, { "content-type": "text/plain; version=0.0.4" }).end(options.metrics.render());
 		if (req.url === "/status") return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(options.status?.() ?? {}));
+		if (req.url === "/profile" && options.profile) return void res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(options.profile()));
 		if (req.url === "/ready") {
 			const runtime = options.runtime.health();
 			const failed: string[] = runtime.ready ? [] : [`runtime: ${runtime.reason}`];

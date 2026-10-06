@@ -42,6 +42,8 @@ services:
       SANDBOX_URL: http://sandbox:7070
       SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
       SANDBOX_WORKSPACES: /workspace
+      AGENT_VERSION: ${PI_VERSION}                          # shown on /profile (the image tag this container runs)
+      GIT_TOKEN_EXPIRES: ${GIT_TOKEN_EXPIRES:-}              # optional note for /profile: the token's expiry date, YYYY-MM-DD
       GIT_TOKEN_FILE: /run/secrets/git-token
       # A GitHub App instead of the token file (packages/agent-kit/README.md, "GitHub App identity"): remove GIT_TOKEN_FILE, mount the key, set these.
       # GITHUB_APP_ID: ${GITHUB_APP_ID:-}

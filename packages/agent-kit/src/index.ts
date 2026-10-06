@@ -25,3 +25,4 @@ export * from "./runtime.ts";
 export * from "./service.ts";
 export * from "./shards.ts";
 export * from "./skills.ts";
+export * from "./describe.ts";

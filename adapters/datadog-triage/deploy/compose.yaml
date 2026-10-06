@@ -37,6 +37,7 @@ services:
       SOMEWORK_CA_FILE: /run/somework/ca.pem
       SOMEWORK_REQUIRE_TLS: "1"
       SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
+      AGENT_VERSION: ${DATADOG_VERSION}                        # shown on /profile (the image tag this container runs)
       PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
       PI_MODEL: ${PI_MODEL:-gpt-5.5}
       PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
