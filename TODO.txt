@@ -1,7 +1,71 @@
-TODO / KNOWN GAPS                                                        last updated 2026-10-05
+TODO / KNOWN GAPS                                                        last updated 2026-10-06
 =====================================================================================
 Everything below is known, not yet done. Kept generic on purpose (no hosts, addresses, ticket
 keys or secrets). [DECISION] marks items that wait for a person, not for work.
+
+--------------------------------------------------------------------------------------
+00. OPEN WORK, IN ORDER (2026-10-06; the detail is in the sections named in brackets)
+--------------------------------------------------------------------------------------
+"pilot-N" is the tag of the images built by hand on the agents VM; "rolling" is pointing an agent's .env at the new tag and restarting it
+(the old compose.yaml and .env stay next to it as *.before-pilot-N). Full test suite green on 2026-10-06 (TypeScript workspaces and cargo).
+
+A. FINISH THE pilot-12 ROLLOUT
+- Done 2026-10-06: reviewer, developer and Aikido fixer run pilot-12 (the fixer's handler was reseeded once: version 7). Images for the Datadog
+  triage agent (agent and sandbox) are built under the same tag and not started.
+- The auto-mode classifier denied several rollout steps (it let the reviewer through only after the owner said to proceed). Either add a Bash
+  permission rule for ssh to the agents VM and the Windows machines, or the owner runs the prepared scripts (scratchpad: roll-pilot12-rest.sh was
+  run; roll-pilot12-manager-hub.sh is waiting). Do not work around a denial.
+- Manager: copy the two changed files (adapters/manager/src/controls.ts and its test) and restart pi-manager.service (backup tarball first).
+  Telegram is interrupted for a few seconds.
+- Hub: build somework-events-hub:pilot-4 from the synced source (carries the Aikido mapping fix: kinds such as open_source are not a change)
+  and restart it; rollback is HUB_VERSION=pilot-3 in its .env.
+- Windows developer machine and QA machine: bring the kit code on them up to the repository (chat fixes, observe module); restart through the
+  SYSTEM helper task, verify /ready and one chat question each.
+- Optional: seed the fixer's ledger from earlier attempts (AIKIDO_LEDGER_IMPORT, file in its config directory; create the file before mounting it).
+- Dashboard: QA and Windows developer status paths; the fixer (8083) and Datadog agent (8084) health ports in agents-health.json (section 1, 3, 5).
+
+B. QA AGENT: PROVE A REAL VERIFICATION (section 2)
+- Fixed 2026-10-06 and live on the QA machine: the profile's start and stop commands call powershell.exe by absolute path (the start failed with
+  exit 127 "command not found" on the first real run), and a persistent git mirror is on (GIT_MIRROR_DIR=C:/somework/workspaces/.mirrors; it must
+  be inside the workspace root; first refresh 98 s; examples and README updated; backups *.before-powershell-path and agent.env.before-mirror).
+- Still to do: a supervised run on a real ticket in status Test: publish the transition (or let Jira send it), the owner approves in Telegram,
+  read the result. Needs the ticket key from the owner. Watch that the app starts from the ticket's checkout (QA_WEB_ROOT = the admin.web
+  directory of that checkout; first database boot about 3 minutes) and that the clone now takes seconds.
+- Commit the four uncommitted files after review: adapters/qa/deploy/{README.md,agent.env.example}, adapters/aikido-fixer/deploy/compose.yaml
+  (commented ledger-import mount), adapters/datadog-triage/Dockerfile (ARG moved above the first FROM; the sandbox target did not build without it).
+
+C. DATADOG TRIAGE AGENT: ENROL AND START (section 5, DATADOG TRIAGE)
+- [DECISION/owner] replace the unscoped application key with one scoped to monitors_read, logs_read_data, timeseries_query, events_read,
+  incident_read (the current one has no scopes); keep the keys local (~/.somework-pilot/datadog-stage), never in chat.
+- Model login by device code (the owner approves); enrol `agent/datadog-triage --side-effects read --may-invoke ops.triage`; send the NATS
+  broker a SIGHUP by hand (the reloader does not reach it); register and approve the card; install datadog.json; move the held rule
+  (deploy/rules/datadog-triage.yaml) into rules/ so CI applies it (it is held because the pipeline fails while the agent does not exist);
+  the Datadog webhook template must carry priority and tags; start the compose stack from the pilot-12 images; one supervised triage of a
+  real monitor. Site is the EU one (api.datadoghq.eu).
+
+D. GRAFANA OBSERVE TOOLS FOR THE AGENTS (section 7)
+- Run deploy/grafana/provision-reader.py to create the Viewer service account, put the token in the developer's secrets, mount it, set
+  OBSERVE_ENABLED=1 with OBSERVE_SCOPE=own on the developer first (fleet scope only where wanted), open a narrow network rule from the
+  agents VM to Grafana, then ask the agent for its own logs and history. The manager does not have the tools yet.
+
+E. CI: DEPLOY THROUGH WOODPECKER INSTEAD OF BY HAND (proposal, owner to confirm)
+- Today Woodpecker only checks pull requests and pushes and applies rules/. Image builds and rollouts are manual. Plan: a deploy pipeline on
+  push to main that builds the images, runs the tests and rolls one agent at a time with a health check and automatic rollback. Start with the
+  reviewer only. Needs: an image registry or a build over a restricted ssh key that may run one fixed script on the agents VM (the CI runner
+  deliberately holds no SomeWork secrets, so a new narrow deploy credential), a record of which tag each agent runs, and CODEOWNERS on the
+  pipeline files. [DECISION] registry vs build on the agents VM.
+
+F. DECISIONS WAITING FOR THE OWNER (also in sections 11b and 12)
+- bun in CI: adopted and committed (check on every push to main, install with bun); keep or revert (section F below).
+- Off-host backup site and a restore drill; hypervisor firewall to default-deny (section 0).
+- Telegram and Slack gateway design (11b D); a separate GitHub identity for the bots (11b A); on-demand Windows machines (11b C);
+  allowing pipes of read-only programs in the reviewer's command check; dedicated Jira account and certificate for the QA agent.
+- Wire the remaining senders: GitHub and Datadog webhooks (Jira and Aikido already deliver); refine the Aikido mapping from a real payload.
+
+G. KNOWN MINOR (nobody blocked)
+- The developer's events token pool stays throttled until the daily rollover; 163 failed acceptance tasks remain in the domain history;
+  the CI runner does not ship logs to Loki yet; the Rust stress test ten_times_stress_degrades_gracefully_without_errors is load-sensitive
+  (passed in the last full run); the NATS reloader does not signal the broker; the QA agent's log-file gap (section 2) is unreproduced.
 
 --------------------------------------------------------------------------------------
 0. FINDINGS FROM THE LOG REVIEW (central Grafana/Loki), 2026-10-05
@@ -160,7 +224,7 @@ Still open (needs a decision or access I do not have):
 - The one real pull request path was exercised once (a draft PR, since closed). No CI interplay
   was observed.
 
-CHAT FOR ALL ROLES (built and tested 2026-10-06, NOT deployed; docs/AGENT_FLEET.md "Chat", packages/agent-kit/README.md)
+CHAT FOR ALL ROLES (deployed 2026-10-06 on developer, reviewer, fixer (pilot-11, now pilot-12), Windows developer and QA; manager pending, see 00 A; docs/AGENT_FLEET.md "Chat", packages/agent-kit/README.md)
 - Default is now mode "model" for every role: a redeploy changes behaviour (questions get model answers, spending the `chat` pool, a tenth of
   DAILY_TOKEN_LIMIT). CHAT_MODE=notice restores the old notice per deployment. Check DAILY_TOKEN_LIMIT per agent before the rollout.
 - Instructions need CHAT_REPOSITORY_URL on developer, reviewer, windows-developer and qa (or `repo:` in the message); the fixer uses its own repository.
@@ -170,7 +234,7 @@ CHAT FOR ALL ROLES (built and tested 2026-10-06, NOT deployed; docs/AGENT_FLEET.
 - Artifacts of a chat instruction are kept under <state dir>/chat-artifacts on the agent host (10 newest jobs), never uploaded: if people need them in the domain, the domain would need a task-less artifact upload.
 - A chat instruction and an event task on the fixer share PI_CONCURRENCY=1 and the daily cap; chat can use up the day's fix attempts.
 
-AIKIDO FIXER (adapters/aikido-fixer, code.fix v1; built and tested, NOT deployed)
+AIKIDO FIXER (adapters/aikido-fixer, code.fix v1; LIVE since 2026-10-06, real pull requests, pilot-12; the first lines below are the original prerequisites, done)
 - Needs from the owner before it can run: an Aikido OAuth2 client for it (read access to issues only), a model login of its own (device code),
   a fine-grained token for ONE repository (Contents + Pull requests write, 90 days, passkey check), and the enrolment with
   `--side-effects write --may-invoke code.fix` (the handler submits to the agent itself). Then rule apply and the runbook in deploy/README.md.
@@ -440,7 +504,7 @@ E. TRIED upm (https://github.com/unjs/upm) FOR THE CI INSTALL, ABANDONED 2026-10
   container that only shares the workspace (checked), because its virtual store lives in node_modules/.upm.
 - Verdict: a small gain for real extra maintenance; the owner decided it is not worth it. Reverted to `npm ci --ignore-scripts`.
 
-F. bun FOR THE CI INSTALL (tried 2026-10-06 after upm was dropped; the check and deploy pipelines are switched in the working tree, not committed)
+F. bun FOR THE CI INSTALL (adopted 2026-10-06 after upm was dropped; committed, check also runs on every push to main)
 - Both pipelines now install in a separate step with the official `oven/bun` image (pinned by digest, bun 1.4.2) using
   `bun install --frozen-lockfile --ignore-scripts`; the later steps still run on `node:22.19.0-bookworm` over the same workspace
   (checked in two separate containers). full.yaml keeps `npm ci` as the reference.
