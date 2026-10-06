@@ -57,6 +57,8 @@ install directory, approve the code in a browser anywhere) and put the resulting
 (Contents), in `C:\somework\secrets\git-token`. `GIT_TOKEN_HOSTS` is the only place the service will send it. Without it, leave
 `GIT_TOKEN_FILE` out of `agent.env`.
 
+**Mirror and PATH.** For a large repository set `GIT_MIRROR_DIR`, `GIT_MIRROR_REPOS` and `GIT_MIRROR_REFRESH_MINUTES` (see `agent.env.example`): the kit keeps a bare mirror on the data volume and each task clones from it instead of downloading the repository again (the first refresh takes as long as one full clone). A profile's start and stop commands run in Git Bash with `WINDOWS_PATH_DIRS` as the whole `PATH`; if they call `powershell.exe`, that list must include `C:\Windows\System32\WindowsPowerShell\v1.0` (a missing entry shows up as `powershell.exe: command not found`, exit 127).
+
 **Ticket system.** Four files in `C:\somework\secrets`, readable by the account only (the install script's ACLs do that):
 * `jira-token`: a personal access token of a user that may comment, label, attach, transition and assign on the project. Use a user of
   its own for the agent, so what the agent did is attributable.
