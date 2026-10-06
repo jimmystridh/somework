@@ -118,17 +118,14 @@ Still open (needs a decision or access I do not have):
 --------------------------------------------------------------------------------------
 1. FLEET DASHBOARD (SomeWork section)
 --------------------------------------------------------------------------------------
-- Principal enabled/disabled state and side-effect level are not shown. They need the
-  `principal.manage` permission, which would also allow changes. Either add a read-only
-  permission to the domain or leave it as "unknown".
-- Database size and backup age are not shown. The domain API does not expose them.
-- Domain version and uptime are not shown. The domain API does not expose them.
+- (resolved 2026-10-06) Principal state and side-effect ceiling, database size, domain version and uptime come from the domain's new read-only
+  GET /v1/admin/system (ops.read) and are shown in the Domain card. Backup age is still not shown (the domain does not record backups).
 - JetStream storage use is not shown. Only consumer lag is available (from /metrics); the broker
   monitoring port is deliberately closed.
 - (resolved 2026-10-05) The manager now has a capability-less card and registers a runtime with a heartbeat,
   so the dashboard shows it alive.
-- No per-agent log links (the central log stack exists; the links are not wired).
-- Old content-hashed asset files remain in the dashboard bundle directory on its host (harmless).
+- (resolved 2026-10-06) Per-agent log links: agents-health.json entries carry a stream selector and GRAFANA_URL is set; the page links to Explore.
+- (resolved 2026-10-06) The dashboard source is in the repository (dashboard/) and its image carries only the current bundle files.
 - The two failed tasks in the 24 h window are history from deployment debugging; they will age out.
 
 --------------------------------------------------------------------------------------
@@ -150,7 +147,7 @@ Still open (needs a decision or access I do not have):
   (12:05, 12:22 local) log normally (chat_received, chat_answered, service_started). Watch for it; if it returns, compare the supervisor's redirected stderr handle
   with the SYSTEM helper start.
 - The web app, back end and databases run on the QA machine permanently (about 0.75 GB) because the stack is started on demand by the agent only after a
-  reboot (about 3 minutes); QaRestoreRun is a leftover on-demand task of the restore and can be deleted.
+  reboot (about 3 minutes); (the leftover QaRestoreRun task was deleted on 2026-10-06).
 - The firewall pins single addresses for hosts that rotate them: GitHub and Cloudflare are covered by CIDR blocks; the Jira host resolves to ONE address
   today (18.200.127.90). If that host moves, the refresh task follows within 30 minutes; if tickets fail with "could not connect", check it first.
 - NATS RELOAD WATCHER (root cause found 2026-10-06): the `nats-reloader` container shares the broker's PID namespace (`pid: service:nats`). When the
@@ -201,7 +198,7 @@ Still open (needs a decision or access I do not have):
 - Firewall rules match addresses, not names (shared CDN addresses admit sibling sites); a refresh
   task re-resolves every 30 min.
 - Never tested against a real full build or a real push (the live smoke job used a read-only request on a public repository).
-- Dashboard: add `{"id":"agent/windows-developer","url":"http://10.10.10.45:8081/status"}` to the dashboard's agents-health.json to show its handlers and pools.
+- (resolved 2026-10-06) The Windows developer is in the dashboard's agents-health.json (handlers, pools and setup are shown).
 
 --------------------------------------------------------------------------------------
 4. REVIEWER AGENT (code.review v3)                        status: live
@@ -293,7 +290,7 @@ DATADOG TRIAGE (adapters/datadog-triage, ops.triage v1; built and tested, NOT de
   polls in-flight tasks every few seconds. A domain change (publish task events to the requester's
   inbox) would give true push.
 - Approvals live in memory: a restart means "denied".
-- The manager has no capability card, so it is not in the catalog.
+- (resolved) The manager has a capability-less card and a runtime heartbeat; it is not offered as a provider.
 
 --------------------------------------------------------------------------------------
 6b. CHATTING WITH AGENTS (messages to an agent are never answered)
@@ -319,10 +316,8 @@ tasks; none has a message handler. The manager polled the inbox several times an
 - The operator console is not enabled on the pilot domain (it needs an OIDC login; a dev-token
   login is not safe on this network). Until then the fleet dashboard and per-agent health
   endpoints are the only views. [DECISION]
-- The operator API cannot report: database size, backup age, version, uptime, principal state.
-  Add read-only endpoints (see section 1).
-- The locally built `dist/somework` binary in a developer checkout is older than the deployed
-  server (it lacks newer admin subcommands). Rebuild before relying on it.
+- (resolved 2026-10-06 except backup age) GET /v1/admin/system reports database size, version, uptime and principal state to ops.read.
+- (resolved 2026-10-06) The local dist/ binaries were rebuilt from the current code; rebuild again after domain changes.
 - Pi Durable and its companion packages are pinned to a version younger than the supply-chain
   minimum-age policy (an explicit, scoped override by the owner). Re-check once the age passes;
   a transitive telemetry package came with it.
@@ -366,11 +361,8 @@ tasks; none has a message handler. The manager polled the inbox several times an
 - Two remotes: the public personal repository only has the first commits; the private
   organisation repository has everything. [DECISION] what, if anything, goes to the public one
   (company-specific text must not).
-- Uncommitted work at the time of writing: the fleet dashboard integration note, this file, and
-  the QA role in progress. Commit after review.
 - No LICENSE file in the repository.
-- The fleet dashboard's own source tree is not under version control (a safety copy exists).
-  Put it in a repository.
+- (resolved 2026-10-06) The fleet dashboard's source is in dashboard/ with its build steps (README); the hosts keep the previous source as *.tgz backups.
 - The GitHub fine-grained tokens are created in the owner's browser only after a passkey check;
   nothing automates their rotation (the two new tokens expire 2027-01-03).
 - Each agent's host-side files (keys, auth.json, .env, compose files) are not in the repository
