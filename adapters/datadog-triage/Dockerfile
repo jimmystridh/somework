@@ -6,6 +6,9 @@
 # results; it is the developer role's sandbox image (`somework-pi-sandbox`, built from adapters/pi/Dockerfile and not changed by this role)
 # plus python3. There is no egress image: this role's sandbox has no route out at all.
 
+# Declared before the first FROM so that the sandbox stage's FROM can use it.
+ARG SANDBOX_BASE=somework-pi-sandbox:latest
+
 FROM node:22.22.1-bookworm-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d AS base
 ENV NODE_ENV=production NODE_OPTIONS=--disable-warning=ExperimentalWarning
 WORKDIR /app
@@ -41,7 +44,6 @@ CMD ["node", "src/main.ts"]
 
 # The sandbox: where the model's bash, python3 and jq run. No credentials and no network. The developer sandbox image is the base (its daemon,
 # its user, its jq); this adds python3 (standard library only: there is no pip and no route to a package index) and checks it works.
-ARG SANDBOX_BASE=somework-pi-sandbox:latest
 FROM ${SANDBOX_BASE} AS sandbox
 USER root
 RUN apt-get update \
