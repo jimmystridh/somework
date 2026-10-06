@@ -48,7 +48,10 @@ D. GRAFANA OBSERVE TOOLS FOR THE AGENTS (LIVE for the three Linux agents since 2
   the log ingest, GET only, three API shapes: Loki query/labels/series through the datasource proxy, alert rules, dashboard search; everything else 403) with a
   firewall rule for the agents VM only (the services VM cannot reach it; checked); the token (0400) and the logging CA on the developer, reviewer and fixer,
   OBSERVE_ENABLED=1 with the own scope (OBSERVE_OWN = the agent's own container). The developer used the tools through chat with 3 calls and no errors.
-- Not done: the Windows machines (their firewall allow-lists would need the route), the manager (its brain is a separate Pi container that only knows the
+- Windows machines (done 2026-10-06): the route's address is in each machine's firewall allow list, a firewall rule on the observability VM admits both, the
+  token and CA sit in C:\somework\secrets with an ACL for the service account only, and the QA agent and the Windows developer each made a successful
+  observe call (own scope: host and service labels).
+- Not done: the manager (its brain is a separate Pi container that only knows the
   gateway's routes), the Datadog agent (its container reaches only Datadog and the domain; its own logs are not needed).
 
 E. CI: DEPLOY THROUGH WOODPECKER INSTEAD OF BY HAND (section 00 E of the first version; docs/CI.md "Rolling agents")
