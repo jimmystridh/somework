@@ -38,3 +38,7 @@ GitHub cannot reach the private network. Webhooks arrive at the public receiver 
 * Runner: `docker compose logs agent`; a daily job prunes images older than three days. The agent appears in the server database table `agents` with its labels; a repository filter label (`repo=<owner>/<name>`) keeps other repositories off it.
 * Upgrade: pin the new tag and digest in both compose files, pull, `docker compose up -d`; read the release notes for migrations first. The server and the runner should run the same minor version.
 * Back up the server's data directory (SQLite) with the services VM; the runner is reproducible and deliberately outside the backup job.
+
+## Installing dependencies with bun
+
+The `check` pipeline runs on pull requests and on every push to `main` (the plan and its comment only on pull requests), so a code push is checked too. The `check` and `deploy` pipelines install in their own step with the official `oven/bun` image (pinned by digest): `bun install --frozen-lockfile --ignore-scripts`. Bun reads the committed `package-lock.json` (no second lockfile), installs the same package versions as `npm ci`, runs no lifecycle scripts and fails when the lockfile no longer matches a manifest. The other steps run on the node image over the same workspace. `full.yaml` still uses `npm ci`. Timings are in `TODO.txt` (section 11b, F).

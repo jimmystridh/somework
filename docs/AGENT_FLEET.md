@@ -11,7 +11,7 @@ Five agents that cooperate through SomeWork. This document fixes how they are bu
 | **Windows developer** | the Windows build machine | `code.windows` v1 | Changes that must build and run on Windows (the legacy C++ backend): same git protocol, Windows toolchain, encoding-safe edits. |
 | **Reviewer** | agent Docker host | `code.review` v3 | Read-only review of a PR/ref against the ticket and repository rules; produces findings, never writes to the host or repo unless the Manager approves a posted review. |
 | **QA** | machine with a browser and network reach to the test backend | `qa.verify` v1 | Verifies a ticket against a revision in a real browser; returns a verdict plus evidence artifacts. |
-| **Aikido fixer** | agent Docker host (Linux, sandboxed) | `code.fix` v1 | Listens to Aikido events, keeps a fresh mirror of one repository, attempts the smallest fix of a reported security issue and opens a draft PR; built, not deployed (`adapters/aikido-fixer`). |
+| **Aikido fixer** | agent Docker host (Linux, sandboxed) | `code.fix` v1 | Listens to Aikido events, keeps a fresh mirror of one repository, attempts the smallest fix of a reported security issue and opens a PR; built, not deployed (`adapters/aikido-fixer`). |
 
 ## The question: how is code shared?
 
@@ -95,7 +95,7 @@ same capability id; agents that differ in a way that matters (Windows vs Linux) 
 ## Roles in detail
 
 ### Aikido fixer (built, not deployed)
-`code.fix` v1 on the same kit and git protocol as the developer, started by events instead of a requester: the rule `rules/aikido-fixer.yaml` wakes it for `aikido.*` events, its shipped handler turns an eligible issue into one task for itself, and the task works in a fresh clone (from a persistent mirror) at the resolved commit of the default branch. It reads the issue through a host-side, read-only Aikido client, refuses protected paths, secret-like text, oversized changes and a failing check profile, and opens a **draft** pull request on `agent/aikido-<issue>-<sha>`. Approval requests are refused (nobody answers for it). Limits are enforced twice: by the handler in the sandbox as an early filter and by a ledger on the service host as the authority. See `adapters/aikido-fixer/README.md`.
+`code.fix` v1 on the same kit and git protocol as the developer, started by events instead of a requester: the rule `rules/aikido-fixer.yaml` wakes it for `aikido.*` events, its shipped handler turns an eligible issue into one task for itself, and the task works in a fresh clone (from a persistent mirror) at the resolved commit of the default branch. It reads the issue through a host-side, read-only Aikido client, refuses protected paths, secret-like text, oversized changes and a failing check profile, and opens a pull request (a real one by default, a draft with `GIT_PR_DRAFT=1`) on `agent/aikido-<issue>-<sha>`. Approval requests are refused (nobody answers for it). Limits are enforced twice: by the handler in the sandbox as an early filter and by a ledger on the service host as the authority. See `adapters/aikido-fixer/README.md`.
 
 ### Manager (live)
 Existing Telegram bridge (owner pairing, private chat only) retrofitted: SomeWork identity `agent/manager` held by the bridge, a narrow
@@ -129,6 +129,42 @@ remote test backend, drives a real browser, builds fixtures, records a short vid
 **The ticket-system writes of the original skill (comment, label, transitions) become Manager-approved follow-up actions**, because
 they are visible side effects; the "never move to Done" rule is kept as a hard constraint in the tool layer, not only in the prompt.
 The role is built and tested; its machine (a Windows clone with a browser and the product's local back end) is prepared, and it waits for the product's web database to be restored before it can verify a ticket.
+
+## Chat
+
+Every role answers a direct `chat.message` with a model (`profile.chat.mode`, `model` by default; `CHAT_MODE=notice` goes back to the
+deterministic notice). Two tiers, decided by who sent it and by an explicit prefix, never by what the text says:
+
+| | ASK | INSTRUCT |
+|---|---|---|
+| Who | `agent/manager` and every human (`CHAT_ALLOWED_SENDERS`) | `agent/manager` only (`CHAT_INSTRUCTORS`), message starts with `instruct:` |
+| What runs | one bounded model turn in a light session | the role's normal handler as a synthetic job: same sandbox, tools, guards, approvals, git protocol |
+| Tools | `read`, `agent_status`, the role's read-only tools; never bash, edit or write | what the role's tasks have (`profile.allowedTools`) |
+| Limits | 40 000 tokens, 2 minutes, halved when the chat pool is 80% used | chat budget 150 000 tokens, 15 minutes, never above what the `chat` pool has left |
+| Approvals | all refused | asked of the instructor in the conversation (`chatApprovalRequest` / `chatApprovalDecision` labels), denied on silence after 10 minutes |
+
+| Role | Extra read-only tools for questions | What `instruct:` does |
+|---|---|---|
+| Developer | none | a `code.agent` v2 task on `repo:` or `CHAT_REPOSITORY_URL`, then branch and pull request as usual |
+| Reviewer | none | a `code.review` v3 task (`repo:`, `ref:`, `pr:`, `ticket:`, the rest is the focus); still read-only |
+| Windows developer | none | a `code.windows` task (`repo:`, `ref:`, `build:`, `tests:` as named profiles), in the confined environment |
+| QA | none | a `qa.verify` task for the ticket named in the text (`repo:`, `ref:`, `scenario:`, `app:`); ticket writes still need approval |
+| Aikido fixer | `fixer_status` (attempts, limits, outcomes), `aikido_lookup` (one issue by id) | a `code.fix` task for "fix issue N" on its configured repository, through the same eligibility, daily cap, attempt limits and guards; approvals stay refused |
+| Manager | n/a | the Manager is the instructor: `/ask <agent> instruct: ...` sends it, `/chatapprove <id>` and `/chatdeny <id>` answer the agent's approval questions |
+
+The chat has its own `chat` token pool (a tenth of the daily limit by default), shares job slots with tasks (tasks first, nothing
+preempted), answers one message at a time (a waiting message is told "busy, queued"), answers each sender and conversation at most
+once per 15 seconds and 20 times an hour, and never answers its own messages, replies or automatic notices, so agents cannot loop.
+Replies are redacted and at most 4 KB. An instruction has no task in the domain, so its artifacts are never uploaded: small text results (patch, report, logs) are shown in the reply, everything else stays on the agent host and the reply names where. A second message inside the 15-second window gets one automatic notice telling the sender when to write again. All the settings are in `packages/agent-kit/README.md`.
+
+## Observe tools
+
+Any pi-based role can be given read-only access to the central Grafana (Loki logs, alert state, dashboard search) to read its own history or, for
+roles with fleet scope, the rest of the fleet: `logs_query`, `my_history`, `logs_labels`, `alerts_status`, `dashboards_search`. They are off by
+default (`OBSERVE_ENABLED=1`, `GRAFANA_URL`, `GRAFANA_TOKEN_FILE`); the token belongs to a Viewer service account created by
+`deploy/grafana/provision-reader.py` and never enters the sandbox. A role with own scope has its matchers added to every query. Queries are parsed and
+rebuilt (no aggregations, sub-queries or `offset`), answers are redacted, size-capped and framed as untrusted data. Allowed in ASK and INSTRUCT
+chat. Limits: Loki logs only (no Prometheus, no traces), history reaches as far as Loki retention, at most 168 hours per query. Settings: `packages/agent-kit/README.md`.
 
 ## Cross-cutting rules
 

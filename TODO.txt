@@ -74,8 +74,13 @@ Still open (needs a decision or access I do not have):
 - (done) qa-on-ticket works up to the approval: a synthetic transition to the status `Test` created a reaction task that waits for approval, the manager
   announced the approval in Telegram (state shows the message), the task was cancelled. The live rule and the repository file now say `Test` (the
   workflow's real status; the first version said `Testing` and never matched).
-- NOT proven: a full verification of a real ticket (verified / not_fixed). It needs a ticket in status Test in the allowed pattern (^SAD-[0-9]+$), a repository the
-  machine can clone (a private one needs a read-only git token in secrets\git-token), and the application started from the ticket's checkout. Try one with the owner.
+- NOT proven: a full verification of a real ticket (verified / not_fixed). The QA agent now has its own read-only repository token (secrets\git-token, contents read on
+  the one repository, expires 90 days from 2026-10-06; GIT_TOKEN_FILE in agent.env) and the hub's Jira source defaults the ref to HEAD (the default branch is `tremendous`),
+  so the clone failure that ended the first three real runs (no token, ref main) is fixed. Still needs a ticket in status Test (^SAD-[0-9]+$) and the application started from
+  the ticket's checkout. Try one with the owner.
+- The QA agent's log file stopped receiving lines from about 06:57 UTC (an earlier instance) although it kept claiming tasks; not reproduced: the instances started since
+  (12:05, 12:22 local) log normally (chat_received, chat_answered, service_started). Watch for it; if it returns, compare the supervisor's redirected stderr handle
+  with the SYSTEM helper start.
 - The web app, back end and databases run on the QA machine permanently (about 0.75 GB) because the stack is started on demand by the agent only after a
   reboot (about 3 minutes); QaRestoreRun is a leftover on-demand task of the restore and can be deleted.
 - The firewall pins single addresses for hosts that rotate them: GitHub and Cloudflare are covered by CIDR blocks; the Jira host resolves to ONE address
@@ -155,6 +160,16 @@ Still open (needs a decision or access I do not have):
 - The one real pull request path was exercised once (a draft PR, since closed). No CI interplay
   was observed.
 
+CHAT FOR ALL ROLES (built and tested 2026-10-06, NOT deployed; docs/AGENT_FLEET.md "Chat", packages/agent-kit/README.md)
+- Default is now mode "model" for every role: a redeploy changes behaviour (questions get model answers, spending the `chat` pool, a tenth of
+  DAILY_TOKEN_LIMIT). CHAT_MODE=notice restores the old notice per deployment. Check DAILY_TOKEN_LIMIT per agent before the rollout.
+- Instructions need CHAT_REPOSITORY_URL on developer, reviewer, windows-developer and qa (or `repo:` in the message); the fixer uses its own repository.
+- Manager side: `/chatapprove <id>` and `/chatdeny <id>` answer an agent's approval question (the Manager must be redeployed too).
+- Not made safe: the ask tier's `read` can read any file the sandbox shows it (the checkout, recent workspaces), so a secret committed to the
+  repository can be quoted; replies are redacted by pattern only. Every question leaves a conversation in pi.sqlite (agentKey chat:<messageId>), with no pruning yet.
+- Artifacts of a chat instruction are kept under <state dir>/chat-artifacts on the agent host (10 newest jobs), never uploaded: if people need them in the domain, the domain would need a task-less artifact upload.
+- A chat instruction and an event task on the fixer share PI_CONCURRENCY=1 and the daily cap; chat can use up the day's fix attempts.
+
 AIKIDO FIXER (adapters/aikido-fixer, code.fix v1; built and tested, NOT deployed)
 - Needs from the owner before it can run: an Aikido OAuth2 client for it (read access to issues only), a model login of its own (device code),
   a fine-grained token for ONE repository (Contents + Pull requests write, 90 days, passkey check), and the enrolment with
@@ -169,6 +184,9 @@ AIKIDO FIXER (adapters/aikido-fixer, code.fix v1; built and tested, NOT deployed
   in the kit would be cleaner.
 - The mirror and the per-issue clones share the sandbox's workspace volume: size it for the repository (checkouts are removed after the result).
 - Recommended on the target repository: protect the default branch, restrict who may push `agent/*`, require a review before merge.
+- Retries (done 2026-10-06): the task branch is never rewritten (ls-remote first: same tree is reused, different work goes to -2..-5, all taken fails
+  branch_exhausted), and a retry of the same task whose branch was pushed but whose pull request failed opens the pull request without a model run
+  (RoleHooks.resume). A retry in a DIFFERENT workspace (the volume was wiped) still re-runs the model, then reuses the branch by tree.
 - Handler tools are locked for this role (they need an approval that is always refused): changing the handler is an operator action.
 - The dashboard does not know its health port yet (8083); add it to agents-health.json when the host allows it.
 
@@ -224,6 +242,10 @@ tasks; none has a message handler. The manager polled the inbox several times an
   minimum-age policy (an explicit, scoped override by the owner). Re-check once the age passes;
   a transitive telemetry package came with it.
 - No distributed tracing; logs and the fleet dashboard are the observability story.
+- (2026-10-06) Observe tools for agents (logs_query, my_history, logs_labels, alerts_status, dashboards_search; kit
+  `observe/`) are built and OFF everywhere: enabling needs a Viewer service account (deploy/grafana/provision-reader.py, not yet
+  run) and OBSERVE_ENABLED=1 per role. Limits: Loki only (no Prometheus, no traces), history reaches as far as Loki retention,
+  the manager does not have them yet (its tools are not built from the kit's service wiring), nobody has used them live.
 - (resolved 2026-10-05) A "SomeWork Agents" dashboard and seven log-derived alert rules are loaded into the
   central Grafana by deploy/grafana/provision.py (idempotent; re-run after changes). There is still no
   notification target: alert state is only visible in Grafana. The metrics-based variants are unused.
@@ -338,6 +360,128 @@ hub restarts lose and duplicate nothing; a Grafana alert reaches the manager. St
   profile with a 15 s p95 limit) is timing-sensitive: on a busy workstation (load average 20-40) it fails on the commit before the events work
   too (p95 23.9 s there, 18.5 s with the events code, no errors), and passes on a quiet machine. Run it alone on a quiet host before trusting
   it, or move it to the manual pipeline.
+
+--------------------------------------------------------------------------------------
+11b. BACKLOG FROM THE OWNER (2026-10-06)
+--------------------------------------------------------------------------------------
+A. A SEPARATE GITHUB IDENTITY FOR THE BOTS (GitHub App?)
+- Today every agent push and pull request is made with a fine-grained personal token, so the pull request author, the commits' pusher
+  and every API call show up as the owner's own account (pull request 5229 is "opened by" the owner). Reviewers cannot tell agent work
+  from human work except by the body text.
+- Options to compare: (1) one GitHub App per role (developer, aikido-fixer, windows-developer; the reviewer read-only): actions appear as
+  "<app name>[bot]", installation tokens are short-lived (1 hour), permissions and repositories are set per installation, no user seat,
+  separate rate limits, audit log entries per app; needs an organisation owner to register and install it and an app private key per
+  agent; (2) a machine user per role: simplest to wire (still a token), but costs a seat, needs its own 2FA and SSO authorisation, and
+  tokens are long-lived; (3) keep the personal token but set a distinct commit author (does not change the pull request author).
+- Leaning: (1). Work items: pick names (for example somework-developer, somework-aikido-fixer), register the apps (organisation level,
+  repository access limited to the one repository each, permissions Contents + Pull requests write, Metadata read; reviewer: read only),
+  teach the kit's git host to mint an installation token from the app id + private key before every task (replacing GIT_TOKEN_FILE; keep
+  the token-host allow-list and the credential helper), map commit author and email to the app's noreply identity, check that branch
+  protection and CODEOWNERS treat the bot as intended (the bot must not be able to bypass anything and must not be a code owner), update
+  the Woodpecker/CI side if it should ignore bot branches, and decide how the old tokens are retired. Expiry today: reviewer and Windows
+  developer tokens 2027-01-03, Aikido fixer 90 days from 2026-10-06, developer early November 2026.
+
+B. SHOW THE BOT SETUP AND PROMPTS CLEARLY IN "AGENT OPERATIONS" (the Fleet dashboard)
+- Today the dashboard shows liveness, work, approvals and (new) events, handlers and pools, metadata only. Nothing explains HOW an agent is
+  set up. Wanted per agent, on one detail page: identity and role, capability card (id, version, side effects, input schema), the system
+  prompt as deployed (read-only text plus a hash and version), allowed tools and approval patterns, budgets and limits (per job, daily,
+  pools), model provider and model, image tag / code version, skills and handlers (names, versions, enabled), the rules that wake it or
+  that submit tasks to it, repository access (which repositories, token expiry date, GitHub identity once item A exists), the egress
+  allow-list, chat settings (who may ask, who may instruct), the last config change, and links to its runbook and logs.
+- How: every agent already serves /status; add a read-only /profile document built by the kit from the loaded profile (no secrets, no
+  file paths, redacted env), shown by the dashboard with the same restricted-alphabet rules as the rest; a "changed since last seen" marker
+  from the profile hash. Prompts are not secrets but may contain company wording: show them only through the private gateway (already the
+  case). The dashboard must keep reading metadata only for task content.
+
+C. HOW MUCH DOES ONE AGENT COST, AND SHOULD AGENTS START ON DEMAND?
+- Measured 2026-10-06 (idle, a few minutes after real work): a Linux agent is three small containers: agent about 65-85 MiB, sandbox 35-70
+  MiB, egress proxy 25-30 MiB (limits 1 GiB, 2-3 GiB, 128 MiB), CPU about 0-1 percent; so roughly 150-190 MiB each, a few percent of one
+  core while idle. Hub 66 MiB, receiver 42 MiB, domain 63 MiB, broker 32 MiB, Woodpecker server 30 MiB, CI runner 25 MiB. The Linux side is
+  cheap enough that on-demand start brings almost nothing.
+- The expensive part is the VMs: each Windows clone is configured with 8 GB and uses about 7.3-7.5 GB (Windows, SQL Server about 0.5 GB,
+  Edge, the agent), the original Windows build station 16 GB, the dev station 32 GB (9.9 GB used), the agents VM 16 GB (about 2 GB of
+  processes, the rest cache), services 4 GB, DMZ 8 GB, observability 6 GB, CI runner 4 GB. The configured memory of all VMs adds up to
+  about 102 GB on a host with about 94 GB, so it relies on ballooning and cache; nothing is idle-proof.
+- Idea: start Windows machines on demand. A small "wake on work" supervisor (in the hub or on the agents VM) watches the work queue for
+  `code.windows` and `qa.verify` (the work-ready notifications already exist) and, through the scoped Proxmox token (power management on the
+  `somework` pool only), starts the VM, waits for the agent's heartbeat, and shuts the VM down through the guest agent after N idle
+  minutes. Tasks simply queue meanwhile (the catalog already shows "queueable"). Cost: a cold start of several minutes (Windows boot plus
+  SQL Server start about 3 minutes; the QA app server does not start at boot by design, it would have to), and a policy for jobs that
+  must start now. Benefit: 16 GB of host memory while idle, plus fewer processes to patch.
+- Also consider: stopping the original Windows station and the dev station when unused, a cap per agent for concurrent sandboxes, and
+  whether the three Linux agents should share one sandbox/egress pair (saves about 100 MiB each, loses isolation, probably not worth it).
+- Decision needed: [DECISION] acceptable cold-start latency for Windows work, and which machines may be powered off automatically.
+
+E. TRIED upm (https://github.com/unjs/upm) FOR THE CI INSTALL, ABANDONED 2026-10-06 (the pipelines were switched in a working copy, benchmarked and reverted; nothing was committed)
+- Benchmark on the CI runner VM (2 vCPU, node 22.19.0, npm 10.9.3, one fresh container per run, medians of 3): install only: npm ci
+  --ignore-scripts cold 28.5 s, warm cache 23.5 s; upm install --frozen-lockfile cold 20.5 s, warm store 12.1 s; installing the tool itself
+  (`npm i -g upm`) costs 5-6 s in every step that needs it. Whole check job (install + role check + 4 test steps + rule validation), two
+  runs each: npm 27.5 / 26.9 s install, upm 23.2 / 22.5 s install including the tool install; the test steps take 57-60 s for the hub and
+  receiver alone and are the same either way (same test counts, all green), so the job gets about 4-5 s (4 %) shorter. A baked CI image
+  with upm preinstalled would add about 5 s more; a warm store volume on the runner would bring the install down to about 12 s.
+- Costs and risks: (1) upm cannot read a workspace package-lock.json ("delete it to switch to upm"), so CI uses its own `upm.lock` (47 KB,
+  generate with `rm package-lock.json; upm lock` in a scratch copy, commit it, and regenerate whenever dependencies change; CI fails on a
+  stale lock). Two lockfiles can drift, and CI no longer tests the dependency set developers install; (2) upm ignores `legacy-peer-deps=true`
+  from .npmrc: its lock has 159 packages against npm's 127, the extra 32 include the whole @earendil-works/pi-coding-agent and its tree
+  that .npmrc says must not be installed, node_modules is 183 MB against 143 MB, and 4 packages resolve to additional versions; (3) upm is a
+  prerelease (1.4.0, one maintainer, "not stable yet" in its README) and skips lifecycle scripts like our existing `--ignore-scripts`; its
+  minimum release age default is 1 day, our workstation policy is longer. A node_modules installed by upm in one container works in another
+  container that only shares the workspace (checked), because its virtual store lives in node_modules/.upm.
+- Verdict: a small gain for real extra maintenance; the owner decided it is not worth it. Reverted to `npm ci --ignore-scripts`.
+
+F. bun FOR THE CI INSTALL (tried 2026-10-06 after upm was dropped; the check and deploy pipelines are switched in the working tree, not committed)
+- Both pipelines now install in a separate step with the official `oven/bun` image (pinned by digest, bun 1.4.2) using
+  `bun install --frozen-lockfile --ignore-scripts`; the later steps still run on `node:22.19.0-bookworm` over the same workspace
+  (checked in two separate containers). full.yaml keeps `npm ci` as the reference.
+- No second lockfile: bun reads package-lock.json (it "migrates" it in memory and writes a bun.lock that is not committed). The resolved
+  set is identical to npm's lock (127 distinct name@version pairs on both sides, 113 packages installed), it ignores no policy that matters
+  here (node_modules 143 MB, same as npm), and a stale lock fails the install ("lockfile had changes, but lockfile is frozen": tested by
+  adding a dependency to a workspace manifest). Lifecycle scripts are not run (we already used --ignore-scripts; bun reported 2 blocked).
+- Measured on the CI runner VM (2 vCPU, node 22.19, fresh container per run): bun install inside the container 2.3-4.3 s cold; the install
+  step including container start 9.8-10.1 s against 28.9-29.4 s for `npm ci --ignore-scripts` (5 runs); the rest of the job is unchanged
+  (same test counts, all green). So the check job goes from about 105 s to about 85 s. Installing bun with `npm i -g bun` instead costs
+  about 14.5 s per step, which is why the official image is used. The image is 93 MB (cached on the runner).
+- Remaining points: bun is young software (1.4.x) and the install tree is built by bun, not npm, so a package that behaves differently
+  under bun's layout would only show in CI (none of our suites does); the install step no longer has node, so any install-time script
+  needing node is skipped anyway; keep the digest pinned and update it deliberately. [DECISION] keep it or revert the two install steps.
+
+D. TELEGRAM AND SLACK AS EVENT SOURCES, AND HOW A BOT RESPONDS OR STARTS A CONVERSATION (design question, supersedes the manager-only
+   plan in section 10 where they differ)
+- The hub only moves things IN: a webhook becomes an event. A chat message is just another event (`telegram.message.received`,
+  `slack.message.received`, `slack.app_mention`, `slack.interaction.button`). Replying or starting a conversation is the other direction
+  and is not something the hub does: it needs a bot token, a destination and a policy. Proposal: a CHANNEL GATEWAY, one principal per
+  channel (today the manager plays this role for Telegram), that alone holds the outbound bot credentials and offers a capability
+  `chat.send` (side effect: write, because people see it). Anyone who wants to speak (a rule's reaction, a woken agent, the manager)
+  submits a `chat.send` task with {channel, target, text, replyTo?, thread?}; the gateway applies the policy and posts.
+- RESPONDING: the inbound event carries a reply handle `{channel, conversation, thread/message id}` (never the bot token). The agent that
+  handles the event answers with `chat.send` using that handle, or the rule's reaction does it. Slack: reply in the same thread;
+  Telegram: reply to the message id. Long work: post "working on it", and the task result later in the same thread.
+- INITIATING: events and schedules can start a conversation (alert -> owner, nightly digest, a pull request opened, a fix task needs a
+  decision). Targets are an ALLOW-LIST kept in the gateway: the owner's direct message by default, named channels only when listed;
+  an unknown target is refused (or asks the owner to approve it once). Per-target rate limits, quiet hours, redaction of tokens and long
+  strings (as the manager already does), and a size cap; no raw task content, source code or secrets; text from events is quoted data.
+- APPROVALS AS BUTTONS: write-class approvals (pull requests, Jira writes) become interactive messages (Telegram inline buttons exist
+  already in the manager; Slack Block Kit buttons). The click arrives as an inbound `*.interaction` event; the gateway checks that the
+  clicker is the paired owner and decides the approval.
+- WHO MAY TALK TO WHOM: inbound is allow-listed by user id (the owner), DMs only to start; channel mentions only in listed channels. A
+  message never causes anything except an event; the existing rules decide what runs. Agents never talk to Slack/Telegram directly.
+- TRANSPORT PER CHANNEL:
+  * Telegram: today the manager uses long polling; with a webhook (`setWebhook` to the public receiver, token in the path plus the
+    `X-Telegram-Bot-Api-Secret-Token` header checked by the receiver) the manager's polling must be switched off (a bot has either one).
+    Decide: keep long polling inside the gateway (simple, nothing public) and publish `telegram.*` events from the gateway itself, or move
+    to the webhook path (one door, but the gateway then depends on the hub for intake).
+  * Slack: either Socket Mode (the gateway opens an outbound websocket, no public URL, the plan in section 10) or the Events API through
+    the receiver: needs the synchronous `url_verification` challenge answer (the receiver is asynchronous, so a tiny special case), the
+    `X-Slack-Signature` HMAC with the 5-minute timestamp window as the verification mode, form-encoded interaction payloads, and the 3
+    second acknowledgement (the receiver already answers immediately). Leaning: Socket Mode inside the gateway for Slack, webhooks only for
+    sources that cannot call out.
+- WORK ITEMS: define `chat.send` (card, input schema, limits, allow-list file under rules/ or deployment config), the reply handle in the
+  event envelope, a gateway role (or the manager generalised) with Telegram and Slack adapters behind one interface, mapping files
+  (JSONata) for the inbound message and interaction events, tests with a fake Slack and a fake Telegram, the allow-list and quiet-hours
+  policy, rules for the first flows (alert -> owner, digest -> owner, approval buttons), and a decision on credentials (bot tokens only in
+  the gateway host, signing secrets only in the receiver/hub).
+- Decision needed: [DECISION] long polling vs webhook for Telegram, Socket Mode vs Events API for Slack, and whether the manager becomes the
+  gateway or a separate principal per channel.
 
 --------------------------------------------------------------------------------------
 12. DECISIONS WAITING FOR THE OWNER (summary)
