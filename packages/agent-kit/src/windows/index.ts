@@ -22,7 +22,7 @@ export function prepareWindowsRoot(root: string): void {
 
 /**
  * The hooks every Windows role shares: commands and files go through the confined local environment (there is no container sandbox on
- * the machine), the health endpoint stays on loopback, and readiness covers bash and a writable workspace root.
+ * the machine), the health endpoint stays on loopback unless `WINDOWS_HEALTH_BIND` names one address, and readiness covers bash and a writable workspace root.
  */
 export function windowsExecutionHooks(settings: WindowsEnvSettings): Pick<RoleHooks, "envFactory" | "healthBind" | "readinessChecks"> {
 	prepareWindowsRoot(settings.root);
@@ -34,7 +34,7 @@ export function windowsExecutionHooks(settings: WindowsEnvSettings): Pick<RoleHo
 			baseEnv: baseEnvironment({ root: settings.root, host: process.env, pathDirectories: settings.pathDirectories, passEnv: settings.passEnv }),
 			maxOutputBytes: settings.maxOutputBytes,
 		}),
-		healthBind: "127.0.0.1",
+		healthBind: settings.healthBind ?? "127.0.0.1",
 		readinessChecks: {
 			bash: async () => existsSync(settings.bash),
 			workspace: async () => {

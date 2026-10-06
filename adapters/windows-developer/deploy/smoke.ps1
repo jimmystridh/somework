@@ -6,7 +6,8 @@
 param(
     [string]$InstallRoot = 'C:\somework\agent',
     [string]$TaskName = 'SomeWorkWindowsDeveloper',
-    [int]$HealthPort = 8081
+    [int]$HealthPort = 8081,
+    [string]$HealthHost = ''
 )
 $ErrorActionPreference = 'Stop'
 $node = 'C:\Program Files\nodejs\node.exe'
@@ -29,11 +30,20 @@ try {
     Pop-Location
 }
 
+# the health endpoint listens on loopback unless agent.env names an address (WINDOWS_HEALTH_BIND)
+if (-not $HealthHost) {
+    $HealthHost = '127.0.0.1'
+    $envFile = Join-Path $InstallRoot 'agent.env'
+    if (Test-Path -LiteralPath $envFile) {
+        $bind = Select-String -Path $envFile -Pattern '^WINDOWS_HEALTH_BIND=(.+)$' | Select-Object -First 1
+        if ($bind) { $HealthHost = $bind.Matches[0].Groups[1].Value.Trim() }
+    }
+}
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task) {
     Write-Host ('INFO: scheduled task {0} is {1}' -f $TaskName, $task.State)
     try {
-        $ready = Invoke-WebRequest -UseBasicParsing -Uri ('http://127.0.0.1:{0}/ready' -f $HealthPort) -TimeoutSec 5
+        $ready = Invoke-WebRequest -UseBasicParsing -Uri ('http://{0}:{1}/ready' -f $HealthHost, $HealthPort) -TimeoutSec 5
         Write-Host ('PASS: the service answers /ready: {0}' -f $ready.Content.Trim())
     } catch {
         Write-Host ('INFO: the service is not answering on port {0} ({1})' -f $HealthPort, $_.Exception.Message)

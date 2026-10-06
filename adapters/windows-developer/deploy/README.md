@@ -92,6 +92,19 @@ and submit a small `code.windows` task against a scratch repository: the SDK's `
   restarting it, create `C:\somework\agent\STOP` first.
 * **Rotate the key**: stop the task, `keygen.ts` to a new file, `somework admin rotate-agent-key --id agent/windows-developer --public-key ...`
   on the domain host, swap the file, start.
+* **Status for a dashboard on another machine.** The health endpoint listens on loopback. To let one reader (for example the fleet dashboard
+  host) read `/status` and `/ready`, set `WINDOWS_HEALTH_BIND=<the machine's private IPv4 address>` in `agent.env` (a wildcard is refused), restart,
+  and allow exactly that reader through the Windows firewall (the endpoint is then not reachable on loopback any more; `smoke.ps1` follows the setting):
+  ```powershell
+  New-NetFirewallRule -DisplayName 'SomeWork Windows developer status (reader only)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8081 -RemoteAddress <reader address> -Profile Any
+  ```
+* **Starting and restarting without duplicates.** Start with the SYSTEM helper only when no supervisor is running: a second start leaves two
+  supervisors, and the second agent crash-loops with `EADDRINUSE` on the health port. To restart cleanly, stop every process of the service
+  account (`Get-CimInstance Win32_Process` + `GetOwner`, then `Stop-Process`), then start once.
+* **"Task Scheduler failed to log on" (error 2147943726, result 267014 or no run at all).** The account's password and the task's stored credential
+  no longer match (the password was rotated without re-registering the task). Run `install-service.ps1` again from a current source tree; it rotates the
+  password and re-registers the task together. Do not use `-SkipInstallDependencies` with a source tree older than the installed one: it replaces the
+  code and leaves the newer `node_modules`, and the agent dies with `ERR_MODULE_NOT_FOUND`.
 * **Metrics** are on `127.0.0.1:8081/metrics` (`somework_pi_*`); a blocked run is counted under `unanswered`, then reported as `blocked`.
 
 ## Rollback and removal

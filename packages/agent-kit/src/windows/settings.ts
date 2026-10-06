@@ -13,6 +13,8 @@ export interface WindowsEnvSettings {
 	maxOutputBytes?: number;
 	/** Account whose leftover processes are stopped after a timeout or abort (the service account); requires one job at a time. */
 	sweepUser?: string;
+	/** Interface of the health endpoint (an IPv4 address of the machine); loopback unless a dashboard on another machine must read it. */
+	healthBind?: string;
 }
 
 export const list = (value: string | undefined, separator: RegExp): string[] => (value ?? "").split(separator).map((item) => item.trim()).filter(Boolean);
@@ -27,6 +29,7 @@ export const list = (value: string | undefined, separator: RegExp): string[] => 
  *   WINDOWS_MAX_OUTPUT_BYTES per-command output cap
  *   WINDOWS_SWEEP_USER      the service account; after a timeout or abort every process of that account started during the command is stopped
  *                           (needs PI_CONCURRENCY=1, because the sweep cannot tell two simultaneous jobs apart)
+ *   WINDOWS_HEALTH_BIND     IPv4 address the health endpoint listens on (default 127.0.0.1; never 0.0.0.0, open the port to one reader with a firewall rule)
  */
 export function loadWindowsEnvSettings(env: Record<string, string | undefined>, exists: (path: string) => boolean = existsSync): WindowsEnvSettings {
 	const root = env.WINDOWS_WORKSPACE_ROOT;
@@ -41,6 +44,10 @@ export function loadWindowsEnvSettings(env: Record<string, string | undefined>, 
 		if (!/^[A-Za-z0-9._$-]{1,64}$/.test(sweepUser)) throw new Error(`WINDOWS_SWEEP_USER is not a usable account name: ${sweepUser}`);
 		if (Number(env.PI_CONCURRENCY ?? "2") !== 1) throw new Error("WINDOWS_SWEEP_USER needs PI_CONCURRENCY=1: the sweep cannot tell simultaneous jobs apart");
 	}
+	const healthBind = env.WINDOWS_HEALTH_BIND || undefined;
+	if (healthBind !== undefined && (!/^(\d{1,3}\.){3}\d{1,3}$/.test(healthBind) || healthBind === "0.0.0.0" || healthBind.split(".").some((part) => Number(part) > 255))) {
+		throw new Error(`WINDOWS_HEALTH_BIND must be one IPv4 address of this machine, not a wildcard: ${healthBind}`);
+	}
 	return {
 		root: win32.normalize(root).replaceAll("\\", "/").replace(/\/+$/, ""),
 		bash: chooseBash({ explicit: env.WINDOWS_BASH || undefined, candidates: bashCandidates(env), exists }),
@@ -48,5 +55,6 @@ export function loadWindowsEnvSettings(env: Record<string, string | undefined>, 
 		passEnv: list(env.WINDOWS_PASS_ENV, /,/),
 		maxOutputBytes,
 		sweepUser,
+		healthBind,
 	};
 }
