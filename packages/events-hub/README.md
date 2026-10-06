@@ -21,7 +21,7 @@ Every webhook ends in exactly one of: **published** (the domain accepted it, or 
 | `domain` | `url`, `caFile`, `requireTls` (default true) |
 | `receiver` | `url` of the private listener, `caFile`, `waitSeconds` (long poll, default 25) |
 | `sources[]` | `name`, `version`, then either `mapping` + `producer.keyFile` (+ optional `classification`, `defaults`, `internal: true`) or `forward: {baseUrl, caFile}` |
-| `sources[].defaults` | static object handed to the mapping as `defaults`: what a webhook cannot carry. The Jira mapping reads `defaults.repository` and `defaults.projects.<KEY>.repository` (`cloneUrl`, `ref`) |
+| `sources[].defaults` | static object handed to the mapping as `defaults`: what a webhook cannot carry. The Jira mapping reads `defaults.repository` and `defaults.projects.<KEY>.repository` (`cloneUrl`, `ref`); use `HEAD` as the ref unless every repository's default branch is known: a branch name that does not exist fails every task the rule submits |
 | `clock.schedules[]` | `name` (lowercase, digits, underscore: topics may not contain a hyphen), `cron` (5 fields), `timeZone` (default `Europe/Stockholm`), `jitterSeconds`, `missed` (`run-once`, `skip`, default: skip when it fires more than hourly, else run-once) |
 | `maxAttempts` | transient failures per item before it is dead-lettered (20; backoff 1 s doubling to 60 s) |
 

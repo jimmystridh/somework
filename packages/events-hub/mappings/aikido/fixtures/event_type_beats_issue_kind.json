@@ -1,0 +1,32 @@
+{
+  "description": "event_type says what happened even when type names the kind of issue",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": {
+      "type": "open_source",
+      "event_type": "issue.reopened",
+      "id": 8
+    },
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.issue.reopened",
+      "key": "aikido:8:reopened",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": [
+          "type",
+          "issueId"
+        ],
+        "type": "open_source",
+        "issueId": "8"
+      },
+      "classification": "internal"
+    }
+  ]
+}

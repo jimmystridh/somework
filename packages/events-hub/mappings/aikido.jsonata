@@ -1,11 +1,13 @@
 /* Aikido Security webhook -> events. FIRST CUT: Aikido's payload shape is not known to us, so this mapping is deliberately defensive and
    never fails or drops. Whatever arrives becomes an event, so the first real delivery is visible:
-     - topic aikido.issue.<change> when a field named type / event / event_type / action / kind holds a short value with a plain alphabet
+     - topic aikido.issue.<change> when a field named event_type / event / action / kind (or type, unless it names one of Aikido's issue
+       kinds such as open_source: that says what the issue is, not what happened to it) holds a short value with a plain alphabet
        (letters, digits, _ . : -), lower-cased, other characters turned into _ ; otherwise aikido.event.received.
      - data carries only allow-listed scalar fields, looked up case-insensitively at the top level and one level down (issue, data,
        payload, event): type, severity, title (title / name / summary, 200 characters), issueId, repository, url (https only), plus
        `fields`, the names of the allow-listed fields that were found, and receivedAt. Nothing else is carried.
-     - key = aikido:<id>:<change> when the payload has an id (id / event_id / issue_id / uuid), otherwise a hash of the payload. A payload
+     - key = aikido:<id>:<change> when the payload has an id (id / event_id / issue_id / uuid) and a change, aikido:<id>:<hash of the
+       payload> when it has an id only (a changed payload of the same issue is a new event), otherwise a hash of the payload. A payload
        with none of the allow-listed fields hashes together with receivedAt, so each unrecognised delivery is shown once.
    Refine this file when a real payload exists: see the README of this package ("Refining a mapping"). */
 (
@@ -15,9 +17,13 @@
   $scalar := function($v) { $type($v) = "string" or $type($v) = "number" ? $string($v) };
   $get := function($names) { ($names.$scalar($lookup($all, $)))[$length($) > 0][0] };
 
+  $issueKinds := ["open_source", "sast", "iac", "cloud", "container", "leaked_secret", "surface_monitoring", "malware", "license", "eol", "mobile", "dast", "pentest"];
   $typeRaw := $get(["type", "event", "event_type", "action", "kind"]);
   $typeOk := $typeRaw and $typeRaw ~> $match(/^[A-Za-z0-9_.:-]{1,40}$/);
-  $change := $typeOk ? $replace($replace($lowercase($typeRaw), /[.:-]+/, "_"), /^issue_/, "");
+  $isKind := $typeOk and $lowercase($typeRaw) in $issueKinds;
+  $changeRaw := $get(["event_type", "event", "action", "kind"]) ? $get(["event_type", "event", "action", "kind"]) : $isKind ? undefined : $typeRaw;
+  $changeFound := $changeRaw and $changeRaw ~> $match(/^[A-Za-z0-9_.:-]{1,40}$/);
+  $change := $changeFound ? $replace($replace($lowercase($changeRaw), /[.:-]+/, "_"), /^issue_/, "");
   $changeOk := $change and $change ~> $match(/^[a-z0-9_]{1,40}$/);
 
   $severity := $clip($get(["severity", "severity_level", "priority"]), 20);
@@ -31,7 +37,7 @@
 
   $fields := $append([], [$typeOk ? "type", $severity ? "severity", $title ? "title", $issueId ? "issueId", $repository ? "repository", $url ? "url"]);
   $id := $get(["id", "event_id", "issue_id", "uuid"]);
-  $key := $id ? $clip("aikido:" & $id & ":" & ($changeOk ? $change : "event"), 200)
+  $key := $id ? $clip("aikido:" & $id & ":" & ($changeOk ? $change : $digest(body)), 200)
     : "aikido:h:" & $digest(body, $count($fields) = 0 ? receivedAt);
 
   {

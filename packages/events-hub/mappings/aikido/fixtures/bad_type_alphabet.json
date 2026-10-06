@@ -15,7 +15,7 @@
   "expected": [
     {
       "topic": "aikido.event.received",
-      "key": "aikido:7:event",
+      "key": "aikido:7:134ca6b4b80211c3dc955e7f73ac5496",
       "data": {
         "receivedAt": "2026-10-06T08:00:00.000Z",
         "fields": [

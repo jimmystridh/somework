@@ -12,6 +12,7 @@ reaction:
     version: 1
   input:
     ticket: ${/data/issue/key}
+    app: local
     repository:
       url: ${/data/repository/cloneUrl}
       ref: ${/data/repository/ref}

@@ -1,0 +1,34 @@
+{
+  "description": "type names the kind of issue (open_source), not what happened: the topic is the generic one and the key follows the payload, so a later payload for the same issue is a new event",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "invented-aikido-test"
+    },
+    "body": {
+      "type": "open_source",
+      "id": 7,
+      "severity": "high"
+    },
+    "receivedAt": "2026-10-06T08:00:00.000Z",
+    "source": "aikido"
+  },
+  "expected": [
+    {
+      "topic": "aikido.event.received",
+      "key": "aikido:7:1417e102f8fd09ee73d37fb819b7845f",
+      "data": {
+        "receivedAt": "2026-10-06T08:00:00.000Z",
+        "fields": [
+          "type",
+          "severity",
+          "issueId"
+        ],
+        "type": "open_source",
+        "severity": "high",
+        "issueId": "7"
+      },
+      "classification": "internal"
+    }
+  ]
+}
