@@ -166,21 +166,18 @@ describe("the deployment files", () => {
 	});
 });
 
-describe("the held rule", () => {
+describe("the rule", () => {
 	const root = new URL("../../../", import.meta.url).pathname;
 
-	it("is not in rules/ (the pipeline refuses a rule whose owner is not enrolled) and has the shape of an agent subscription", () => {
-		assert.throws(() => readFileSync(join(root, "rules/datadog-triage.yaml")), /ENOENT/);
-		const rule = read("deploy/rules/datadog-triage.yaml");
+	it("lives in rules/ (the agent is enrolled) and has the shape of an agent subscription", () => {
+		const rule = readFileSync(join(root, "rules/datadog-triage.yaml"), "utf8");
 		for (const line of ["name: datadog-triage", "owner: agent/datadog-triage", "selector: datadog.monitor.*", "wake: true"]) assert.ok(rule.split("\n").includes(line), line);
 		assert.doesNotMatch(rule, /reaction:/);
 	});
 
-	it("passes the rules validator with --strict against the cards, once it sits next to the schema", () => {
-		const dir = mkdtempSync(join(tmpdir(), "dd-rule-"));
-		copyFileSync(join(root, "rules/schema.json"), join(dir, "schema.json"));
-		copyFileSync(new URL("deploy/rules/datadog-triage.yaml", here), join(dir, "datadog-triage.yaml"));
-		const out = execFileSync("node", [join(root, "packages/rules-cli/src/main.ts"), "validate", "--dir", dir, "--card", join(root, "adapters"), "--strict"], { encoding: "utf8" });
-		assert.match(out, /1 rule file\(s\) valid/);
+	it("passes the rules validator with --strict against the cards", () => {
+		const out = execFileSync("node", [join(root, "packages/rules-cli/src/main.ts"), "validate", "--dir", join(root, "rules"), "--card", join(root, "adapters"), "--strict"], { encoding: "utf8" });
+		assert.match(out, /rule file\(s\) valid/);
 	});
 });
+

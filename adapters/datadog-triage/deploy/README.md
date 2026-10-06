@@ -21,14 +21,10 @@ ops admin --config /etc/somework/somework.toml register-card --card /cards/datad
 ```
 `--side-effects read` because the capability changes nothing. **`--may-invoke 'ops.triage'` is deliberate**: the shipped handler submits the triage task to this same agent, and an agent may only submit what it is allowed to invoke. Nothing else may invoke it unless its own enrolment says so (the manager needs `--may-invoke 'ops.triage'` to start a triage by hand; `examples/request.ts` needs the same for its requester key).
 
-**Then reload the NATS broker by hand.** Right after `enroll-agent`, send `SIGHUP` to the broker process (`docker kill -s HUP somework-domain-nats-1` on the domain host). Its reloader prints "reloaded" but does not load the new user; without this the agent polls over HTTP only. Check `GET /v1/connection` as the agent first.
+**The NATS broker reloads itself** (a watcher inside the broker's container, see the root deploy README). On a deployment from before 2026-10-06 that still has the separate `nats-reloader` container, send `SIGHUP` by hand: Right after `enroll-agent`, send `SIGHUP` to the broker process (`docker kill -s HUP somework-domain-nats-1` on the domain host). Its reloader prints "reloaded" but does not load the new user; without this the agent polls over HTTP only. Check `GET /v1/connection` as the agent first.
 
 ## 2. The rule (so events reach the agent)
-`deploy/rules/datadog-triage.yaml` is an agent subscription: owner `agent/datadog-triage`, selector `datadog.monitor.*`, wake. **It is not in `rules/` on purpose**: the rules pipeline refuses a rule whose owner is not enrolled, so a file in `rules/` would break the pipeline for every other rule until the agent exists. Once step 1 is done, copy it into `rules/` and merge it; the pipeline runs `somework-rules apply` (or run `somework-rules apply` yourself):
-```bash
-cp adapters/datadog-triage/deploy/rules/datadog-triage.yaml rules/datadog-triage.yaml
-```
-`profile.test.ts` validates the held file against the cards with `--strict`, so it is ready to move. The existing rule `alert-datadog-to-manager` stays: the manager still hears about each alert. Without the rule the agent still takes tasks submitted by hand. To take it out again, delete `rules/datadog-triage.yaml` (the pipeline's `apply` deletes the rule).
+`rules/datadog-triage.yaml` is an agent subscription: owner `agent/datadog-triage`, selector `datadog.monitor.*`, wake. The rules pipeline refuses a rule whose owner is not enrolled, so the file only goes into `rules/` after step 1 (on the pilot it was added on 2026-10-06, after the enrolment). `profile.test.ts` validates it against the cards with `--strict`. The existing rule `alert-datadog-to-manager` stays: the manager still hears about each alert.
 
 **Events flow as soon as the rule is applied**, and every eligible alert then costs model tokens (150 000 at most per triage, `DD_DAILY_CAP` triages a day). Start the agent before applying the rule if you want a quiet window, or pause the rule with the manager's `/pause datadog-triage`.
 
