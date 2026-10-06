@@ -76,6 +76,8 @@ from the commit; read-only roles (`git.push: false`) get it checked out detached
 `repository.ref: "HEAD"` means the remote's default branch at the moment the task runs (the base of the pull request is that branch's name). The pull request targets `repository.baseRef` when given, else the ref when it is a branch, else the remote's default branch (a card that
 wants `baseRef` must declare it in its input schema).
 
+A role that works on **no repository** (the Datadog triage agent reads another system through its tools) sets `noRepository: true` in its profile (it needs `git.push: false`). The job then needs no `repository`, nothing is cloned, the model gets an empty scratch directory as its workspace, and `baseSha`, `baseBranch` and the branch in the hooks' context are empty strings. Every other role still needs `repository {url, ref}`.
+
 **The task branch on the remote is never rewritten.** `finalizeWorkspace` asks the remote (`ls-remote`) before it pushes: a branch the remote does not have is created; one that already
 holds the same commit or the **same tree** under another commit id (a rerun of the same change) is reused as it is, nothing is pushed and the commits reported are the remote's;
 one whose tip the local work builds on gets a plain fast-forward; anything else is different work under the same name, so the work goes to `<branch>-2`, `-3` ... up to `-5`

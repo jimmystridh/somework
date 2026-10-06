@@ -1,0 +1,21 @@
+{
+  "name": "@somework/datadog-triage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Datadog triage role: investigates a Datadog monitor alert through read-only Datadog tools and a sandbox for analysis code, and reports a structured diagnosis (ops.triage). A card, a profile, a seeded event handler and six read-only Datadog tools on top of @somework/agent-kit.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.3",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-durable": "1.0.3",
+    "@somework/agent-kit": "0.1.0",
+    "@somework/sdk": "0.1.0"
+  }
+}

@@ -1,0 +1,142 @@
+# The Datadog triage agent on the agent Docker host: the harness and a sandbox, isolated from each other, in their own compose project.
+# - `sandbox-net` is internal and the sandbox is on it ALONE: there is no egress proxy and no route out at all. The sandbox is where the model
+#   runs python3, jq and the other analysis commands over results the harness saved for it; it has no credentials and no network. The kit
+#   runs nothing that needs one (this role works on no repository: no git, no clone, no package registry).
+# - The harness holds the credentials: its OWN SomeWork key, its OWN model login and the Datadog key file. It reaches the domain, the model
+#   API and api.datadoghq.eu over `outside`. The Datadog keys never leave the harness: the model reads Datadog through tools that run there.
+#   Restrict `outside` further on the host if you can: the agent needs exactly the domain, the model API host and api.<DD_SITE>.
+# - The sandbox image is built from this role's Dockerfile (`--target sandbox`): the developer role's sandbox plus python3. The harness
+#   image is this role's too. No other role's image is changed.
+name: somework-datadog-triage
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  privileged: false
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+networks:
+  sandbox-net:
+    internal: true
+  outside: {}
+
+services:
+  agent:
+    <<: *hardened
+    image: somework-datadog-triage:${DATADOG_VERSION:?set DATADOG_VERSION to the built image tag}
+    user: "10001:10001"
+    group_add: ["10010"]          # reads the shared sandbox token
+    networks: [sandbox-net, outside]
+    environment:
+      SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
+      SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
+      SOMEWORK_CA_FILE: /run/somework/ca.pem
+      SOMEWORK_REQUIRE_TLS: "1"
+      SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
+      PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
+      PI_MODEL: ${PI_MODEL:-gpt-5.5}
+      PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
+      PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}
+      PI_AUTH_FILE: /run/secrets/pi/auth.json
+      PI_STATE_DIR: /state
+      PI_CONCURRENCY: "1"                                    # one triage at a time: the role refuses to start otherwise
+      SANDBOX_URL: http://sandbox:7070
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_WORKSPACES: /workspace
+      DD_SITE: ${DD_SITE:-datadoghq.eu}                      # the API host is api.<DD_SITE> and nothing else
+      DD_CREDENTIALS_FILE: /run/secrets/datadog-keys.json    # {"apiKey": "...", "appKey": "..."}; the application key needs READ scopes only (README)
+      DD_MIN_PRIORITY: ${DD_MIN_PRIORITY:-P3}                # alerts of a lower priority are not triaged; an alert without a priority passes
+      DD_MONITOR_IDS: ${DD_MONITOR_IDS:-}                    # comma separated monitor ids; empty = every monitor
+      DD_TAG_FILTER: ${DD_TAG_FILTER:-}                      # comma separated tags (key:value); empty = no filter, else a monitor needs one of them
+      DD_IGNORE_WARN: ${DD_IGNORE_WARN:-0}                   # 1 = triage the Alert transition only, not Warn
+      DD_COOLDOWN_MINUTES: ${DD_COOLDOWN_MINUTES:-60}        # one triage per monitor per this many minutes
+      DD_DAILY_CAP: ${DD_DAILY_CAP:-20}                      # triages per day, all monitors
+      DD_WINDOW_MINUTES: ${DD_WINDOW_MINUTES:-60}            # how far back from the alert a triage looks (5 to 360)
+      DD_TRIAGE_BUDGET_TOKENS: ${DD_TRIAGE_BUDGET_TOKENS:-150000}   # of an event-driven triage; at most 300000
+      DD_TRIAGE_BUDGET_MINUTES: ${DD_TRIAGE_BUDGET_MINUTES:-10}     # at most 20
+      DD_SAVE_FILE_BYTES: ${DD_SAVE_FILE_BYTES:-5242880}     # largest file a save=true call writes (at most 5 MB)
+      DD_SAVE_TASK_BYTES: ${DD_SAVE_TASK_BYTES:-20971520}    # most all saved files of one triage may add up to (at most 20 MB)
+      DD_RESEED_HANDLER: ${DD_RESEED_HANDLER:-0}             # 1 = write the shipped handler again, with these settings, as a new version
+      BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-300000}
+      BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-20}
+      DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-2000000}
+      EVENTS_ENABLED: "1"                                    # the shipped handler is how monitor events become triage tasks (docs/EVENTS.md)
+      EVENTS_NOTIFY_TO: ${EVENTS_NOTIFY_TO:-agent/manager}   # who gets the one notice per finished triage
+      EVENTS_CONTROLLERS: ${EVENTS_CONTROLLERS:-agent/manager}
+      EVENTS_TOKEN_SHARE: ${EVENTS_TOKEN_SHARE:-0.3}
+      EVENTS_THROTTLE_AT: ${EVENTS_THROTTLE_AT:-0.8}
+      EVENTS_MAX_FAILURES: ${EVENTS_MAX_FAILURES:-5}
+      EVENTS_MAX_WAKES_PER_HOUR: ${EVENTS_MAX_WAKES_PER_HOUR:-20}
+      CHAT_MODE: ${CHAT_MODE:-model}                         # model = chat is answered by the model (questions: Datadog tools only; instructions run a triage); notice = the fixed notice only
+      CHAT_ALLOWED_SENDERS: ${CHAT_ALLOWED_SENDERS:-}        # who may ask: ids or kind:<kind>; empty = agent/manager and every human
+      CHAT_INSTRUCTORS: ${CHAT_INSTRUCTORS:-}                # who may instruct (messages starting with instruct:); empty = agent/manager
+      CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.1}             # share of DAILY_TOKEN_LIMIT that chat may use; the model is not called when it is used up
+      CHAT_TOKEN_CAP: ${CHAT_TOKEN_CAP:-40000}               # tokens of one answer to a question
+      CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-150000}  # tokens of one instruction
+      CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-10}
+      HEALTH_PORT: "8081"
+    volumes:
+      - ${DATADOG_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
+      - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ./secrets/pi:/run/secrets/pi                         # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - ./secrets/datadog-keys.json:/run/secrets/datadog-keys.json:ro   # 0600, uid 10001; {"apiKey": "...", "appKey": "..."}
+      - state:/state
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    ports: ["${HEALTH_BIND:-127.0.0.1}:8084:8081"]      # health, handlers and token pools (8081 developer, 8082 reviewer, 8083 Aikido fixer, on the same host)
+    depends_on:
+      sandbox: {condition: service_healthy}
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  # Where the model's bash, python3 and jq run. On the internal network only: no proxy variables, no egress service, no credentials.
+  sandbox:
+    <<: *hardened
+    image: somework-datadog-triage-sandbox:${DATADOG_VERSION:?set DATADOG_VERSION to the built image tag}
+    user: "10002:10002"
+    group_add: ["10010"]
+    networks: [sandbox-net]
+    environment:
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_ROOT: /workspace
+      SANDBOX_PORT: "7070"
+    volumes:
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - workspace:/workspace
+    tmpfs: ["/tmp:size=512m,nosuid"]
+    mem_limit: ${SANDBOX_MEMORY:-2g}
+    cpus: ${SANDBOX_CPUS:-2}
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7070/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # One-shot: named volumes start root-owned but each service runs as its own uid.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    image: somework-datadog-triage:${DATADOG_VERSION:?set DATADOG_VERSION}
+    profiles: ["init"]
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 10001:10001 /state && chown 10002:10002 /workspace"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - state:/state
+      - workspace:/workspace
+
+volumes:
+  state:
+  workspace:
