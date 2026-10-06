@@ -18,6 +18,13 @@ export interface AgentRequest {
 	budget: Budget;
 	/** Model for a new conversation; the runtime default when absent. A conversation keeps the model it started with. */
 	model?: ModelRef;
+	/**
+	 * The tools this conversation is offered, by name, instead of the runtime's list: a call to any other tool is blocked. Fixed when the
+	 * conversation is created. It can only narrow what the runtime has registered; an unknown name fails the request.
+	 */
+	tools?: readonly string[];
+	/** Standing orders of this conversation instead of the runtime's. Fixed when the conversation is created. */
+	instructions?: string;
 }
 
 export interface Usage {

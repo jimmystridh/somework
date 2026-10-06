@@ -165,3 +165,19 @@ describe("mirror settings", () => {
 		assert.throws(() => loadConfig({ ...base, GIT_MIRROR_DIR: "/m", GIT_MIRROR_REFRESH_MINUTES: "0" }), /GIT_MIRROR_REFRESH_MINUTES/);
 	});
 });
+
+describe("GITHUB_API", () => {
+	const base = { SOMEWORK_URL: "https://x", SOMEWORK_KEY_FILE: "/k", SANDBOX_URL: "http://s" };
+	it("treats an empty value (a compose default) as unset", () => {
+		assert.equal(loadConfig({ ...base, GITHUB_API: "" }).git.githubApi, undefined);
+		assert.equal(loadConfig({ ...base, GITHUB_API: "https://ghe.example/api/v3" }).git.githubApi, "https://ghe.example/api/v3");
+	});
+	it("falls back to api.github.com when the host client gets an empty base", async () => {
+		const { GitHubHost } = await import("../src/githost.ts");
+		const seen: string[] = [];
+		const host = new GitHubHost({ token: "t", apiBase: "", fetch: (async (url: string) => { seen.push(url); return new Response("[]", { status: 200 }); }) as typeof fetch });
+		await host.findPullRequest({ repoUrl: "https://github.com/o/r.git", head: "agent/x" });
+		assert.equal(seen.length, 1);
+		assert.ok(seen[0].startsWith("https://api.github.com/repos/o/r/pulls"), seen[0]);
+	});
+});

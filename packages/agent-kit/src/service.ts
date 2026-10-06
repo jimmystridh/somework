@@ -2,16 +2,21 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createModels, type Models } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { Identity, SomeWorkClient, Worker } from "@somework/sdk";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { Identity, SomeWorkClient, Worker, type Handler } from "@somework/sdk";
 import { runChatResponder } from "./chat.ts";
+import { ChatArtifacts } from "./chat-artifacts.ts";
+import { askToolNames, buildState, ChatApprovals, createStatusTool, instructToolNames, KIT_CHAT_RULES, ModelChatResponder, resolveChatMode, resolveChatModel } from "./chat-model.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { createEventsComponent } from "./events/component.ts";
 import { resolveEvents } from "./events/config.ts";
-import { startMirrorRefresh, type GitSession } from "./git.ts";
+import { JobGate } from "./gate.ts";
+import { prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
-import { createHandler } from "./handler.ts";
+import { createHandler, type HandlerDeps } from "./handler.ts";
 import { createHealthServer } from "./health.ts";
+import { JobJournal } from "./journal.ts";
 import { DailyLedger } from "./ledger.ts";
 import { jsonLogger } from "./log.ts";
 import { Metrics } from "./metrics.ts";
@@ -22,6 +27,7 @@ import { scriptedModels } from "./providers/faux.ts";
 import { registerProviders } from "./providers/index.ts";
 import { RemoteExecutionEnv } from "./sandbox/remote-env.ts";
 import { skillsExtension } from "./skills.ts";
+import { createObserve } from "./observe/index.ts";
 
 const read = (path: string): string => readFileSync(path, "utf8").trim();
 
@@ -69,12 +75,23 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const client = new SomeWorkClient({ baseUrl: config.somework.url, identity, caFile: config.somework.caFile, requireTls: config.somework.requireTls });
 
 			const gitToken = config.git.tokenFile ? read(config.git.tokenFile) : undefined;
-			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client, gitToken }) : (options.hooks ?? {});
+			const chatSettings = resolveChatMode(profile.chat, env) === "model" ? resolveChatModel(profile.chat, env) : undefined;
+			// the client the role's code and the task handler use: an instruction given in chat is a job the domain has no task for, so its uploads are kept on this host instead
+			const chatArtifacts = chatSettings ? new ChatArtifacts({ dir: join(config.state.dir, "chat-artifacts"), log }) : undefined;
+			const taskClient = chatArtifacts ? chatArtifacts.wrap(client) : client;
+			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
 			const eventsConfig = resolveEvents(profile.events, env);
-			const ledger = new DailyLedger(join(config.state.dir, "ledger.json"), config.limits.dailyTokenLimit, undefined, eventsConfig.enabled ? { share: eventsConfig.tokenShare, weeklyTokens: eventsConfig.weeklyTokens, throttleAt: eventsConfig.throttleAt } : undefined);
+			const ledger = new DailyLedger(
+				join(config.state.dir, "ledger.json"),
+				config.limits.dailyTokenLimit,
+				undefined,
+				eventsConfig.enabled ? { share: eventsConfig.tokenShare, weeklyTokens: eventsConfig.weeklyTokens, throttleAt: eventsConfig.throttleAt } : undefined,
+				chatSettings ? { share: chatSettings.share, throttleAt: chatSettings.throttleAt } : undefined,
+			);
+			const journal = new JobJournal(join(config.state.dir, "jobs.json"));
 			// the event component needs the runtime for woken runs and the runtime needs the component's tools: the runtime is looked up late
 			let runtimeRef: PiDurableRuntime | undefined;
 			const events = eventsConfig.enabled
@@ -92,7 +109,20 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					})
 				: undefined;
 			const skillAllow = config.skills.allow ?? profile.skills.allow;
-			const extensions = [...(hooks.extensions ?? []), ...(events ? [events.extension] : []), ...(skillAllow.length > 0 ? [skillsExtension({ allow: skillAllow, overlayDir: config.skills.overlayDir ?? profile.skills.overlayDir, log })] : [])];
+			const chatState = (): Promise<string> =>
+				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
+			const chatTools = chatSettings ? createStatusTool(chatState) : undefined;
+			const observe = createObserve({ profile: profile.observe, env, log, metrics });
+			const extensions = [
+				...(hooks.extensions ?? []),
+				...(events ? [events.extension] : []),
+				...(chatTools ? [chatTools.extension] : []),
+				...(observe ? [observe.extension] : []),
+				...(chatSettings && hooks.chat?.extension ? [hooks.chat.extension] : []),
+				...(skillAllow.length > 0 ? [skillsExtension({ allow: skillAllow, overlayDir: config.skills.overlayDir ?? profile.skills.overlayDir, log })] : []),
+			];
+			// the chat's own tools are registered with the runtime but offered only to chat sessions: a role that lists no tools gets the coding tools spelled out
+			const normalTools = profile.allowedTools ? [...profile.allowedTools, ...(events?.toolNames ?? []), ...(observe?.toolNames ?? [])] : chatTools ? ["read", "write", "edit", "bash", ...(events?.toolNames ?? []), ...(observe?.toolNames ?? [])] : undefined;
 			const runtime = new PiDurableRuntime({
 				storagePath: join(config.state.dir, "pi.sqlite"),
 				models,
@@ -100,7 +130,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				env: envFor,
 				policy: approvalPolicy(config.approvalPatterns, profile.approvalPatterns, profile.toolApprovals),
 				instructions: profile.systemPrompt,
-				allowedTools: profile.allowedTools && events ? [...profile.allowedTools, ...events.toolNames] : profile.allowedTools,
+				allowedTools: normalTools,
 				extensions,
 				log,
 				metrics,
@@ -115,27 +145,71 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				identity: { name: config.git.authorName, email: config.git.authorEmail },
 				...(config.git.mirror ? { mirrorDir: config.git.mirror.dir } : {}),
 			};
-			const handler = createHandler({
-				runtime: hooks.wrapRuntime ? hooks.wrapRuntime(runtime) : runtime,
+			const taskRuntime = hooks.wrapRuntime ? hooks.wrapRuntime(runtime) : runtime;
+			const baseDeps: HandlerDeps = {
+				runtime: taskRuntime,
 				envFor,
 				session,
 				host: gitToken ? new GitHubHost({ token: gitToken, apiBase: config.git.githubApi, draft: config.git.draftPullRequests }) : noPullRequests,
 				workspaceRoot: config.sandbox.workspaceRoot,
-				client,
+				client: taskClient,
 				limits: config.limits,
 				allowedModels: config.allowedModels,
-				ledger,
-				shards: config.shards ? { table: config.shards, agentId: identity.agentId } : undefined,
 				metrics,
 				log,
 				profile,
 				hooks,
-			});
+				journal,
+			};
+			const taskHandler = createHandler({ ...baseDeps, ledger, shards: config.shards ? { table: config.shards, agentId: identity.agentId } : undefined });
+			// requester tasks and chat instructions share the job slots: tasks first, nothing preempted
+			const gate = new JobGate(config.concurrency);
+			const handler: Handler = (job, control) => gate.run("task", () => taskHandler(job, control), control.signal);
+			const root = config.sandbox.workspaceRoot.replace(/\/$/, "");
+			let chatResponder: ModelChatResponder | undefined;
+			if (chatSettings) {
+				const known = new Set(runtime.knownTools());
+				// the observe tools only read (logs and alert states, in the role's own scope) and are allowed in both chat tiers
+				const ask = [...new Set([...askToolNames(profile.chat, hooks.chat), ...(observe?.toolNames ?? [])])];
+				const instruct = [...new Set([...instructToolNames(profile.chat, profile.allowedTools), ...(observe?.toolNames ?? [])])];
+				for (const name of [...ask, ...instruct]) if (!known.has(name)) throw new Error(`chat: the tool ${name} does not exist (known: ${[...known].join(", ")})`);
+				const instructHandler = hooks.chat?.instructInput
+					? createHandler({ ...baseDeps, source: "chat", requestTools: instruct, ledger: { remaining: () => ledger.chatRemaining(), record: (tokens) => ledger.record(tokens, "chat") } })
+					: undefined;
+				const approvals = new ChatApprovals({ client, log, timeoutMinutes: chatSettings.approvalMinutes });
+				const askWorkspace = async (): Promise<string> => {
+					const fallback = `${root}/.chat`;
+					await envFor(root).createDir(fallback, { recursive: true }, BACKGROUND_CONTEXT);
+					const target = hooks.chat?.checkout?.();
+					if (!target) return fallback;
+					const checkout = `${fallback}/checkout`;
+					await prepareWorkspace(session, { repoUrl: target.repoUrl, ref: target.ref ?? "HEAD", taskId: "chat", workspace: checkout, detach: true });
+					return checkout;
+				};
+				chatResponder = new ModelChatResponder({
+					client,
+					agentId: identity.agentId,
+					role: profile.id,
+					settings: chatSettings,
+					ledger,
+					ask: {
+						runtime,
+						tools: ask,
+						instructions: [hooks.chat?.instructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}.`, KIT_CHAT_RULES].join("\n\n"),
+						state: chatState,
+						checkout: askWorkspace,
+						fallbackWorkspace: `${root}/.chat`,
+					},
+					...(instructHandler && hooks.chat?.instructInput ? { instruct: { handler: instructHandler, input: hooks.chat.instructInput, describe: hooks.chat.describeResult, gate, approvals, ...(chatArtifacts ? { artifacts: chatArtifacts } : {}) } } : {}),
+					log,
+					metrics,
+				});
+			}
 
 			const health = createHealthServer({
 				runtime,
 				metrics,
-				status: () => (events ? events.status() : { handlers: [], tokenPools: ledger.usage() }),
+				status: () => ({ ...(events ? events.status() : { handlers: [], tokenPools: ledger.usage() }), ...(chatResponder ? { chat: { mode: "model", askers: chatSettings!.askers, instructors: chatSettings!.instructors } } : {}), ...(observe ? { observe: observe.status() } : {}) }),
 				checks: { ...(hooks.envFactory ? {} : { sandbox: async () => (await fetch(`${config.sandbox.url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok }), ...hooks.readinessChecks },
 			});
 			health.listen(config.healthPort, hooks.healthBind ?? "0.0.0.0");
@@ -147,12 +221,12 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) process.once(signal, () => stop.abort());
 			const worker = new Worker(client, { handler, concurrency: config.concurrency, leaseSeconds: config.leaseSeconds, shutdownGraceMs: 20_000, logger: (level, message, fields) => log(level, message, fields) });
 			const chat = env.CHAT_AUTOREPLY === "0" ? false : profile.chat?.autoReply !== false;
-			if (chat || events) {
-				// a courtesy notice for chat messages (and the kill switch for event handlers); it can never fail or delay the claim loop below
-				void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: chat ? profile.chat : { ...profile.chat, autoReply: false }, ...(events ? { intercept: events.intercept } : {}) });
+			if (chat || events || chatResponder) {
+				// answers to chat messages (and the kill switch for event handlers); it can never fail or delay the claim loop below
+				void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: chat ? profile.chat : { ...profile.chat, autoReply: false }, ...(events ? { intercept: events.intercept } : {}), ...(chatResponder ? { model: chatResponder } : {}) });
 			}
 			if (events) void events.run(stop.signal).catch((error) => log("error", "events_stopped", { error: error instanceof Error ? error.message : String(error) }));
-			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, chat, events: eventsConfig.enabled });
+			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, chat, chatMode: chatSettings ? "model" : "notice", events: eventsConfig.enabled });
 			await worker.run(stop.signal);
 			health.close();
 			await runtime.close();

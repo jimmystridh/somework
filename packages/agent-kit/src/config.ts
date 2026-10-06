@@ -55,7 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		model,
 		allowedModels: allowlist(model, parseModelList(env.PI_ALLOWED_MODELS)),
 		sandbox: { url: required(env, "SANDBOX_URL"), tokenFile: env.SANDBOX_TOKEN_FILE ?? "/run/secrets/sandbox-token", workspaceRoot: env.SANDBOX_WORKSPACES ?? "/workspace", caFile: env.SANDBOX_CA_FILE },
-		git: { tokenFile: env.GIT_TOKEN_FILE, tokenHosts: (env.GIT_TOKEN_HOSTS ?? "github.com").split(/[\s,]+/).filter(Boolean), authorName: env.GIT_AUTHOR_NAME ?? "SomeWork Pi", authorEmail: env.GIT_AUTHOR_EMAIL ?? "pi@somework.invalid", githubApi: env.GITHUB_API, draftPullRequests: env.GIT_PR_DRAFT === "1", mirror: mirrorFrom(env) },
+		git: { tokenFile: env.GIT_TOKEN_FILE, tokenHosts: (env.GIT_TOKEN_HOSTS ?? "github.com").split(/[\s,]+/).filter(Boolean), authorName: env.GIT_AUTHOR_NAME ?? "SomeWork Pi", authorEmail: env.GIT_AUTHOR_EMAIL ?? "pi@somework.invalid", githubApi: env.GITHUB_API || undefined, draftPullRequests: env.GIT_PR_DRAFT === "1", mirror: mirrorFrom(env) },
 		limits: { maxTokensCap: integer(env, "BUDGET_MAX_TOKENS_CAP", 2_000_000), maxMinutesCap: integer(env, "BUDGET_MAX_MINUTES_CAP", 60), dailyTokenLimit: integer(env, "DAILY_TOKEN_LIMIT", 10_000_000) },
 		shards,
 		healthPort: integer(env, "HEALTH_PORT", 8081),

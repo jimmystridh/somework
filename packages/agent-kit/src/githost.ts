@@ -33,7 +33,7 @@ export class GitHubHost implements GitHost {
 	constructor(options: { token: string; apiBase?: string; draft?: boolean; fetch?: typeof fetch }) {
 		this.#token = options.token;
 		this.#draft = options.draft ?? false;
-		this.#apiBase = (options.apiBase ?? "https://api.github.com").replace(/\/$/, "");
+		this.#apiBase = (options.apiBase || "https://api.github.com").replace(/\/$/, "");
 		this.#fetch = options.fetch ?? fetch;
 	}
 

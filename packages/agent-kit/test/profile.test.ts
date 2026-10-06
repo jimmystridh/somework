@@ -36,6 +36,12 @@ describe("validateProfile", () => {
 		assert.throws(() => validateProfile(base({ git: { push: false, pullRequest: true, branchPrefix: "agent" } })), /needs the branch to be pushed/);
 		assert.throws(() => validateProfile(base({ defaultBudget: { maxTokens: 0, maxMinutes: 1 } })), /defaultBudget/);
 	});
+
+	it("lets a role without a repository exist only when it pushes nothing", () => {
+		const readOnly = { push: false, pullRequest: false, branchPrefix: "agent" };
+		assert.equal(validateProfile(base({ noRepository: true, git: readOnly })).noRepository, true);
+		assert.throws(() => validateProfile(base({ noRepository: true })), /nothing to push/);
+	});
 });
 
 describe("the handler under a profile", () => {
@@ -105,6 +111,22 @@ describe("the handler under a profile", () => {
 		assert.deepEqual(Object.keys(outcome.result).sort(), ["status", "summary", "usage"]);
 		assert.doesNotMatch(branches(), /task_1/);
 		assert.deepEqual([host.created.length, uploads.length], [0, 0]);
+	});
+
+	it("runs a role without a repository in an empty scratch directory, with no clone and no repository in the job", async () => {
+		const { run, requests, branches, host } = harness(base({ noRepository: true, git: { push: false, pullRequest: false, branchPrefix: "agent" } }), { instruction: (input) => `look at ${input.monitor}` });
+		const outcome = await run({ ...budget, repository: undefined, monitor: 7 });
+		assert.equal(outcome.type, "completed");
+		assert.equal(requests[0]!.instruction, "look at 7");
+		assert.ok(existsSync(requests[0]!.workspace), "the scratch directory exists");
+		assert.equal(existsSync(join(requests[0]!.workspace, ".git")), false);
+		assert.doesNotMatch(branches(), /task_1/);
+		assert.equal(host.created.length, 0);
+	});
+
+	it("keeps requiring a repository for every other role", async () => {
+		const { run } = harness(base({ git: { push: false, pullRequest: false, branchPrefix: "agent" } }));
+		assert.equal((await run({ ...budget, repository: undefined })).failure.code, "invalid_input");
 	});
 
 	it("requires a budget unless the profile supplies one, and clamps whatever is used to the service caps", async () => {

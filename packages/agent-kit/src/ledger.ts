@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-export type Pool = "tasks" | "events";
+export type Pool = "tasks" | "events" | "chat";
 export type PoolState = "ok" | "throttled" | "stopped";
 
 export interface EventPoolOptions {
@@ -13,15 +13,25 @@ export interface EventPoolOptions {
 	throttleAt?: number;
 }
 
+export interface ChatPoolOptions {
+	/** Share of the daily limit that model-answered chat may use. */
+	share: number;
+	/** Fraction of the chat pool at which chat is throttled. */
+	throttleAt?: number;
+}
+
 export interface PoolUsage {
 	tasks: { used: number; limit: number };
 	events: { used: number; limit: number; weeklyUsed?: number; weeklyLimit?: number; throttled: boolean; stopped: boolean };
+	/** Present only when the role answers chat with a model. */
+	chat?: { used: number; limit: number; throttled: boolean; stopped: boolean };
 }
 
 interface LedgerState {
 	date: string;
 	tokens: number;
 	events?: number;
+	chat?: number;
 	week?: string;
 	weekEvents?: number;
 	notices?: string[];
@@ -36,20 +46,22 @@ export const isoWeek = (date: string): string => {
 
 /**
  * Daily token spend, persisted so a restart does not reset the cap. Two pools share the daily limit: `tasks` (what requesters submit) and
- * `events` (runs started by events, capped at a share of the limit). Event spend never exceeds its share, so it can never take more than
- * that share away from tasks. Without event pool options the ledger behaves exactly as the plain daily ledger.
+ * `events` (runs started by events, capped at a share of the limit); a role that answers chat with a model has a third, `chat`, with its own
+ * share. A pool's spend never exceeds its share, so none of them can take more than that share away from tasks. Without event pool options the ledger behaves exactly as the plain daily ledger.
  */
 export class DailyLedger {
 	readonly #path: string;
 	readonly #limit: number;
 	readonly #today: () => string;
 	readonly #events: EventPoolOptions | undefined;
+	readonly #chat: ChatPoolOptions | undefined;
 
-	constructor(path: string, dailyTokenLimit: number, today: () => string = () => new Date().toISOString().slice(0, 10), events?: EventPoolOptions) {
+	constructor(path: string, dailyTokenLimit: number, today: () => string = () => new Date().toISOString().slice(0, 10), events?: EventPoolOptions, chat?: ChatPoolOptions) {
 		this.#path = path;
 		this.#limit = dailyTokenLimit;
 		this.#today = today;
 		this.#events = events && events.share > 0 ? events : undefined;
+		this.#chat = chat && chat.share > 0 ? chat : undefined;
 		mkdirSync(dirname(path), { recursive: true });
 	}
 
@@ -85,11 +97,30 @@ export class DailyLedger {
 		return this.#read().tokens;
 	}
 
-	/** What a requester task may still use today: event spend (up to its share) comes off the daily limit, so tasks keep at least the rest. */
+	get chatLimit(): number {
+		return this.#chat ? Math.floor(this.#limit * Math.min(this.#chat.share, 1)) : 0;
+	}
+
+	/** What a requester task may still use today: event and chat spend (each up to its share) comes off the daily limit, so tasks keep at least the rest. */
 	remaining(): number {
 		const state = this.#read();
 		const events = this.#events ? Math.min(state.events ?? 0, this.eventsLimit) : 0;
-		return Math.max(0, this.#limit - state.tokens - events);
+		const chat = this.#chat ? Math.min(state.chat ?? 0, this.chatLimit) : 0;
+		return Math.max(0, this.#limit - state.tokens - events - chat);
+	}
+
+	/** What chat answers may still use today. */
+	chatRemaining(): number {
+		if (!this.#chat) return 0;
+		return Math.max(0, this.chatLimit - (this.#read().chat ?? 0));
+	}
+
+	chatState(): PoolState {
+		if (!this.#chat) return "ok";
+		const used = this.#read().chat ?? 0;
+		if (used >= this.chatLimit) return "stopped";
+		if (used >= this.chatLimit * (this.#chat.throttleAt ?? 0.8)) return "throttled";
+		return "ok";
 	}
 
 	/** What event-driven runs may still use today (and this week, when a weekly cap is set). */
@@ -117,6 +148,8 @@ export class DailyLedger {
 		if (pool === "events") {
 			state.events = (state.events ?? 0) + amount;
 			state.weekEvents = (state.weekEvents ?? 0) + amount;
+		} else if (pool === "chat") {
+			state.chat = (state.chat ?? 0) + amount;
 		} else {
 			state.tokens += amount;
 		}
@@ -135,6 +168,7 @@ export class DailyLedger {
 	usage(): PoolUsage {
 		const state = this.#read();
 		const events = this.eventsState();
+		const chat = this.chatState();
 		return {
 			tasks: { used: state.tokens, limit: this.#limit },
 			events: {
@@ -144,6 +178,7 @@ export class DailyLedger {
 				throttled: events === "throttled",
 				stopped: events === "stopped",
 			},
+			...(this.#chat ? { chat: { used: state.chat ?? 0, limit: this.chatLimit, throttled: chat === "throttled", stopped: chat === "stopped" } } : {}),
 		};
 	}
 }

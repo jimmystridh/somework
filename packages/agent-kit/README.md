@@ -58,6 +58,7 @@ handler is the developer's: `input.instruction`, `{repository: {url, ref}, budge
 | `pullRequest(input, {taskId, instruction})` | title and body of the pull request (called after `beforeFinalize`); an optional `commitMessage` replaces the default `agent: <title>` (first line is the subject, the rest the body) |
 | `branchName({input, taskId, baseSha})` | the task branch instead of `<prefix>/<taskId>`, from the commit the work starts from. It must stay under `<prefix>/` or the job fails, and it must answer the same for a retry of the same job |
 | `result(base, ctx)` | reshape the result: return `{ result }` (replaces `base`; spread it to extend), `{ artifacts }` (added to the diff artifact), or `{ failure }` to fail the task. Runs for completed, no-changes and blocked runs |
+| `resume({...ctx, branch, sha})` | a retry of the same task whose branch an earlier attempt already pushed from this workspace, with no pull request yet: return `{ answer }` to skip the model run (nothing is spent, `job_resumed` is logged) and go straight to `beforeFinalize` and the git step, which opens the pull request; return nothing to run the model as usual. Only called for roles that push |
 | `onSettled(taskId, outcome)` | once per finished job (never for a detach): drop per-job state |
 | `extensions`, `readinessChecks` | extra Pi Durable extensions (tools, prompt sections) and `/ready` checks |
 
@@ -74,6 +75,13 @@ the task as non-retryable `ref_not_found` before the model runs. Roles that push
 from the commit; read-only roles (`git.push: false`) get it checked out detached, so a review or a QA run is about exactly that code.
 `repository.ref: "HEAD"` means the remote's default branch at the moment the task runs (the base of the pull request is that branch's name). The pull request targets `repository.baseRef` when given, else the ref when it is a branch, else the remote's default branch (a card that
 wants `baseRef` must declare it in its input schema).
+
+**The task branch on the remote is never rewritten.** `finalizeWorkspace` asks the remote (`ls-remote`) before it pushes: a branch the remote does not have is created; one that already
+holds the same commit or the **same tree** under another commit id (a rerun of the same change) is reused as it is, nothing is pushed and the commits reported are the remote's;
+one whose tip the local work builds on gets a plain fast-forward; anything else is different work under the same name, so the work goes to `<branch>-2`, `-3` ... up to `-5`
+(each checked the same way, so a rerun finds its own earlier suffix again). When all five are taken the job fails, not retryable, with `branch_exhausted` and nothing is pushed.
+The result's `branch` is the name really used (and the pull request head); `reused: true` says nothing was pushed. After a push the workspace records `somework.pushed` (task, branch, commit),
+which is what `resume` is offered on. There is no force push anywhere.
 
 **Persistent mirror (opt-in).** With `GIT_MIRROR_DIR` set (a directory inside the sandbox, for example `/workspace/.mirrors`) the kit keeps a bare mirror of
 each repository it works on (branches and tags only, never the remote's pull request refs), refreshes it before a task that needs a new clone and, for
@@ -121,6 +129,78 @@ model, no tokens) and never echoes what the sender wrote.
   deployment; `profile.chat.replyTemplate(context)` replaces the text (it must not include anything the sender sent).
 * **Observability.** Logs `chat_message_received` (with `replied` and `reason`), `chat_reply_sent`, `chat_reply_failed`; the counter
   `somework_chat_messages_total{result,reason}`.
+
+### Chat answered by the model (the default)
+
+Every role now answers a direct `chat.message` with a model unless `profile.chat.mode = "notice"` or `CHAT_MODE=notice`. Two tiers, chosen by
+WHO sent the message and by an explicit prefix, never by what the message says:
+
+* **ASK** (default askers: `agent/manager` and every human, `kind:human`). One bounded model turn in a light session of the runtime's own
+  conversation store, with its own tool list and instructions: `read` (of a read-only checkout of the role's repository or of the recent
+  workspaces), `agent_status`, and the role's read-only tools (`hooks.chat.askToolNames`). No `bash`, `edit` or `write` (a profile that lists
+  one fails at startup), no task submission, every approval request is refused. It answers from a state summary the service builds from its
+  own records (readiness, the three token pools, the recent jobs with outcome, branch and pull request, the role's own facts from
+  `hooks.chat.context`), never from a record the model wrote. The earlier messages of the conversation and the new message are data inside
+  random markers; replies are redacted, cut at 4 KB and sent in the same conversation with the label `chatReply`.
+* **INSTRUCT** (default instructors: `agent/manager`; the message must start with `instruct:`). `hooks.chat.instructInput(text)` turns the text
+  into the input of one of the role's own capabilities, or refuses with a reason ("outside my contract"); the instruction then runs as a
+  synthetic job of the role's normal handler, so the same sandbox, tools, guards, approval policy, git protocol and `wrapRuntime` apply
+  as for a task. The budget is the chat budget (`instructBudget`, default 150 000 tokens and 15 minutes; the message cannot change it), clamped
+  by what the `chat` pool has left and by the role's own limits. A step that needs approval is asked of the instructor as a chat message
+  labelled `chatApprovalRequest=<id>`; only a message from that same instructor, in that conversation, labelled `chatApprovalDecision=<id>`
+  and saying exactly `approve` or `deny`, decides. Silence is a denial after `approvalMinutes` (10). The Manager relays it with
+  `/chatapprove <id>` and `/chatdeny <id>`. A role that wraps its runtime to refuse approvals (the Aikido fixer) refuses them here too.
+
+**Artifacts of an instruction.** An instruction is a synthetic job (`chat-<messageId>`) that has no task in the domain, so the domain refuses every call bound to it (an artifact upload names its source task and would be a `404 not_found: task not found`). The service therefore gives the role's code and the handler a client wrapped by `ChatArtifacts`: an upload whose `sourceTaskId` is a chat job is not sent but written under `<state dir>/chat-artifacts/<job>/` on the agent host (the newest 10 jobs are kept, at most 200 MB per file), and the role gets a reference `inline:<job>:<n>` in its place, so its own code runs unchanged; any other call whose path names a chat job's task (`/tasks/chat-...`) is skipped; the progress, input and approval calls of the job are local. Nothing changes for a task that exists. The reply then shows each text artifact (patch, report, logs) after the outcome, cut to what is left of the 4 KB with a note `[truncated: N of M bytes shown; full copy on the agent host at <path>]`; anything else (a video, a screenshot) is named with its size and where it stays, and the reply says that attachments were not uploaded. A role needs nothing to get this; its tests can use `chatInstructionRig` and `DomainWithoutChatTasks` from `@somework/agent-kit/testing`.
+
+**A message that comes too soon.** A second message from the same sender in the same conversation within the window (15 seconds) is not answered by the model, but it is not dropped silently either: the sender gets one `chat.notice` labelled `autoReply` (it wakes nobody and no responder answers it), either "Slow down: one message at a time; your previous one was still being worked on when this arrived. I answered you N seconds ago; send your next message after X seconds." (the previous turn had not finished when it arrived) or "I answered you N seconds ago; send your next message after X seconds." At most one such notice per sender, conversation and window; the next early message of a later window gets its own. Messages over the hourly limit are still dropped without a word.
+
+Guard rails: one chat turn at a time (a turn that waits more than `busyAfterSeconds` says "busy, queued"); instructions take a job slot
+through the same `JobGate` as tasks, tasks first and nothing preempted; the `chat` token pool is its own share of the daily limit
+(`share`, default 0.1; asks get half the cap at 80% of it and the model is not called at 100%, when the sender gets the deterministic notice);
+one answer per sender and conversation per 15 seconds, 20 per hour; a message older than 5 minutes, an own message, a `chatReply` or
+`autoReply` message and a duplicate are never answered, so two agents cannot loop; a sender that is not allowed gets the notice only.
+
+| Profile field (`profile.chat`) | Default | Environment override |
+|---|---|---|
+| `mode` | `model` | `CHAT_MODE` (`notice` or `model`) |
+| `askers` / `instructors` | `agent/manager`, `kind:human` / `agent/manager` | `CHAT_ALLOWED_SENDERS` / `CHAT_INSTRUCTORS` (ids or `kind:<kind>`, comma or space separated) |
+| `tokenCap` / `hardTokenCap` | 40 000 / 200 000 | `CHAT_TOKEN_CAP` / `CHAT_HARD_TOKEN_CAP` |
+| `maxMinutes` | 2 | `CHAT_MAX_MINUTES` |
+| `instructBudget` | 150 000 tokens, 15 minutes | `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` |
+| `approvalMinutes` | 10 | `CHAT_APPROVAL_MINUTES` |
+| `busyAfterSeconds` | 20 | `CHAT_BUSY_AFTER_SECONDS` |
+| `share` / `throttleAt` | 0.1 / 0.8 | `CHAT_TOKEN_SHARE` / `CHAT_THROTTLE_AT` |
+| `hourlyLimit` | 20 | `CHAT_HOURLY_LIMIT` |
+| `tools.ask` / `tools.instruct` | `read`, `agent_status` + role's / the role's `allowedTools` | none |
+| `instructPrefix`, `historyMessages`, `messageChars`, `replyMaxBytes`, `senderWindowMs`, `maxAgeMs` | `instruct:`, 10, 600, 4096, 15 000, 300 000 | none |
+
+Instructions also need the role's `CHAT_REPOSITORY_URL` (and optionally `CHAT_REPOSITORY_REF`) unless the instruction names `repo:`; the
+Aikido fixer takes its repository from `AIKIDO_REPOSITORY_URL`. Logs: `chat_received`, `chat_answered`, `chat_refused`,
+`chat_instruction_refused`, `chat_approval_*`; counters `somework_chat_model_total{result,reason}`, `somework_chat_tokens_total{tier}`,
+`somework_chat_instructions_total{outcome}`. `/status` of the health endpoint shows the chat mode, askers and instructors and the `chat` pool.
+
+## Observe tools: read-only logs and alerts
+
+`createObserve` (`@somework/agent-kit/observe`) gives a role five read-only tools over the central Grafana: `logs_query` (a stream selector
+with line filters, `| json` and simple label filters, optionally `count_over_time`/`rate`; the text is parsed and rebuilt, never forwarded),
+`my_history` (the role's own recent jobs, one line per task), `logs_labels` (what can be filtered on), `alerts_status` (the alert rules
+of one Grafana folder) and `dashboards_search`. Results are redacted, capped in bytes and framed between random markers as untrusted data.
+Off unless `OBSERVE_ENABLED=1` (or the profile's `observe.enabled`).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OBSERVE_ENABLED` | off | `1` turns the tools on; then `GRAFANA_URL` and `GRAFANA_TOKEN_FILE` are required or the service does not start |
+| `OBSERVE_SCOPE` | `own` | `own`: every query gets the `OBSERVE_OWN` matchers added (required, for example `container=~"somework-qa-agent-.*"`); `fleet`: any agent stream |
+| `OBSERVE_MAX_RANGE_HOURS` | 24 | furthest look-back, at most 168 |
+| `OBSERVE_HOURLY_CALLS` | 60 | calls per hour over all observe tools |
+| `OBSERVE_MAX_BYTES` | 12288 | bytes of one answer |
+| `OBSERVE_METRIC_FUNCTIONS` | off | allows `count_over_time` and `rate` over one stream |
+| `GRAFANA_URL`, `GRAFANA_TOKEN_FILE`, `GRAFANA_CA_FILE` | none | the Grafana origin, a Viewer service account token file (`deploy/grafana/provision-reader.py`) and an optional CA |
+| `GRAFANA_LOKI_UID`, `GRAFANA_ALERT_FOLDER` | `cluster-loki`, `Agent Cluster` | the Loki data source and the alert folder |
+
+The tools only read: GET requests to the one Grafana origin, no redirects, 15 s and size limits, the token stays in the service. They are allowed in
+both chat tiers. Logs of a role's own sandbox commands, tickets and pull requests can hold hostile text, hence the framing. Status shows `observe` with the call count.
 
 ## Skills: the repository is the source of truth
 

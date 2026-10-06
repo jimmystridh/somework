@@ -1,8 +1,9 @@
 import { createServer, type Server } from "node:http";
 import type { Failure, Handler, Job, JobControl, Outcome, SomeWorkClient } from "@somework/sdk";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { DEFAULT_BRANCH_PREFIX, finalizeWorkspace, prepareWorkspace, RefNotFoundError, workspaceFor, type FinalizeResult, type GitSession } from "./git.ts";
+import { BranchExhaustedError, DEFAULT_BRANCH_PREFIX, finalizeWorkspace, prepareScratchWorkspace, prepareWorkspace, pushedWork, RefNotFoundError, workspaceFor, type FinalizeResult, type GitSession } from "./git.ts";
 import { noPullRequests, type GitHost } from "./githost.ts";
+import { describeOutcome, type JobJournal } from "./journal.ts";
 import type { DailyLedger } from "./ledger.ts";
 import { silent, type Log } from "./log.ts";
 import { Metrics } from "./metrics.ts";
@@ -25,7 +26,8 @@ export interface HandlerDeps {
 	workspaceRoot: string;
 	client: Pick<SomeWorkClient, "uploadArtifact">;
 	limits: Limits;
-	ledger?: DailyLedger;
+	/** What the daily budget check and the usage record talk to: the tasks pool, or a pool of its own (chat instructions). */
+	ledger?: Pick<DailyLedger, "remaining" | "record">;
 	shards?: { table: ShardTable; agentId: string };
 	/** Models a job may request with `input.model`. Without it (or without a match) the request is refused. */
 	allowedModels?: readonly ModelRef[];
@@ -36,6 +38,12 @@ export interface HandlerDeps {
 	hooks?: RoleHooks;
 	/** Environment of a working directory for the hooks (default: the session's). */
 	envFor?: (cwd?: string) => ExecutionEnv;
+	/** The tools every conversation of this handler is offered instead of the runtime's list (a narrower set only). */
+	requestTools?: readonly string[];
+	/** Where finished jobs are noted for the chat's state summary. */
+	journal?: JobJournal;
+	/** Which kind of job this handler runs, for the journal. */
+	source?: "task" | "chat";
 }
 
 /** The service's metrics, in one place so the names are stable. */
@@ -74,14 +82,22 @@ function parseApproval(answer: unknown): ApprovalDecision {
 export function createHandler(deps: HandlerDeps): Handler {
 	const handle = createJobHandler(deps);
 	const onSettled = deps.hooks?.onSettled;
-	if (!onSettled) return handle;
+	const journal = deps.journal;
+	if (!onSettled && !journal) return handle;
 	return async (job: Job, control: JobControl): Promise<Outcome> => {
+		const started = Date.now();
 		const outcome = await handle(job, control);
 		if (outcome.type !== "detach") {
 			try {
-				onSettled(job.taskId, outcome);
+				onSettled?.(job.taskId, outcome);
 			} catch (error) {
 				(deps.log ?? silent)("warn", "on_settled_failed", { taskId: job.taskId, error: error instanceof Error ? error.message : String(error) });
+			}
+			try {
+				const described = describeOutcome(outcome);
+				if (journal && described) journal.record({ taskId: job.taskId, capability: `${job.capability?.id ?? "?"}@${job.capability?.version ?? "?"}`, source: deps.source ?? "task", at: new Date().toISOString(), ms: Date.now() - started, ...described });
+			} catch (error) {
+				(deps.log ?? silent)("warn", "journal_failed", { taskId: job.taskId, error: error instanceof Error ? error.message : String(error) });
 			}
 		}
 		return outcome;
@@ -117,13 +133,18 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		}
 		// what the role's `prepareInput` returned is the job from here on (it may fill in the ref, name the conversation, add context)
 		const repository = prepared.repository;
-		if (typeof instruction !== "string" || typeof repository?.url !== "string" || typeof repository?.ref !== "string") return fail("invalid_input", "instruction and repository {url, ref} are required");
-		if (repository.baseRef !== undefined && typeof repository.baseRef !== "string") return fail("invalid_input", "repository.baseRef must be a branch name");
+		const scratch = profile?.noRepository === true;
+		if (scratch) {
+			if (typeof instruction !== "string") return fail("invalid_input", "an instruction is required");
+		} else {
+			if (typeof instruction !== "string" || typeof repository?.url !== "string" || typeof repository?.ref !== "string") return fail("invalid_input", "instruction and repository {url, ref} are required");
+			if (repository.baseRef !== undefined && typeof repository.baseRef !== "string") return fail("invalid_input", "repository.baseRef must be a branch name");
+		}
 		const requested = prepared.budget && prepared.budget.maxTokens > 0 && prepared.budget.maxMinutes > 0 ? prepared.budget : undefined;
 		if (!requested && (requireBudget || !profile)) return fail("budget_required", "a job without a token and time budget is not accepted");
 		const asked = requested ?? profile!.defaultBudget;
 		const budget = { maxTokens: Math.min(asked.maxTokens, deps.limits.maxTokensCap), maxMinutes: Math.min(asked.maxMinutes, deps.limits.maxMinutesCap) };
-		const agentKey: string = prepared.agentKey ?? `${repository.url}#${job.task.conversationId ?? taskId}`;
+		const agentKey: string = prepared.agentKey ?? `${scratch ? "scratch" : repository.url}#${job.task.conversationId ?? taskId}`;
 		if (deps.shards && !ownsKey(deps.shards.table, deps.shards.agentId, agentKey)) return fail("wrong_shard", "this agent does not own the shard of that agentKey; route the task with targetAgentId from the shard table");
 		if (deps.ledger && deps.ledger.remaining() < budget.maxTokens) {
 			m.jobs({ status: "budget_exhausted" });
@@ -143,16 +164,18 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		try {
 			let base;
 			try {
-				base = await prepareWorkspace(deps.session, {
-					repoUrl: repository.url,
-					ref: repository.ref,
-					baseRef: repository.baseRef,
-					taskId,
-					workspace,
-					branchPrefix: git.branchPrefix,
-					detach: !git.push,
-					...(hooks?.branchName ? { branch: (resolved) => hooks.branchName!({ input: prepared, taskId, baseSha: resolved.sha }) } : {}),
-				});
+				if (scratch) base = await prepareScratchWorkspace(deps.session, workspace);
+				else
+					base = await prepareWorkspace(deps.session, {
+						repoUrl: repository.url,
+						ref: repository.ref,
+						baseRef: repository.baseRef,
+						taskId,
+						workspace,
+						branchPrefix: git.branchPrefix,
+						detach: !git.push,
+						...(hooks?.branchName ? { branch: (resolved) => hooks.branchName!({ input: prepared, taskId, baseSha: resolved.sha }) } : {}),
+					});
 			} catch (error) {
 				if (error instanceof RefNotFoundError) {
 					m.jobs({ status: "ref_not_found" });
@@ -161,7 +184,7 @@ function createJobHandler(deps: HandlerDeps): Handler {
 				}
 				throw error;
 			}
-			log("info", "workspace_ready", { ...fields, ref: repository.ref, refKind: base.refKind, baseSha: base.baseSha, baseBranch: base.baseBranch });
+			log("info", "workspace_ready", { ...fields, ref: repository?.ref, refKind: base.refKind, baseSha: base.baseSha, baseBranch: base.baseBranch });
 			const jobContext: JobContext = { taskId, input: prepared, instruction, workspace, baseSha: base.baseSha, baseBranch: base.baseBranch, envFor, client: deps.client, log };
 			const settled = async (result: Record<string, unknown>, artifacts: unknown[], answer: string, usage: Usage, extra: Partial<ResultContext>): Promise<Outcome> => {
 				const patch = await hooks?.result?.(result, { ...jobContext, answer, usage, ...extra });
@@ -178,20 +201,24 @@ function createJobHandler(deps: HandlerDeps): Handler {
 					return await settled({ status: "blocked", summary: "", usage: { totalTokens: 0, costUsd: 0 } }, [], "", emptyUsageValue(), { blocked: gate.blocked });
 				}
 			}
-			const outcome: AgentOutcome = await deps.runtime.execute(
-				{ requestId: `somework:${taskId}`, agentKey, instruction, workspace, budget, ...(model ? { model } : {}) },
-				{
-					signal: control.signal,
-					onProgress: (update) => control.progress(update),
-					onTool: (name) => m.tools({ tool: name }),
-					requestApproval: async (request) => {
-						log("info", "approval_requested", { ...fields, tool: request.tool });
-						const decision = parseApproval(await control.requestInput({ kind: "approval", tool: request.tool, summary: request.summary }));
-						m.approvals({ decision: decision.approved ? "approved" : "denied" });
-						return decision;
-					},
-				},
-			);
+			const resumed = await resumeFromPushedWork(deps.session, host, hooks, git.push, jobContext, base.baseSha);
+			if (resumed) log("info", "job_resumed", { ...fields, branch: resumed.branch, sha: resumed.sha });
+			const outcome: AgentOutcome = resumed
+				? { status: "done", answer: resumed.answer, usage: emptyUsageValue() }
+				: await deps.runtime.execute(
+						{ requestId: `somework:${taskId}`, agentKey, instruction, workspace, budget, ...(model ? { model } : {}), ...(deps.requestTools ? { tools: deps.requestTools } : {}) },
+						{
+							signal: control.signal,
+							onProgress: (update) => control.progress(update),
+							onTool: (name) => m.tools({ tool: name }),
+							requestApproval: async (request) => {
+								log("info", "approval_requested", { ...fields, tool: request.tool });
+								const decision = parseApproval(await control.requestInput({ kind: "approval", tool: request.tool, summary: request.summary }));
+								m.approvals({ decision: decision.approved ? "approved" : "denied" });
+								return decision;
+							},
+						},
+					);
 			if (outcome.status === "detached") {
 				m.detached();
 				return { type: "detach" };
@@ -256,6 +283,8 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		} catch (error) {
 			log("error", "job_failed", { ...fields, error: error instanceof Error ? error.message : String(error) });
 			m.jobs({ status: "error" });
+			// every branch name the work could go on is taken by different work: another attempt would find the same
+			if (error instanceof BranchExhaustedError) return fail("branch_exhausted", error.message.slice(0, 500));
 			// infrastructure trouble (git, sandbox): another attempt may succeed, and every step is idempotent
 			return fail("job_error", error instanceof Error ? error.message.slice(0, 500) : "unknown error", true);
 		} finally {
@@ -269,6 +298,20 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			}
 		}
 	};
+}
+
+/**
+ * A retry of a task whose work was already pushed from this workspace, when the role says it can finish without the model and the pull
+ * request is the only thing missing: the answer the role recovered, else undefined (run the model as usual).
+ */
+async function resumeFromPushedWork(session: GitSession, host: GitHost, hooks: RoleHooks | undefined, pushes: boolean, context: JobContext, baseSha: string): Promise<{ answer: string; branch: string; sha: string } | undefined> {
+	if (!pushes || !hooks?.resume) return undefined;
+	const pushed = await pushedWork(session, { workspace: context.workspace, taskId: context.taskId, baseSha });
+	if (!pushed) return undefined;
+	const repoUrl = context.input?.repository?.url;
+	if (typeof repoUrl !== "string" || (await host.findPullRequest({ repoUrl, head: pushed.branch }))) return undefined;
+	const recovered = await hooks.resume({ ...context, branch: pushed.branch, sha: pushed.sha });
+	return recovered ? { answer: recovered.answer, ...pushed } : undefined;
 }
 
 const emptyUsageValue = (): Usage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 });

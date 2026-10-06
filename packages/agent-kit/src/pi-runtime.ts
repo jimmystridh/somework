@@ -49,6 +49,9 @@ export class PiDurableRuntime implements AgentRuntime {
 	#resumed = false;
 	#modelChoice: { provider: string; modelId: string };
 	#offeredTools: ToolRegistration[] | undefined;
+	#registered = new Map<string, ToolRegistration>();
+	/** Tools a running conversation was restricted to by its request (chat sessions); everything else uses the runtime's list. */
+	readonly #conversationTools = new Map<number, ReadonlySet<string>>();
 
 	constructor(options: PiRuntimeOptions) {
 		this.#options = options;
@@ -58,13 +61,21 @@ export class PiDurableRuntime implements AgentRuntime {
 
 	/** The registrations behind `allowedTools`: a typo must stop the service at startup, not silently hide a tool. */
 	#resolveAllowedTools(): ToolRegistration[] | undefined {
-		const allowed = this.#options.allowedTools;
-		if (!allowed) return undefined;
 		const known = new Map<string, ToolRegistration>();
 		for (const extension of [CodingTools, ...(this.#options.extensions ?? [])]) for (const tool of extension.tools ?? []) known.set(tool.name, tool);
+		this.#registered = known;
+		const allowed = this.#options.allowedTools;
+		if (!allowed) return undefined;
 		const unknown = allowed.filter((name) => !known.has(name));
 		if (unknown.length > 0) throw new Error(`allowedTools names tools that do not exist: ${unknown.join(", ")} (known: ${[...known.keys()].join(", ")})`);
 		return allowed.map((name) => known.get(name)!);
+	}
+
+	/** The registrations for a request's own tool list. Names the runtime does not have are an error, never silently dropped. */
+	#toolsFor(names: readonly string[]): ToolRegistration[] {
+		const unknown = names.filter((name) => !this.#registered.has(name));
+		if (unknown.length > 0) throw new Error(`the request names tools that do not exist: ${unknown.join(", ")}`);
+		return names.map((name) => this.#registered.get(name)!);
 	}
 
 	async start(): Promise<void> {
@@ -81,6 +92,11 @@ export class PiDurableRuntime implements AgentRuntime {
 		this.#harness.resume();
 		this.#resumed = true;
 		this.#log("info", "runtime_started", { storage: this.#options.storagePath });
+	}
+
+	/** The names of every tool this runtime has registered (the coding tools and its extensions' tools), for checks at startup. */
+	knownTools(): string[] {
+		return [...this.#registered.keys()];
 	}
 
 	health(): { ready: boolean; reason?: string } {
@@ -105,10 +121,12 @@ export class PiDurableRuntime implements AgentRuntime {
 			if (found) return found as unknown as Conversation;
 		}
 		const rootId = this.#rootId;
+		const instructions = request.instructions ?? this.#options.instructions;
+		const tools = request.tools ? this.#toolsFor(request.tools) : this.#offeredTools;
 		return (await harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
-				agent: { model, cwd: workspace, ...(this.#options.instructions ? { instructions: this.#options.instructions } : {}), ...(this.#offeredTools ? { tools: this.#offeredTools } : {}) },
+				agent: { model, cwd: workspace, ...(instructions ? { instructions } : {}), ...(tools ? { tools } : {}) },
 				init: async (tx, conversationId) => {
 					(await tx.doc(Keys, rootId as never)).map[agentKey] = conversationId as unknown as number;
 				},
@@ -123,6 +141,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		const conversation = await this.#conversation(request);
 		const conversationId = conversation.id as unknown as number;
 		this.#active.set(conversationId, { hooks });
+		if (request.tools) this.#conversationTools.set(conversationId, new Set(request.tools));
 		const baseline = await this.#usageOf(conversation);
 		const started = Date.now();
 		const log = (event: string, fields: Record<string, unknown> = {}) => this.#log("info", event, { requestId: request.requestId, agentKey: request.agentKey, ...fields });
@@ -172,6 +191,7 @@ export class PiDurableRuntime implements AgentRuntime {
 			hooks.signal.removeEventListener("abort", onSignal);
 			await events.stop?.().catch?.(() => {});
 			this.#active.delete(conversationId);
+			this.#conversationTools.delete(conversationId);
 			log("run_finished", { ms: Date.now() - started });
 		}
 	}
@@ -221,7 +241,8 @@ export class PiDurableRuntime implements AgentRuntime {
 			hooks: [
 				hook(ToolTask, {
 					beforeTool: async (call, api, context) => {
-						if (this.#options.allowedTools && !this.#options.allowedTools.includes(call.name)) return { block: `the tool ${call.name} is not available to this agent` };
+						const own = this.#conversationTools.get(api.conversationId as unknown as number);
+						if (own ? !own.has(call.name) : this.#options.allowedTools && !this.#options.allowedTools.includes(call.name)) return { block: `the tool ${call.name} is not available to this agent` };
 						const summary = policy?.needsApproval(call.name, call.arguments as Record<string, unknown>);
 						if (!summary) return undefined;
 						const memo = `approval:${call.id}`;

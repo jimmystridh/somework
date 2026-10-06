@@ -2,11 +2,13 @@ import type { Extension } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import type { Failure, Outcome, ProgressUpdate, SomeWorkClient } from "@somework/sdk";
 import type { ChatConfig } from "./chat.ts";
+import { validateChatConfig, type ChatRoleHooks } from "./chat-model.ts";
 import { validateEventsProfile } from "./events/config.ts";
 import type { EventsProfile } from "./events/types.ts";
 import type { FinalizeResult } from "./git.ts";
 import type { Log } from "./log.ts";
 import type { AgentRuntime, Budget, Usage } from "./runtime.ts";
+import type { ObserveProfile } from "./observe/config.ts";
 
 /**
  * Everything that makes one agent role different from another. A role is `card.json` (the contract other agents see), a profile
@@ -41,6 +43,12 @@ export interface AgentProfile {
 		/** Task branches are `<branchPrefix>/<taskId>`. */
 		branchPrefix: string;
 	};
+	/**
+	 * A role whose jobs work on no repository (a triage or reporting agent that only reads other systems through its tools). The handler
+	 * then neither needs `repository {url, ref}` in the job nor clones anything: the model gets an empty scratch directory, and the base
+	 * commit and branch in the hooks' context are empty strings. Needs `git.push` false.
+	 */
+	noRepository?: boolean;
 	skills: {
 		/** Names of the repository skills this role may use; empty turns the feature off. Only these are ever shown to the model. */
 		allow: string[];
@@ -48,8 +56,10 @@ export interface AgentProfile {
 		overlayDir?: string;
 	};
 	/**
-	 * What happens to a direct chat message sent to the agent. By default each sender gets one automatic notice ("I take tasks, not chat",
-	 * with the capability list); no model reads the message. `CHAT_AUTOREPLY=0` in the environment turns it off for a deployment.
+	 * What happens to a direct chat message sent to the agent. By default (`mode: "model"`) a message from the manager or a person is answered
+	 * by the model as a question, and a message from an instructor that starts with `instruct:` is carried out as a job of the role's normal
+	 * handler; every other sender gets one automatic notice. `mode: "notice"` or `CHAT_MODE=notice` goes back to the notice only. `CHAT_AUTOREPLY=0`
+	 * turns the notice off for a deployment. See `chat-model.ts`.
 	 */
 	chat?: ChatConfig;
 	/**
@@ -57,6 +67,11 @@ export interface AgentProfile {
 	 * and has the handler tools. Off by default: a role that does not opt in behaves exactly as before.
 	 */
 	events?: EventsProfile;
+	/**
+	 * Read-only access to the central logs and alert states (see `observe/`): off unless this says `enabled` or `OBSERVE_ENABLED=1`, and
+	 * limited to the agent's own logs unless `scope.fleet` or `OBSERVE_SCOPE=fleet`.
+	 */
+	observe?: ObserveProfile;
 }
 
 /** A role's decision that the work must not leave the workspace (a failed check, damaged files): no commit, no push, no pull request. */
@@ -131,6 +146,8 @@ export interface RoleHooks {
 	prepareInput?(input: any, context: { taskId: string; log: Log }): Promise<any> | any;
 	/** Turns the job input into the model's instruction. Throw `InvalidInput` to refuse the job. Default: `input.instruction`. */
 	instruction?(input: any, context: { taskId: string }): string;
+	/** What the role adds to chat: its own read-only tools, facts for the state summary, a read-only checkout, how an instruction becomes a task input. */
+	chat?: ChatRoleHooks;
 	/** Pull request title and body for a task (called after `beforeFinalize`); `commitMessage` replaces the default `agent: <title>`, its first line is the subject. */
 	pullRequest?(input: any, context: { taskId: string; instruction: string }): { title: string; body: string; commitMessage?: string };
 	/**
@@ -149,6 +166,13 @@ export interface RoleHooks {
 	envFactory?(cwd: string | undefined): ExecutionEnv;
 	/** Interface the health endpoint listens on. Default `0.0.0.0`. */
 	healthBind?: string;
+	/**
+	 * A retry of the same task, when an earlier attempt already pushed the work from this workspace and only the pull request is missing (no
+	 * pull request exists for the branch, the branch is still at the commit the attempt recorded). Return `{ answer }` to skip the model run:
+	 * the handler then goes straight to `beforeFinalize` and the git step, which finds the branch up to date, opens the pull request and
+	 * reports the result, without spending a token. Return nothing to run the model as usual. Never called for roles that do not push.
+	 */
+	resume?(context: JobContext & { branch: string; sha: string }): Promise<void | { answer: string }> | void | { answer: string };
 	/**
 	 * After the workspace is ready and before the model runs (start the application under test, prepare fixtures). Return `{ blocked }` to
 	 * skip the model: the task completes with `status: "blocked"` without spending a token (the `result` hook says why). Throwing fails the
@@ -184,6 +208,7 @@ export function validateProfile(profile: AgentProfile): AgentProfile {
 	if (!profile.id) throw new Error("profile.id is required");
 	if (profile.capabilities.length === 0) throw new Error(`profile ${profile.id} serves no capability`);
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(profile.git.branchPrefix)) throw new Error(`profile ${profile.id}: branchPrefix must be a plain ref segment`);
+	if (profile.noRepository && profile.git.push) throw new Error(`profile ${profile.id}: a role without a repository has nothing to push`);
 	if (profile.git.pullRequest && !profile.git.push) throw new Error(`profile ${profile.id}: a pull request needs the branch to be pushed`);
 	if (!(profile.defaultBudget.maxTokens > 0) || !(profile.defaultBudget.maxMinutes > 0)) throw new Error(`profile ${profile.id}: defaultBudget must be positive`);
 	if (profile.chat !== undefined) {
@@ -191,6 +216,7 @@ export function validateProfile(profile: AgentProfile): AgentProfile {
 		if (profile.chat.autoReply !== undefined && typeof profile.chat.autoReply !== "boolean") throw new Error(`profile ${profile.id}: chat.autoReply must be true or false`);
 		if (profile.chat.replyTemplate !== undefined && typeof profile.chat.replyTemplate !== "function") throw new Error(`profile ${profile.id}: chat.replyTemplate must be a function`);
 	}
+	validateChatConfig(profile.id, profile.chat);
 	validateEventsProfile(profile.id, profile.events);
 	return profile;
 }

@@ -109,7 +109,8 @@ export interface PreparedWorkspace {
 	branch: string;
 	/** The branch a pull request targets. */
 	baseBranch: string;
-	refKind: RefKind;
+	/** `none` for the scratch workspace of a role without a repository. */
+	refKind: RefKind | "none";
 	detached: boolean;
 }
 
@@ -165,6 +166,12 @@ async function remoteDefaultBranch(session: GitSession, workspace: string): Prom
 }
 
 const mirrorLocks = new Map<string, Promise<unknown>>();
+const mirrorRefreshedAt = new Map<string, number>();
+
+/** When this process last brought the mirror of `repoUrl` up to date (epoch milliseconds), or undefined when it has not yet. */
+export function mirrorFreshness(mirrorDir: string, repoUrl: string): number | undefined {
+	return mirrorRefreshedAt.get(mirrorPathFor(mirrorDir, repoUrl));
+}
 
 /** Runs `work` after every earlier piece of work on the same key has settled, so two tasks never fetch into one mirror at once. */
 async function serialized<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -201,6 +208,7 @@ export async function refreshMirror(session: GitSession, repoUrl: string): Promi
 		const head = await git(session, dir, ["ls-remote", "--symref", "origin", "HEAD"], { auth: true, allow: [1, 128] });
 		const named = /^ref: refs\/heads\/(\S+)\s+HEAD$/m.exec(head.output)?.[1];
 		if (named) await git(session, dir, ["symbolic-ref", "HEAD", `refs/heads/${named}`]);
+		mirrorRefreshedAt.set(dir, Date.now());
 		return dir;
 	});
 }
@@ -240,6 +248,16 @@ export function startMirrorRefresh(options: { session: GitSession; repositories:
 	const timer = setInterval(() => void round(), Math.max(1, options.everyMinutes) * 60_000);
 	timer.unref();
 	options.signal.addEventListener("abort", () => clearInterval(timer), { once: true });
+}
+
+/**
+ * The workspace of a role that works on no repository (`profile.noRepository`): an empty directory, no clone, no branch. The base commit,
+ * branch and base branch are empty, and there is nothing to push.
+ */
+export async function prepareScratchWorkspace(session: GitSession, workspace: string): Promise<PreparedWorkspace> {
+	const made = await session.env.createDir(workspace, { recursive: true }, ctx);
+	if (!made.ok) throw new GitError(`cannot create the workspace: ${made.error.message}`, -1);
+	return { baseSha: "", branch: "", baseBranch: "", refKind: "none", detached: true };
 }
 
 /**
@@ -295,13 +313,76 @@ function taskBranch(params: Pick<PrepareParams, "taskId" | "branchPrefix" | "bra
 
 export interface FinalizeResult {
 	status: "completed" | "no_changes";
+	/** The branch the work really is on: the task branch, or the next free numeric suffix of it when that name was taken by different work. */
 	branch: string;
 	commits: string[];
 	prUrl?: string;
 	patch: string;
+	/** True when the remote already had this exact work on the branch, so nothing was pushed. */
+	reused?: boolean;
 }
 
-/** Commit what the agent changed, push the task's branch, open (or find) the pull request. Every step is safe to repeat. */
+/** Every name the work may land on is taken by different work: nothing was pushed and a retry would find the same. */
+export class BranchExhaustedError extends GitError {
+	override readonly name = "BranchExhaustedError";
+	constructor(message: string) {
+		super(message, -1);
+	}
+}
+
+/** The task branch is `<name>`, then `<name>-2` ... `<name>-5`, so a rerun that made different work never needs a force push. */
+export const MAX_BRANCH_SUFFIX = 5;
+const PUSHED_KEY = "somework.pushed";
+
+type Run = (args: string[], options?: { allow?: number[]; auth?: boolean }) => Promise<{ code: number; output: string }>;
+const FULL_OID = /^[0-9a-f]{40}$/;
+
+/** The commit a branch points to on the remote, or undefined when the remote has no such branch. */
+async function remoteTip(run: Run, branch: string): Promise<string | undefined> {
+	const listed = await run(["ls-remote", "origin", `refs/heads/${branch}`], { auth: true });
+	for (const line of listed.output.split("\n")) {
+		const [oid, ref] = line.trim().split(/\s+/);
+		if (ref === `refs/heads/${branch}` && oid && FULL_OID.test(oid)) return oid;
+	}
+	return undefined;
+}
+
+const treeOf = async (run: Run, rev: string): Promise<string> => (await run(["rev-parse", `${rev}^{tree}`])).output.trim();
+
+interface Placement {
+	branch: string;
+	/** Push to `branch`; false when the remote already has the work there. */
+	push: boolean;
+	tip?: string;
+}
+
+/**
+ * Where this work goes on the remote, without ever rewriting it. A branch the remote does not have is ours to create. One it has with the
+ * same commit, or the same tree (a rerun that made the same change with a new commit id), already holds the work: reuse it. One whose tip our
+ * HEAD builds on takes a plain fast-forward push. Anything else is different work under the same name: try `<name>-2`, `-3`, up to
+ * `-${MAX_BRANCH_SUFFIX}`, and fail clearly when all of them are taken.
+ */
+async function placeBranch(run: Run, branch: string): Promise<Placement> {
+	const head = (await run(["rev-parse", "HEAD"])).output.trim();
+	const ours = await treeOf(run, "HEAD");
+	const taken: string[] = [];
+	for (let n = 1; n <= MAX_BRANCH_SUFFIX; n++) {
+		const candidate = n === 1 ? branch : `${branch}-${n}`;
+		const tip = await remoteTip(run, candidate);
+		if (!tip) return { branch: candidate, push: true };
+		if (tip === head) return { branch: candidate, push: false, tip };
+		await run(["fetch", "origin", `+refs/heads/${candidate}:refs/somework/remote/${candidate}`], { auth: true });
+		if ((await treeOf(run, tip)) === ours) return { branch: candidate, push: false, tip };
+		if ((await run(["merge-base", "--is-ancestor", tip, "HEAD"], { allow: [1] })).code === 0) return { branch: candidate, push: true, tip };
+		taken.push(candidate);
+	}
+	throw new BranchExhaustedError(`the remote already has different work on ${taken.join(", ")}: nothing was pushed (a person has to look at those branches)`);
+}
+
+/**
+ * Commit what the agent changed, push the task's branch, open (or find) the pull request. Every step is safe to repeat, and no push is ever
+ * forced: see `placeBranch` for what happens when the branch already exists on the remote.
+ */
 export async function finalizeWorkspace(
 	session: GitSession,
 	host: GitHost,
@@ -322,20 +403,45 @@ export async function finalizeWorkspace(
 		commitMessage?: string;
 	},
 ): Promise<FinalizeResult> {
-	const branch = params.branch ?? branchFor(params.taskId, params.branchPrefix);
+	const wanted = params.branch ?? branchFor(params.taskId, params.branchPrefix);
 	const base = params.baseSha ?? `origin/${params.ref}`;
-	const run = (args: string[], options?: { allow?: number[]; auth?: boolean }) => git(session, params.workspace, args, options);
+	const run: Run = (args, options) => git(session, params.workspace, args, options);
 	await run(["add", "-A"]);
 	if ((await run(["diff", "--cached", "--quiet"], { allow: [1] })).code === 1) await run(["commit", ...commitMessageArgs(params.commitMessage ?? `agent: ${params.title}`)]);
 	const ahead = Number((await run(["rev-list", "--count", `${base}..HEAD`])).output.trim());
-	if (ahead === 0) return { status: "no_changes", branch, commits: [], patch: "" };
-	const commits = (await run(["rev-list", "--reverse", `${base}..HEAD`])).output.split("\n").filter(Boolean);
-	await run(["push", "origin", `HEAD:refs/heads/${branch}`], { auth: true });
+	if (ahead === 0) return { status: "no_changes", branch: wanted, commits: [], patch: "" };
+	const placed = await placeBranch(run, wanted);
+	const commits = (await run(["rev-list", "--reverse", `${base}..${placed.push ? "HEAD" : placed.tip!}`])).output.split("\n").filter(Boolean);
+	if (placed.push) await run(["push", "origin", `HEAD:refs/heads/${placed.branch}`], { auth: true });
+	await run(["config", "--local", PUSHED_KEY, `${params.taskId} ${placed.branch} ${placed.push ? (await run(["rev-parse", "HEAD"])).output.trim() : placed.tip!}`]);
 	let patch = (await run(["diff", `${base}...HEAD`])).output;
 	if (Buffer.byteLength(patch) > MAX_PATCH_BYTES) patch = `${patch.slice(0, MAX_PATCH_BYTES)}\n[patch truncated at ${MAX_PATCH_BYTES} bytes]\n`;
-	const existing = await host.findPullRequest({ repoUrl: params.repoUrl, head: branch });
-	const pr = existing ?? (await host.createPullRequest({ repoUrl: params.repoUrl, head: branch, base: params.baseBranch ?? params.ref, title: params.title, body: params.body }));
-	return { status: "completed", branch, commits, prUrl: pr?.url, patch };
+	const existing = await host.findPullRequest({ repoUrl: params.repoUrl, head: placed.branch });
+	const pr = existing ?? (await host.createPullRequest({ repoUrl: params.repoUrl, head: placed.branch, base: params.baseBranch ?? params.ref, title: params.title, body: params.body }));
+	return { status: "completed", branch: placed.branch, commits, prUrl: pr?.url, patch, ...(placed.push ? {} : { reused: true }) };
+}
+
+/** What an earlier attempt of this same task already pushed from this workspace. */
+export interface PushedWork {
+	branch: string;
+	sha: string;
+}
+
+/**
+ * The work an earlier attempt of task `taskId` pushed from this very workspace and that is still what the remote branch points to: the
+ * finalize step records it right after the push. When the pull request is all that is missing, a retry can open it without running the model
+ * again. Undefined when there is nothing recorded, when it belongs to another task, when HEAD moved on, or when the remote no longer agrees.
+ */
+export async function pushedWork(session: GitSession, params: { workspace: string; taskId: string; baseSha: string }): Promise<PushedWork | undefined> {
+	const run: Run = (args, options) => git(session, params.workspace, args, options);
+	const recorded = await run(["config", "--local", "--get", PUSHED_KEY], { allow: [1] });
+	if (recorded.code !== 0) return undefined;
+	const [taskId, branch, sha] = recorded.output.trim().split(/\s+/);
+	if (taskId !== params.taskId || !branch || !sha || !FULL_OID.test(sha)) return undefined;
+	if ((await run(["rev-parse", "--verify", "--quiet", "HEAD"], { allow: [1] })).output.trim() !== sha) return undefined;
+	if (!(Number((await run(["rev-list", "--count", `${params.baseSha}..${sha}`], { allow: [128] })).output.trim()) >= 1)) return undefined;
+	if ((await remoteTip(run, branch)) !== sha) return undefined;
+	return { branch, sha };
 }
 
 /** `-m subject [-m body]` for a message whose first line is the subject (at most 120 characters) and whose remaining lines are the body. */
