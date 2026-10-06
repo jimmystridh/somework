@@ -1,0 +1,3 @@
+{
+  "unit": { "command": "npm ci --ignore-scripts && npm test --silent", "cwd": "frontend", "timeoutSeconds": 900 }
+}

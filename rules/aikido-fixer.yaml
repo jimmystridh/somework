@@ -1,0 +1,5 @@
+name: aikido-fixer
+description: Every Aikido event wakes the Aikido fixer, whose own handler decides whether an issue is worth a fix attempt (severity, repository, attempts, daily cap) and starts at most one code.fix task for itself.
+owner: agent/aikido-fixer
+selector: aikido.*
+wake: true
