@@ -6,7 +6,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Identity, SomeWorkClient, Worker, type Handler } from "@somework/sdk";
 import { runChatResponder } from "./chat.ts";
 import { ChatArtifacts } from "./chat-artifacts.ts";
-import { askToolNames, buildState, ChatApprovals, createStatusTool, instructToolNames, KIT_CHAT_RULES, ModelChatResponder, resolveChatMode, resolveChatModel } from "./chat-model.ts";
+import { askToolNames, buildState, ChatApprovals, createStatusTool, instructToolNames, KIT_CHAT_RULES, KIT_OPEN_CHAT_RULES, ModelChatResponder, resolveChatMode, resolveChatModel } from "./chat-model.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { createEventsComponent } from "./events/component.ts";
@@ -182,6 +182,8 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const gate = new JobGate(config.concurrency);
 			const handler: Handler = (job, control) => gate.run("task", () => taskHandler(job, control), control.signal);
 			const root = config.sandbox.workspaceRoot.replace(/\/$/, "");
+			// the open tier gives every role a shell and the file tools, whatever its job profile lists: the owner asked for agents that can run code
+			const OPEN_BASE_TOOLS = ["read", "write", "edit", "bash"];
 			let chatResponder: ModelChatResponder | undefined;
 			if (chatSettings) {
 				const known = new Set(runtime.knownTools());
@@ -216,6 +218,18 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 						checkout: askWorkspace,
 						fallbackWorkspace: `${root}/.chat`,
 					},
+					...(chatSettings.open
+						? {
+								open: {
+									runtime,
+									tools: [...new Set([...instruct, ...ask, ...OPEN_BASE_TOOLS])].filter((name) => known.has(name)),
+									instructions: [hooks.chat?.openInstructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}. In a conversation with your owner's manager you do whatever is asked with your tools.`, KIT_OPEN_CHAT_RULES].join("\n\n"),
+									workspace: askWorkspace,
+									approvals,
+									gate,
+								},
+							}
+						: {}),
 					...(instructHandler && hooks.chat?.instructInput ? { instruct: { handler: instructHandler, input: hooks.chat.instructInput, describe: hooks.chat.describeResult, gate, approvals, ...(chatArtifacts ? { artifacts: chatArtifacts } : {}) } } : {}),
 					log,
 					metrics,

@@ -110,6 +110,83 @@ function harness(over: Partial<ModelChatDeps> = {}, settings: Partial<ChatModelS
 
 const replies = (posts: Posted[]) => posts.filter((post) => post.body.labels?.[CHAT_REPLY_LABEL] !== undefined && post.body.labels?.[CHAT_APPROVAL_REQUEST_LABEL] === undefined).map((post) => post.body.content.data as string);
 
+describe("the open tier: an instructor's plain message is carried out", () => {
+	const openDeps = (h: ReturnType<typeof harness>, extra: Record<string, unknown> = {}) => ({ runtime: h.runtime as any, tools: ["read", "write", "edit", "bash", "agent_status"], instructions: "You are the tester, open.", workspace: async () => "/scratch/checkout", approvals: h.approvals, ...extra });
+
+	it("runs the role's normal tools in the scratch checkout with the instruct budget, and says it is the owner's request", async () => {
+		const h = harness();
+		const outcome = await new ModelChatResponder({ ...h.deps, open: openDeps(h) }).handle(incoming({ text: "handle the PR feedback" }));
+		assert.ok(outcome.answered);
+		const request = h.requests[0];
+		assert.deepEqual(request.tools, ["read", "write", "edit", "bash", "agent_status"]);
+		assert.equal(request.workspace, "/scratch/checkout");
+		assert.equal(request.instructions, "You are the tester, open.");
+		assert.deepEqual(request.budget, { maxTokens: 100_000, maxMinutes: 15 }, "the instruct budget, capped by what is left of the chat pool");
+		assert.match(request.instruction, /tier: open/);
+		assert.match(request.instruction, /owner's request to you/);
+		assert.match(request.instruction, /handle the PR feedback/);
+		assert.deepEqual(replies(h.posts), ["all fine"]);
+		assert.equal(h.jobs.length, 0, "no role job was started");
+	});
+
+	it("leaves a question from a person, and the instruct: prefix, on their own tiers", async () => {
+		const h = harness();
+		const responder = new ModelChatResponder({ ...h.deps, open: openDeps(h) });
+		await responder.handle(incoming({ text: "what can you do?", sender: HUMAN, conversationId: "conv_h" }));
+		assert.deepEqual(h.requests[0].tools, ["read", "agent_status"], "a person is answered read-only");
+		await responder.handle(incoming({ text: "instruct: do the thing", conversationId: "conv_i" }));
+		assert.equal(h.jobs.length, 1, "the prefix still runs the role's job");
+		assert.equal(h.requests.length, 1);
+	});
+
+	it("is off with CHAT_OPEN=0, and for a role that has no open tier", async () => {
+		const h = harness({}, { open: false });
+		await new ModelChatResponder({ ...h.deps, settings: { ...h.deps.settings, open: false }, open: openDeps(h) }).handle(incoming());
+		assert.deepEqual(h.requests[0].tools, ["read", "agent_status"]);
+		const g = harness();
+		await g.responder.handle(incoming());
+		assert.deepEqual(g.requests[0].tools, ["read", "agent_status"]);
+		assert.equal(resolveChatModel(undefined, { CHAT_OPEN: "0" }).open, false);
+		assert.equal(resolveChatModel({ open: false }, {}).open, false);
+		assert.equal(resolveChatModel({ open: false }, { CHAT_OPEN: "1" }).open, true);
+		assert.equal(resolveChatModel(undefined, {}).open, true);
+	});
+
+	it("puts a risky step to the owner in the chat and stops when the answer is no", async () => {
+		const h = harness();
+		let decided: unknown;
+		const runtime = {
+			async execute(_request: any, hooks: any) {
+				decided = await hooks.requestApproval({ tool: "bash", summary: "git push origin HEAD" });
+				return { status: "done" as const, answer: "stopped at the push", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 10, costUsd: 0 } };
+			},
+		};
+		const run = new ModelChatResponder({ ...h.deps, open: openDeps(h, { runtime }) }).handle(incoming());
+		while (!h.posts.some((post) => post.body.labels?.[CHAT_APPROVAL_REQUEST_LABEL] !== undefined)) await sleep(1);
+		const ask = h.posts.find((post) => post.body.labels?.[CHAT_APPROVAL_REQUEST_LABEL] !== undefined)!;
+		assert.deepEqual(ask.body.recipients, [MANAGER]);
+		assert.match(ask.body.content.data, /bash: git push origin HEAD/);
+		assert.ok(h.approvals.offer(incoming({ sender: MANAGER, text: "deny", labels: { [CHAT_APPROVAL_DECISION_LABEL]: ask.body.labels[CHAT_APPROVAL_REQUEST_LABEL] } }), ["agent/manager"]));
+		assert.ok((await run).answered);
+		assert.equal((decided as { approved: boolean }).approved, false);
+	});
+
+	it("waits for a free job slot instead of running beside a task, and counts its tokens in the chat pool", async () => {
+		const h = harness();
+		let release!: () => void;
+		const task = h.gate.run("task", () => new Promise<void>((resolve) => (release = resolve)), new AbortController().signal);
+		const run = new ModelChatResponder({ ...h.deps, open: openDeps(h, { gate: h.gate }) }).handle(incoming());
+		await sleep(150);
+		assert.equal(h.requests.length, 0, "not started while the task holds the slot");
+		assert.ok(replies(h.posts).some((text) => /busy with a task/.test(text)), "the owner is told it is queued");
+		release();
+		await task;
+		assert.ok((await run).answered);
+		assert.equal(h.requests.length, 1);
+		assert.ok(h.ledger.usage().chat.used >= 500);
+	});
+});
+
 describe("chat mode and settings from the environment", () => {
 	it("is the model unless the role says notice, and CHAT_MODE wins", () => {
 		assert.equal(resolveChatMode(undefined, {}), "model");

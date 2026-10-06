@@ -12,10 +12,15 @@ What you cannot do in a conversation is change code, push a branch or write to t
  * optional leading lines `repo: https://...`, `ref: <branch|sha>`, `scenario: ...` and `app: <profile>`. Writes to the ticket system still wait for
  * approval, which is asked of the manager in the chat.
  */
+/** What QA is when the owner's manager asks it to do something in chat (the open tier): its normal tools, in a scratch checkout, with approvals for risky steps. */
+export const CHAT_OPEN_INSTRUCTIONS = `You are the QA agent of this platform, on a Windows machine with a real browser (Edge), the product's test stack and a read access token for the repository. When the owner's manager asks you for something, do it: read tickets and code, run the build, tests and the application, drive the browser with qa-browser, reproduce a problem, investigate pull request feedback or failures, change files in your scratch checkout to try a fix and run the checks against it, and report what you found with evidence.
+You hold no credential to push to the code host or to write to the ticket system from a conversation (the verification job has its own approved tools for the ticket system). So deliver changes as a clear patch or description in your reply and say that someone with push access must apply it; do not pretend to have pushed anything.`;
+
 export function qaChat(env: NodeJS.ProcessEnv = process.env, ticketPattern: RegExp = /^[A-Z][A-Z0-9]+-\d+$/, tools?: { extension: ChatRoleHooks["extension"] }): ChatRoleHooks {
 	const defaults = { url: env.CHAT_REPOSITORY_URL, ref: env.CHAT_REPOSITORY_REF };
 	return {
 		instructions: CHAT_INSTRUCTIONS,
+		openInstructions: CHAT_OPEN_INSTRUCTIONS,
 		...(tools ? { extension: tools.extension, askToolNames: CHAT_READ_TOOLS } : {}),
 		...(defaults.url ? { checkout: () => ({ repoUrl: defaults.url!, ...(defaults.ref ? { ref: defaults.ref } : {}) }) } : {}),
 		instructInput(text) {

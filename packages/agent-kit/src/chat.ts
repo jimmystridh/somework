@@ -59,6 +59,13 @@ export interface ChatConfig {
 	senderWindowMs?: number;
 	/** A message older than this many milliseconds is not answered (default 5 minutes). */
 	maxAgeMs?: number;
+	/**
+	 * Default true. A message from an instructor (the manager, the owner's proxy) without the instruct prefix is carried out, not just answered:
+	 * the agent gets its role's normal tools (read, write, edit, bash and its own) in a scratch checkout and works on it, and a step that needs
+	 * approval (the approval patterns of the role) is put to the owner in the chat. `CHAT_OPEN=0` or `open: false` turns it off, so that only
+	 * questions are answered and only `instruct:` starts work.
+	 */
+	open?: boolean;
 	/** Default true. False turns the responder off for the role. */
 	autoReply?: boolean;
 	/** Replaces the default notice text. Must be deterministic and must not include anything the sender sent. */

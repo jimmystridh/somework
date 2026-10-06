@@ -143,7 +143,7 @@ services:
     user: "10003:10003"
     networks: [sandbox-net, outside]
     environment:
-      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com}
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,*.npmjs.org,pypi.org,files.pythonhosted.org,crates.io,static.crates.io,index.crates.io,docs.rs,api.nuget.org,*.nuget.org,repo.maven.apache.org,learn.microsoft.com,developer.mozilla.org,stackoverflow.com,*.stackexchange.com}
       EGRESS_PORTS: "443,80"
     mem_limit: 128m
     pids_limit: 64

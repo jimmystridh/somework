@@ -161,7 +161,7 @@ services:
     user: "10003:10003"
     networks: [sandbox-net, outside]
     environment:
-      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,*.npmjs.org,registry.yarnpkg.com,api.nuget.org,*.nuget.org}
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,*.npmjs.org,registry.yarnpkg.com,api.nuget.org,*.nuget.org,pypi.org,files.pythonhosted.org,crates.io,static.crates.io,index.crates.io,repo.maven.apache.org,rubygems.org,proxy.golang.org,sum.golang.org,osv.dev,api.osv.dev,nvd.nist.gov,services.nvd.nist.gov,www.cve.org,learn.microsoft.com,developer.mozilla.org,stackoverflow.com}
       EGRESS_PORTS: "443,80"
     mem_limit: 128m
     pids_limit: 64
