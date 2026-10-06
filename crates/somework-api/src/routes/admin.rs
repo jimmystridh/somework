@@ -28,6 +28,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/admin/maintenance", post(maintenance))
         .route("/v1/admin/signing-keys/rotate", post(rotate))
         .route("/v1/admin/overview", get(overview))
+        .route("/v1/admin/system", get(system_info))
         .route("/v1/admin/whoami", get(whoami))
         .route("/v1/admin/failpoints", post(failpoints))
 }
@@ -161,4 +162,8 @@ async fn failpoints(State(s): State<AppState>, Auth(ctx): Auth, Body(b): Body<Fa
         s.domain.failpoints.arm_from_spec(&b.spec);
     }
     ok(json!({"armed": b.spec}))
+}
+
+async fn system_info(State(s): State<AppState>, Auth(ctx): Auth) -> ApiResult {
+    ok(s.domain.system_info(&ctx).await?)
 }

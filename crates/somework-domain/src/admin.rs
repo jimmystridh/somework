@@ -1,5 +1,8 @@
 //! Policy management and operator overview.
 
+use std::sync::OnceLock;
+use std::time::Instant;
+
 use serde_json::{Value, json};
 use somework_core::{Error, ErrorCode};
 
@@ -7,8 +10,15 @@ use crate::{
     audit::AuditRecord,
     db::{DbResultExt, icol, scol},
     domain::{Ctx, Domain},
-    policy::{AuthzRequest, PolicyDocument},
+    policy::{AuthzRequest, Permissions, PolicyDocument},
 };
+
+static PROCESS_START: OnceLock<(Instant, String)> = OnceLock::new();
+
+/// Remembers when this process opened its first domain, for the uptime in [`Domain::system_info`]. Calling it again changes nothing.
+pub fn mark_process_start() {
+    PROCESS_START.get_or_init(|| (Instant::now(), somework_core::clock::ts(chrono::Utc::now())));
+}
 
 impl Domain {
     pub async fn db_healthy(&self) -> bool {
@@ -114,6 +124,40 @@ impl Domain {
             "policyVersion": policy.version,
             "matrixProfile": self.cfg.matrix_profile,
             "objectStore": self.object_store().map(|s| s.kind()).unwrap_or("none"),
+        }))
+    }
+
+    /// What an operator wants to know about the service itself: version, uptime, database size, schema and principal states.
+    /// Read-only and gated by `ops.read`; it holds no secret (principals appear by id, state and the side-effect ceiling of their grant).
+    pub async fn system_info(&self, ctx: &Ctx) -> Result<Value, Error> {
+        self.enforce_read(ctx, AuthzRequest::new("ops.read")).await?;
+        let pool = self.db.pool();
+        let page_count: i64 = sqlx::query_scalar("PRAGMA page_count").fetch_one(pool).await.db()?;
+        let page_size: i64 = sqlx::query_scalar("PRAGMA page_size").fetch_one(pool).await.db()?;
+        let free_pages: i64 = sqlx::query_scalar("PRAGMA freelist_count").fetch_one(pool).await.db()?;
+        let wal_bytes = std::fs::metadata(format!("{}-wal", self.cfg.database_path.display())).map(|m| m.len()).unwrap_or(0);
+        let migrations: Option<i64> = sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1").fetch_one(pool).await.ok();
+        let mut principals = Vec::new();
+        for r in sqlx::query("SELECT kind, external_id, status, permissions FROM principals WHERE domain_id = ? ORDER BY kind, external_id")
+            .bind(&self.cfg.domain_id)
+            .fetch_all(pool)
+            .await
+            .db()?
+        {
+            let ceiling = serde_json::from_str::<Permissions>(&scol(&r, "permissions"))
+                .map(|p| format!("{:?}", p.side_effects_max()).to_lowercase())
+                .unwrap_or_else(|_| "unknown".into());
+            principals.push(json!({"kind": scol(&r, "kind"), "id": scol(&r, "external_id"), "status": scol(&r, "status"), "sideEffectsCeiling": ceiling}));
+        }
+        let (started, started_at) = PROCESS_START.get().map(|(i, t)| (i.elapsed().as_secs(), t.clone())).unwrap_or((0, String::new()));
+        Ok(json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "domainId": self.cfg.domain_id,
+            "startedAt": started_at,
+            "uptimeSeconds": started,
+            "database": {"bytes": page_count * page_size, "freeBytes": free_pages * page_size, "walBytes": wal_bytes},
+            "migrationsApplied": migrations,
+            "principals": principals,
         }))
     }
 }

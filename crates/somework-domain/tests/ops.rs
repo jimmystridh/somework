@@ -246,3 +246,25 @@ async fn runtime_lifecycle_and_presence() {
     let seen = env.domain.list_runtimes(&env.admin_ctx().await, Some("agent/reviewer")).await.unwrap();
     assert_eq!(seen.len(), 2);
 }
+
+#[tokio::test]
+async fn system_info_reports_service_state_to_operators_only() {
+    let (env, worker, caller) = setup().await;
+    for agent in [&worker, &caller] {
+        let denied = env.domain.system_info(&env.ctx(agent).await).await.unwrap_err();
+        assert_eq!(denied.code, ErrorCode::PolicyDenied, "an ordinary agent may not read the operator view");
+    }
+    env.domain.update_principal(&env.admin_ctx().await, ActorKind::Agent, "agent/author", None, Some("disabled".into()), None).await.unwrap();
+    let info = env.domain.system_info(&env.admin_ctx().await).await.unwrap();
+    assert_eq!(info["version"], env!("CARGO_PKG_VERSION"));
+    assert!(info["database"]["bytes"].as_i64().unwrap() > 0);
+    assert!(info["migrationsApplied"].as_i64().unwrap() > 0);
+    assert!(info["uptimeSeconds"].is_u64());
+    let principals = info["principals"].as_array().unwrap();
+    let author = principals.iter().find(|p| p["id"] == "agent/author").unwrap();
+    assert_eq!(author["status"], "disabled");
+    assert_eq!(author["sideEffectsCeiling"], "read");
+    let reviewer = principals.iter().find(|p| p["id"] == "agent/reviewer").unwrap();
+    assert_eq!(reviewer["status"], "active");
+    assert!(!info.to_string().contains("publicKey"), "no key material is reported");
+}

@@ -161,6 +161,7 @@ impl Domain {
     }
 
     pub async fn open_with_clock(cfg: DomainConfig, clock: SharedClock) -> Result<Self, Error> {
+        crate::admin::mark_process_start();
         let db_existed = cfg.database_path.exists();
         let db = Db::open(
             &cfg.database_path,

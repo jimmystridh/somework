@@ -12,7 +12,7 @@ exactly three actions:
 
 | Action | Why |
 |---|---|
-| `ops.read` | `GET /v1/admin/overview`, `/v1/runtimes`, `/v1/admin/events`, `/v1/admin/outbox` |
+| `ops.read` | `GET /v1/admin/overview`, `GET /v1/admin/system` (version, uptime, database size, principal states and side-effect ceilings), `/v1/runtimes`, `/v1/admin/events`, `/v1/admin/outbox` |
 | `audit.read` | `GET /v1/admin/audit` (who submitted and who claimed a task, failure codes, lease expiries) and `/v1/admin/audit/verify` (hash chain) |
 | `catalog.read` (+ `discover: ["*"]`) | `GET /v1/catalog/entries` (approved cards, capabilities, availability) |
 
@@ -43,8 +43,9 @@ identifier or a number. Tests feed responses stuffed with content-bearing fields
 
 ## What it cannot show
 
-- Whether a principal is enabled and its side-effect level (needs `principal.manage`, which also allows changes).
-- Database size and backup age, domain version and uptime (not part of the domain API).
+- Backup age (the domain does not record it).
+- Until the dashboard reads `GET /v1/admin/system` (it needs only `ops.read`; added 2026-10-06 in the domain, not yet used by the dashboard): whether a
+  principal is enabled and its side-effect ceiling, database size, domain version and uptime.
 - JetStream storage use (only consumer lag is available through the metrics).
 
 ## Authentication wire format
