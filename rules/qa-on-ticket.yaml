@@ -1,10 +1,10 @@
 name: qa-on-ticket
-description: Verify a ticket in a browser when it enters Testing. qa.verify writes to the ticket system, so every firing waits for approval.
+description: Verify a ticket in a browser when it enters the Test status. qa.verify writes to the ticket system, so every firing waits for approval.
 owner: automation/qa-on-ticket
 selector: jira.issue.transitioned
 where:
   - path: /data/to
-    equals: Testing
+    equals: Test
 wake: false
 reaction:
   capability:

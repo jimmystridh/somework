@@ -11,7 +11,7 @@
       "project": "PROJ"
     },
     "from": "In Progress",
-    "to": "Testing",
+    "to": "Test",
     "actor": "j.doe",
     "repository": {
       "cloneUrl": "https://github.com/example-org/example-repo.git",

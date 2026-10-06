@@ -1,6 +1,6 @@
 # Rolling out the QA agent
 
-Nothing here has been run on the machine yet; `smoke.ts` has run on a Mac with a real Edge. Every command is PowerShell 5.1 (the default
+First rolled out 2026-10-06 (smoke 6/6 as the service account, a skipped-verdict task end to end, the `qa-on-ticket` reaction waiting for approval); the section "Found on the first rollout" lists what the steps below did not say. Every command is PowerShell 5.1 (the default
 SSH shell of Windows has **no** `&&` or `||`; chain with `;`, or put the steps in a script file and run it with `-File`). Paths below are
 the defaults of `install-service.ps1`; change them with its parameters. The account is `svc-qa`, the task `SomeWorkQa`, the health port
 8082, so the QA agent and the Windows developer can live side by side on one machine, though a machine of its own is the intended setup.
@@ -109,6 +109,24 @@ the ticket.
   write came; nothing was written. Check the status spelling of the workflow.
 * **Processes left behind.** The sweep stops what the account started during the job; check `Get-Process -IncludeUserName` for `svc-qa`
   between jobs.
+
+## Found on the first rollout
+* **Video recording needs Playwright's own ffmpeg**, a ~0.1 MiB download that `npm ci` does not make (the smoke test fails on the WebM check without it):
+  `$env:PLAYWRIGHT_BROWSERS_PATH='C:\somework\ms-playwright'; node C:\somework\agent\node_modules\playwright-core\cli.js install ffmpeg`, give the account `RX` on that
+  folder and set `PLAYWRIGHT_BROWSERS_PATH` as a machine variable (a task started afterwards sees it), then run `install-service.ps1 -SmokeAsService` again.
+* **A name in the firewall allow-list resolves to one pair of addresses per lookup, and big hosts rotate them** (GitHub answers .3 and .4 alternately, Cloudflare
+  hosts rotate through ranges). The refresh task only ever sees the current answer, so a clone failed with "could not connect" while the other address was current.
+  List the owner's published ranges as CIDR blocks next to the names (GitHub `140.82.112.0/20`, `185.199.108.0/22`, `192.30.252.0/22`; the Cloudflare ranges the model
+  hosts use). `firewall-allow.example.txt` shows the shape.
+* **Git for Windows checks certificate revocation through Schannel**, and the revocation servers are outside the allow-list: set
+  `git config --system http.schannelCheckRevoke false` on the machine (Node's own TLS does not check revocation).
+* **`setup\grant-control.ps1` (the local test stack of the application) needs `lib.ps1` beside it**: copy `C:\somework\qa-app\lib.ps1` into `setup\` first.
+* **The ticket-key gate runs after the workspace is prepared**, so even a `skipped` verdict needs a repository the account can clone (a private repository needs the git
+  token; an unreachable one fails the job as `job_error` before the gate).
+* **A SQL Server restore reads the backup as the SQL service account**: copy the `.BAK` files into the instance's own `Backup` folder (not a user or `C:\somework` folder).
+* **The status name is the workflow's**: `JIRA_TEST_STATUS` and the `qa-on-ticket` rule both use the status the ticket enters (`Test` in the pilot project, not `Testing`).
+* **A new agent's NATS login only works after the broker reloads its user list**; if the log shows "NATS wake unavailable: Authorization Violation" long after the
+  start, send the broker a reload (`docker kill -s HUP <broker container>`). Until then the agent polls over HTTP and still works.
 
 ## Operations
 * **Logs**: `C:\somework\logs\supervisor.log`, per run `agent-<stamp>.jsonl` (the agent's JSON log, stderr) and `.out.log`; kept two weeks.

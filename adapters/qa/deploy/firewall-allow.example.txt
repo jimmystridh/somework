@@ -7,6 +7,10 @@ auth.openai.com
 chatgpt.com
 github.com
 codeload.github.com
+# GitHub rotates the addresses behind its names: list its published ranges too
+140.82.112.0/20
+185.199.108.0/22
+192.30.252.0/22
 registry.npmjs.org
 # the ticket system's host (add the address of its certificate-authenticating gateway too, if that is a different name)
 jira.example.test
