@@ -14,6 +14,18 @@ describe("QA in chat", () => {
 		assert.ok(tools.includes("read") && tools.includes("bash"));
 	});
 
+	it("reads tickets and the repository in a conversation, and its standing orders say so", () => {
+		const withTools = qaChat({ CHAT_REPOSITORY_URL: "https://github.com/acme/app", CHAT_REPOSITORY_REF: "main" } as NodeJS.ProcessEnv, undefined, { extension: { name: "qa-jira", tools: [] } as any });
+		assert.deepEqual(askToolNames(profile.chat, withTools), ["read", "agent_status", "jira_get_issue", "jira_search", "jira_changelog", "jira_get_comments"]);
+		assert.deepEqual(withTools.checkout!(), { repoUrl: "https://github.com/acme/app", ref: "main" });
+		assert.equal(chat.checkout!()!.ref, undefined);
+		assert.equal(qaChat({} as NodeJS.ProcessEnv).checkout, undefined, "no repository configured: nothing to read");
+		assert.match(withTools.instructions!, /jira_get_issue/);
+		assert.doesNotMatch(withTools.instructions!, /you never change the checkout/);
+		assert.match(withTools.instructions!, /cannot do in a conversation is change code/);
+		for (const writer of ["jira_comment", "jira_attach", "jira_add_label", "jira_remove_label", "jira_transition_to_in_progress_and_reassign", "qa_record_verdict"]) assert.ok(!askToolNames(profile.chat, withTools).includes(writer), `${writer} stays out of chat`);
+	});
+
 	it("turns an instruction into a qa.verify task for the ticket it names", () => {
 		const planned = chat.instructInput!("repo: https://github.com/acme/web\nref: feature/x\nscenario: log in as admin\napp: shop\nverify ABC-123 please") as any;
 		assert.deepEqual(planned.capability, { id: "qa.verify", version: "1" });

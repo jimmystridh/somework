@@ -33,6 +33,8 @@ const MANAGER = { kind: "agent", id: "agent/manager" };
 const HUMAN = { kind: "human", id: "human/jimmy" };
 const STRANGER = { kind: "agent", id: "agent/stranger" };
 
+/** A person asking: the per-sender wait applies to askers; the manager (an instructor, the owner's proxy) is exempt, see below. */
+const askerIncoming = (over: Partial<InboundMessage> = {}): InboundMessage => incoming({ sender: HUMAN, ...over });
 const incoming = (over: Partial<InboundMessage> = {}): InboundMessage => ({
 	messageId: `msg_${Math.random().toString(36).slice(2, 8)}`,
 	type: "chat.message",
@@ -412,13 +414,23 @@ describe("who may talk to the agent, and what is not answered", () => {
 
 	it("allows one answer per sender and conversation per window, and a number per hour", async () => {
 		const h = harness({}, { senderWindowMs: 15_000, hourlyLimit: 2 });
-		await h.responder.handle(incoming());
-		const second = await h.responder.handle(incoming());
+		await h.responder.handle(askerIncoming());
+		const second = await h.responder.handle(askerIncoming());
 		assert.equal(!second.answered && second.reason, "rate_limited_sender");
-		await h.responder.handle(incoming({ conversationId: "conv_2" }));
-		const third = await h.responder.handle(incoming({ conversationId: "conv_3" }));
+		await h.responder.handle(askerIncoming({ conversationId: "conv_2" }));
+		const third = await h.responder.handle(askerIncoming({ conversationId: "conv_3" }));
 		assert.equal(!third.answered && third.reason, "rate_limited_total");
 		assert.equal(h.requests.length, 2);
+	});
+
+	it("does not make the manager wait between messages, but still counts them against the hourly cap", async () => {
+		const h = harness({}, { senderWindowMs: 15_000, hourlyLimit: 3 });
+		const first = await h.responder.handle(incoming());
+		const second = await h.responder.handle(incoming());
+		assert.ok(first.answered && second.answered, "a follow-up from the manager is answered at once");
+		await h.responder.handle(incoming());
+		const fourth = await h.responder.handle(incoming());
+		assert.equal(!fourth.answered && fourth.reason, "rate_limited_total");
 	});
 
 	it("reads the text from the domain when the message does not carry it", async () => {
@@ -433,7 +445,7 @@ describe("a message that comes too soon", () => {
 
 	it("gets one deterministic notice per window, labelled autoReply, that wakes nobody, and never a second in the same window", async () => {
 		const clock = { now: T0 };
-		const h = harness({ now: () => clock.now }, { senderWindowMs: 15_000 });
+		const h = harness({ now: () => clock.now }, { senderWindowMs: 15_000, instructors: [] });
 		await h.responder.handle(incoming({ messageId: "first", createdAt: new Date(T0 - 500).toISOString() }));
 		clock.now = T0 + 4_000;
 		const second = await h.responder.handle(incoming({ messageId: "second", createdAt: new Date(T0 + 3_500).toISOString() }));
@@ -455,7 +467,7 @@ describe("a message that comes too soon", () => {
 
 	it("tells the next window's early message again, and another sender or conversation separately", async () => {
 		const clock = { now: T0 };
-		const h = harness({ now: () => clock.now }, { senderWindowMs: 15_000 });
+		const h = harness({ now: () => clock.now }, { senderWindowMs: 15_000, instructors: [] });
 		const send = (id: string, over: Partial<InboundMessage> = {}) => h.responder.handle(incoming({ messageId: id, createdAt: new Date(clock.now - 200).toISOString(), ...over }));
 		await send("a1");
 		clock.now += 1_000;
@@ -474,7 +486,7 @@ describe("a message that comes too soon", () => {
 
 	it("says so when the previous message was still being worked on, and still never answers notices or its own messages", async () => {
 		const clock = { now: T0 };
-		const h = harness({ now: () => clock.now }, { senderWindowMs: 15_000 });
+		const h = harness({ now: () => clock.now }, { senderWindowMs: 15_000, instructors: [] });
 		let free!: () => void;
 		const blocker = new Promise<void>((resolve) => (free = resolve));
 		const original = h.runtime.execute.bind(h.runtime);

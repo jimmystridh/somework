@@ -45,6 +45,20 @@ test("/ask sends a direct chat message to the right agent and says it is waiting
 	assert.deepEqual(b.chats.waiting().map((w) => w.agent), ["agent/reviewer"]);
 });
 
+test("/do sends the text as an instruction, once, and /ask leaves a text alone", async () => {
+	const b = withChat();
+	await say(b, "/do qa verify ABC-123 on the test app");
+	await say(b, "/do reviewer instruct: look at PR 5");
+	await say(b, "/ask qa verify ABC-123");
+	assert.deepEqual(b.domain.sentMessages.map((m) => [m.to, m.text]), [
+		["agent/qa", "instruct: verify ABC-123 on the test app"],
+		["agent/reviewer", "instruct: look at PR 5"],
+		["agent/qa", "verify ABC-123"],
+	]);
+	await say(b, "/do qa");
+	assert.ok(b.telegram.texts().at(-1)!.includes("Usage: /do <agent>"));
+});
+
 test("an unknown agent, no text and a stranger send nothing", async () => {
 	const b = withChat();
 	await say(b, "/ask nobody hello");

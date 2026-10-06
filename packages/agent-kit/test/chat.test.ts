@@ -59,6 +59,15 @@ describe("how often", () => {
 		assert.equal(decideReply(message({ createdAt: new Date(now - 1000).toISOString() }), state({ limiter, now })).reply, true, "the window passed");
 	});
 
+	it("lets a trusted sender follow up at once, but keeps the hourly cap for everyone", () => {
+		const limiter = new ReplyLimiter(10 * 60_000, 2);
+		limiter.record("agent/manager", "conv_1", T0);
+		assert.deepEqual(limiter.check("agent/manager", "conv_1", T0 + 1000), { ok: false, reason: "rate_limited_sender" });
+		assert.deepEqual(limiter.check("agent/manager", "conv_1", T0 + 1000, true), { ok: true });
+		limiter.record("agent/manager", "conv_1", T0 + 2000);
+		assert.deepEqual(limiter.check("agent/manager", "conv_1", T0 + 3000, true), { ok: false, reason: "rate_limited_total" });
+	});
+
 	it("treats another sender or another conversation separately", () => {
 		const limiter = new ReplyLimiter();
 		limiter.record("agent/requester", "conv_1", T0);

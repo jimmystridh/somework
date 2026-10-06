@@ -12,7 +12,7 @@ import { isPrivateUserMessage, textChunks, validPairing, type TelegramApi } from
 
 const HELP = [
 	"Ordinary messages go to the Manager (Pi in /workspace). It can find and use the other agents, and asks you before anything that writes.",
-	"Chat with an agent: /ask <agent> <text> (the name may be short, like reviewer); its answer arrives here, and you are told if none comes in 3 minutes. 30 messages per hour, 2000 characters each.",
+	"Chat with an agent: /ask <agent> <text> (the name may be short, like reviewer); its answer arrives here, and you are told if none comes in 3 minutes. 30 messages per hour, 2000 characters each. /do <agent> <text> is the same but makes the agent do the work (it sends instruct: for you).",
 	"Commands: /agents, /tasks, /pending, /approve <id>, /deny <id>, /approvals, /answer <taskId> <text>, /cancel <taskId>, /status, /stop, /workspace, /help.",
 	"Instructions: a message to an agent that starts with instruct: (/ask reviewer instruct: ...) makes it do work; when it needs your approval for a step you get a question here and answer with /chatapprove <id> or /chatdeny <id>.",
 	"Events: /rules, /pause <rule>, /resume <rule>, /sources, /pausesource <source>, /resumesource <source>, /handlers <agent>, /kill <agent> <handler|all> [reason], /unkill <agent> <handler|all>.",
@@ -306,12 +306,15 @@ export class TelegramBridge implements Owner {
 					}
 				});
 			case "/ask":
+			case "/do":
 				return this.needService(say, async (service) => {
 					const [agent, ...words] = rest;
-					if (!agent || words.length === 0) return say("Usage: /ask <agent> <text>, for example /ask reviewer what can you do?");
+					const work = name.toLowerCase() === "/do";
+					if (!agent || words.length === 0) return say(work ? "Usage: /do <agent> <what to do>, for example /do qa verify ABC-123" : "Usage: /ask <agent> <text>, for example /ask reviewer what can you do?");
 					try {
-						// the service tells the owner "sent, waiting for a reply" itself, so the same text comes from /ask and from the tool
-						await service.ask({ agent, text: words.join(" ") });
+						// the service tells the owner "sent, waiting for a reply" itself, so the same text comes from /ask and from the tool; /do is /ask with the instruct: marker that makes the agent work instead of answer
+						const text = words.join(" ");
+						await service.ask({ agent, text: work && !/^instruct:/i.test(text) ? `instruct: ${text}` : text });
 					} catch (error) {
 						await say(error instanceof PolicyError ? error.message : `Could not send: ${error instanceof Error ? clip(defang(error.message), 200) : "error"}`);
 					}

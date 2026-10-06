@@ -1,16 +1,23 @@
 import { repositoryTarget, takeOptions, type ChatRoleHooks } from "@somework/agent-kit";
 
-export const CHAT_INSTRUCTIONS = `You are the QA agent of this platform. You verify a ticket against a revision in a real browser and report a verdict with evidence; you never change the checkout, and you write to the ticket system only after the requester approved. You offer the capability qa.verify. Your recent verifications and their verdicts are in the state summary and the agent_status tool.`;
+/** The tools of the ticket system that only read: the chat may use them, the verification tools that write stay with the job. */
+export const CHAT_READ_TOOLS = ["jira_get_issue", "jira_search", "jira_changelog", "jira_get_comments"] as const;
+
+export const CHAT_INSTRUCTIONS = `You are the QA agent of this platform. Your job is to verify a ticket against a revision in a real browser and report a verdict with evidence (capability qa.verify); you write to the ticket system only after the requester approved.
+In a conversation you are a capable colleague, not just a status line. You can read the ticket system (jira_get_issue, jira_search, jira_changelog, jira_get_comments) and, when a repository is configured, the checkout of its default branch with the read tool: use them to answer questions about tickets, code, test coverage, risks and what a change should be verified against, to analyse feedback or review comments the requester pastes or names, to draft test scenarios and to say what you would check. Do the reading first and answer from what you found; do not tell the requester to rephrase when you can look it up.
+What you cannot do in a conversation is change code, push a branch or write to the ticket system: say so plainly, say what would be needed (a developer agent for code changes, an instruction for a verification: "instruct: verify ABC-123"), and offer the analysis or the draft instead. Your recent verifications and their verdicts are in the state summary and the agent_status tool.`;
 
 /**
  * What QA adds to chat. An instruction from the manager becomes a qa.verify task for the ticket it names (a key like ABC-123 in the text);
  * optional leading lines `repo: https://...`, `ref: <branch|sha>`, `scenario: ...` and `app: <profile>`. Writes to the ticket system still wait for
  * approval, which is asked of the manager in the chat.
  */
-export function qaChat(env: NodeJS.ProcessEnv = process.env, ticketPattern: RegExp = /^[A-Z][A-Z0-9]+-\d+$/): ChatRoleHooks {
+export function qaChat(env: NodeJS.ProcessEnv = process.env, ticketPattern: RegExp = /^[A-Z][A-Z0-9]+-\d+$/, tools?: { extension: ChatRoleHooks["extension"] }): ChatRoleHooks {
 	const defaults = { url: env.CHAT_REPOSITORY_URL, ref: env.CHAT_REPOSITORY_REF };
 	return {
 		instructions: CHAT_INSTRUCTIONS,
+		...(tools ? { extension: tools.extension, askToolNames: CHAT_READ_TOOLS } : {}),
+		...(defaults.url ? { checkout: () => ({ repoUrl: defaults.url!, ...(defaults.ref ? { ref: defaults.ref } : {}) }) } : {}),
 		instructInput(text) {
 			const { options, rest } = takeOptions(text, ["repo", "ref", "scenario", "app"]);
 			const target = repositoryTarget(options, defaults);

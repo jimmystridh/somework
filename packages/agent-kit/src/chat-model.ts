@@ -551,7 +551,7 @@ export class ModelChatResponder {
 		const allowed = instructor || senderMatches(settings.askers, message.sender);
 		log("info", "chat_received", { from: message.sender.id, kind: message.sender.kind, conversationId: message.conversationId, allowed, instructor });
 		if (!allowed) return this.#refuse(message, "sender_not_allowed", "I answer chat from the manager and from people only. Submit a task for one of my capabilities instead.");
-		const limit = this.#limiter.check(message.sender.id, message.conversationId, now);
+		const limit = this.#limiter.check(message.sender.id, message.conversationId, now, instructor);
 		if (!limit.ok) {
 			if (limit.reason === "rate_limited_sender") await this.#slowDown(message, now, stillWorking);
 			return this.#refuse(message, limit.reason);

@@ -40,7 +40,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 	});
 	return {
 		...hooks,
-		chat: qaChat(context.env, settings.ticketPattern),
+		chat: qaChat(context.env, settings.ticketPattern, tools),
 		...execution,
 		readinessChecks: {
 			...execution.readinessChecks,

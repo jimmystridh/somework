@@ -105,10 +105,11 @@ export class ReplyLimiter {
 		this.#hourly = hourly;
 	}
 
-	check(sender: string, conversationId: string | undefined, now: number): { ok: true } | { ok: false; reason: string } {
+	/** `trusted` skips the per-sender wait (the owner's proxy may follow up at once); the hourly cap still applies. */
+	check(sender: string, conversationId: string | undefined, now: number, trusted = false): { ok: true } | { ok: false; reason: string } {
 		this.#forget(now);
 		const last = this.#perSender.get(key(sender, conversationId));
-		if (last !== undefined && now - last < this.#windowMs) return { ok: false, reason: "rate_limited_sender" };
+		if (!trusted && last !== undefined && now - last < this.#windowMs) return { ok: false, reason: "rate_limited_sender" };
 		if (this.#sent.length >= this.#hourly) return { ok: false, reason: "rate_limited_total" };
 		return { ok: true };
 	}
