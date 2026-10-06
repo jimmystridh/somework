@@ -60,6 +60,7 @@ All agents connect outward only. The domain never calls an agent.
 | Reviewer | `code.review` | agents VM, read-only | its own read-only repository token, code-host-only egress proxy |
 | QA | `qa.verify` | Windows machine | role built, not deployed (needs the product's web database restored) |
 | Manager | none (requester) | agents VM | Telegram front; approvals, rule and source controls, event forwarding without a model |
+| Aikido fixer, Datadog triage | `code.fix`, `ops.triage` | agents VM, container sandbox | built, not deployed; started by events; the triage agent works on no repository, reads Datadog through host-side read-only tools and analyses saved results with python3 in a sandbox without network |
 
 Each agent has its own identity, key, model login and (where needed) its own scoped repository token. Budgets are mandatory per job; a daily ledger refuses jobs it cannot cover.
 

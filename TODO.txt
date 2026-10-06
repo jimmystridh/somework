@@ -190,6 +190,17 @@ AIKIDO FIXER (adapters/aikido-fixer, code.fix v1; built and tested, NOT deployed
 - Handler tools are locked for this role (they need an approval that is always refused): changing the handler is an operator action.
 - The dashboard does not know its health port yet (8083); add it to agents-health.json when the host allows it.
 
+DATADOG TRIAGE (adapters/datadog-triage, ops.triage v1; built and tested, NOT deployed)
+- Needs from the owner: a Datadog API key + application key with read scopes only (monitors_read, logs_read_data, timeseries_query, events_read,
+  incident_read; steps in deploy/README.md), a model login of its own (device code), enrolment `--side-effects read --may-invoke ops.triage` and a
+  manual SIGHUP of the NATS broker, then move the held rule (deploy/rules/datadog-triage.yaml) into rules/. No repository, no code-host token. Health port 8084 (the dashboard does not know it yet).
+- Unverified against Datadog (no web access when built, never contacted live): the scope names and the endpoints. A 403 names the missing scope.
+- The webhook template must carry `priority` and `tags` for the priority and tag filters to mean anything.
+- The sandbox image (developer sandbox + python3, Dockerfile target `sandbox`) and the compose file were checked by tests that read the files;
+  neither was built or started with Docker. The command policy is a screen over a shell parse, not a proof: the sandbox (no credentials, no
+  network) is the boundary.
+- Kit: `profile.noRepository` is new. The kit's `observe` module is not enabled here (chat.ts says where it would plug in).
+
 --------------------------------------------------------------------------------------
 6. MANAGER AGENT (Telegram)
 --------------------------------------------------------------------------------------

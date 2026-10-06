@@ -12,6 +12,7 @@ Five agents that cooperate through SomeWork. This document fixes how they are bu
 | **Reviewer** | agent Docker host | `code.review` v3 | Read-only review of a PR/ref against the ticket and repository rules; produces findings, never writes to the host or repo unless the Manager approves a posted review. |
 | **QA** | machine with a browser and network reach to the test backend | `qa.verify` v1 | Verifies a ticket against a revision in a real browser; returns a verdict plus evidence artifacts. |
 | **Aikido fixer** | agent Docker host (Linux, sandboxed) | `code.fix` v1 | Listens to Aikido events, keeps a fresh mirror of one repository, attempts the smallest fix of a reported security issue and opens a PR; built, not deployed (`adapters/aikido-fixer`). |
+| **Datadog triage** | agent Docker host (Linux, sandboxed, no repository) | `ops.triage` v1 | Listens to Datadog monitor alerts, investigates through read-only Datadog tools and python3 over saved results in a network-less sandbox, and sends the owner one structured diagnosis; built, not deployed (`adapters/datadog-triage`). |
 
 ## The question: how is code shared?
 
@@ -30,6 +31,7 @@ adapters/windows-developer  card.json + profile + main.ts + deploy/        (live
 adapters/reviewer         card.json + profile + main.ts + deploy/          (live)
 adapters/qa               card.json + profile + main.ts + deploy/          (built, not deployed)
 adapters/aikido-fixer     card.json + profile + hooks + a read-only Aikido tool + a shipped event handler + deploy/ (built, not deployed)
+adapters/datadog-triage   card.json + profile + hooks + six read-only Datadog tools + a command policy + a shipped event handler + deploy/ (built, not deployed)
 adapters/manager          Telegram bridge + gateway + Pi extension (a requester: uses the SDK only; live)
 packages/events-receiver  public-edge webhook receiver (no dependencies)
 packages/events-hub       private-side hub: mappings, clock, publishing, forwarding
@@ -97,6 +99,9 @@ same capability id; agents that differ in a way that matters (Windows vs Linux) 
 ### Aikido fixer (built, not deployed)
 `code.fix` v1 on the same kit and git protocol as the developer, started by events instead of a requester: the rule `rules/aikido-fixer.yaml` wakes it for `aikido.*` events, its shipped handler turns an eligible issue into one task for itself, and the task works in a fresh clone (from a persistent mirror) at the resolved commit of the default branch. It reads the issue through a host-side, read-only Aikido client, refuses protected paths, secret-like text, oversized changes and a failing check profile, and opens a pull request (a real one by default, a draft with `GIT_PR_DRAFT=1`) on `agent/aikido-<issue>-<sha>`. Approval requests are refused (nobody answers for it). Limits are enforced twice: by the handler in the sandbox as an early filter and by a ledger on the service host as the authority. See `adapters/aikido-fixer/README.md`.
 
+### Datadog triage (built, not deployed)
+`ops.triage` v1 (side effects `read`), started by events like the fixer: the rule `datadog-triage` wakes it for `datadog.monitor.*` events (the file is held in `adapters/datadog-triage/deploy/rules/` and moves to `rules/` when the agent is enrolled, because the rules pipeline refuses a rule whose owner does not exist; the existing `alert-datadog-to-manager` rule stays), its shipped handler turns an eligible alert into one task for itself, and the task works on no repository (`profile.noRepository` in the kit: an empty scratch directory). The model reads Datadog through six read-only tools that run in the service, where the keys are (monitor, monitor search, logs, metrics, events, incidents); `save: true` writes the full redacted result into `data/` in the workspace, and `python3` (standard library), `jq` and a few text tools in a sandbox with **no credentials and no network** (its own image: the developer sandbox plus python3; no egress proxy) analyse it under a command policy (anything else, including any approval, is refused). The answer is one json diagnosis (severity, summary, suspected cause with confidence, timeline, evidence, actions); the service checks that every finding cites a tool call or is marked inference, allows one repair turn, and sends the owner one deterministic notice (at most 1500 characters, secrets and links stripped, the monitor link built by the service) to `agent/manager`. Limits are enforced twice, like the fixer's: handler early filter, host ledger as the authority. See `adapters/datadog-triage/README.md`.
+
 ### Manager (live)
 Existing Telegram bridge (owner pairing, private chat only) retrofitted: SomeWork identity `agent/manager` held by the bridge, a narrow
 local gateway that the Pi process reaches through tools (catalog, submit, task, cancel, message, inbox). Write-side-effect submissions
@@ -150,6 +155,7 @@ deterministic notice). Two tiers, decided by who sent it and by an explicit pref
 | Windows developer | none | a `code.windows` task (`repo:`, `ref:`, `build:`, `tests:` as named profiles), in the confined environment |
 | QA | none | a `qa.verify` task for the ticket named in the text (`repo:`, `ref:`, `scenario:`, `app:`); ticket writes still need approval |
 | Aikido fixer | `fixer_status` (attempts, limits, outcomes), `aikido_lookup` (one issue by id) | a `code.fix` task for "fix issue N" on its configured repository, through the same eligibility, daily cap, attempt limits and guards; approvals stay refused |
+| Datadog triage | the six Datadog read tools (no bash, no python); the state summary has today's triages and the recent outcomes | an `ops.triage` task for "triage monitor N" (optional `window:` line), with the same tools, command policy and limits as an event's task (bash and python3 in the sandbox); approvals stay refused |
 | Manager | n/a | the Manager is the instructor: `/ask <agent> instruct: ...` sends it, `/chatapprove <id>` and `/chatdeny <id>` answer the agent's approval questions |
 
 The chat has its own `chat` token pool (a tenth of the daily limit by default), shares job slots with tasks (tasks first, nothing
