@@ -12,6 +12,7 @@ import { FileCredentialStore } from "./credentials.ts";
 import { createEventsComponent } from "./events/component.ts";
 import { resolveEvents } from "./events/config.ts";
 import { JobGate } from "./gate.ts";
+import { GitHubAppCredentials } from "./github-app.ts";
 import { prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
 import { createHandler, type HandlerDeps } from "./handler.ts";
@@ -74,12 +75,25 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const identity = Identity.fromFile(config.somework.keyFile);
 			const client = new SomeWorkClient({ baseUrl: config.somework.url, identity, caFile: config.somework.caFile, requireTls: config.somework.requireTls });
 
-			const gitToken = config.git.tokenFile ? read(config.git.tokenFile) : undefined;
+			const gitApp = config.git.app
+				? new GitHubAppCredentials({ appId: config.git.app.appId, privateKeyPem: read(config.git.app.keyFile), installationId: config.git.app.installationId, repositories: config.git.app.repositories, apiBase: config.git.githubApi })
+				: undefined;
+			const gitTokenSource = gitApp ? () => gitApp.token() : undefined;
+			// minted once at start so a wrong key or installation stops the service here and not in the middle of a task
+			const gitToken = gitApp ? await gitApp.token() : config.git.tokenFile ? read(config.git.tokenFile) : undefined;
+			let gitIdentity = { name: config.git.authorName, email: config.git.authorEmail };
+			if (gitApp && config.git.authorFromApp) {
+				try {
+					gitIdentity = await gitApp.identity();
+				} catch (error) {
+					log("warn", "git_app_identity_failed", { error: error instanceof Error ? error.message : String(error) });
+				}
+			}
 			const chatSettings = resolveChatMode(profile.chat, env) === "model" ? resolveChatModel(profile.chat, env) : undefined;
 			// the client the role's code and the task handler use: an instruction given in chat is a job the domain has no task for, so its uploads are kept on this host instead
 			const chatArtifacts = chatSettings ? new ChatArtifacts({ dir: join(config.state.dir, "chat-artifacts"), log }) : undefined;
 			const taskClient = chatArtifacts ? chatArtifacts.wrap(client) : client;
-			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken }) : (options.hooks ?? {});
+			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, gitTokenSource }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
@@ -141,8 +155,9 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const session: GitSession = {
 				env: envFor(config.sandbox.workspaceRoot),
 				token: gitToken,
+				...(gitTokenSource ? { tokenSource: gitTokenSource } : {}),
 				tokenHosts: config.git.tokenHosts,
-				identity: { name: config.git.authorName, email: config.git.authorEmail },
+				identity: gitIdentity,
 				...(config.git.mirror ? { mirrorDir: config.git.mirror.dir } : {}),
 			};
 			const taskRuntime = hooks.wrapRuntime ? hooks.wrapRuntime(runtime) : runtime;
@@ -150,7 +165,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				runtime: taskRuntime,
 				envFor,
 				session,
-				host: gitToken ? new GitHubHost({ token: gitToken, apiBase: config.git.githubApi, draft: config.git.draftPullRequests }) : noPullRequests,
+				host: gitToken ? new GitHubHost({ token: gitTokenSource ?? gitToken, apiBase: config.git.githubApi, draft: config.git.draftPullRequests }) : noPullRequests,
 				workspaceRoot: config.sandbox.workspaceRoot,
 				client: taskClient,
 				limits: config.limits,

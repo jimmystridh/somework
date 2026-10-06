@@ -10,7 +10,7 @@ export interface ReviewerOptions {
 	client: Pick<SomeWorkClient, "uploadArtifact">;
 	log?: Log;
 	/** Optional read-only access to the code host for the pull request context. Without it the review is of the ref alone. */
-	github?: { token: string; apiBase?: string; tokenHosts?: string[]; fetch?: typeof fetch };
+	github?: { token: string; /** A live token for each call (a GitHub App's tokens expire); `token` is then the first one. */ tokenSource?: () => Promise<string>; apiBase?: string; tokenHosts?: string[]; fetch?: typeof fetch };
 }
 
 const MAX_RAW_ARTIFACT = 256 * 1024;
@@ -33,7 +33,8 @@ export function createReviewerHooks(options: ReviewerOptions): RoleHooks {
 		async prepareInput(input, { taskId }) {
 			if (!github || !Number.isInteger(input.pullRequest) || input.pullRequest < 1 || typeof input.repository?.url !== "string") return input;
 			try {
-				const context = await fetchPullRequestContext({ repoUrl: input.repository.url, pullRequest: input.pullRequest, ...github });
+				const token = github.tokenSource ? await github.tokenSource() : github.token;
+				const context = await fetchPullRequestContext({ repoUrl: input.repository.url, pullRequest: input.pullRequest, ...github, token });
 				return context ? { ...input, [CONTEXT_KEY]: context } : input;
 			} catch (error) {
 				log("warn", "pr_context_failed", { taskId, error: scrub(error instanceof Error ? error.message : String(error), github.token) });
@@ -86,6 +87,6 @@ export const reviewerHooksFor = (context: ServiceContext): RoleHooks => ({
 		client: context.client,
 		log: context.log,
 		// one read-only token serves the clone and the pull request context; the kit never sends it to a host outside GIT_TOKEN_HOSTS
-		github: context.gitToken ? { token: context.gitToken, apiBase: context.config.git.githubApi, tokenHosts: context.config.git.tokenHosts } : undefined,
+		github: context.gitToken ? { token: context.gitToken, tokenSource: context.gitTokenSource, apiBase: context.config.git.githubApi, tokenHosts: context.config.git.tokenHosts } : undefined,
 	}),
 });

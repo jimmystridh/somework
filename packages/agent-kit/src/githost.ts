@@ -25,12 +25,12 @@ export const isGitHubRepo = (repoUrl: string): boolean => /github\.com[/:][^/]+\
 
 /** GitHub REST. Not exercised against the real API in this repository's tests (needs a token); unit-tested against a stand-in server. */
 export class GitHubHost implements GitHost {
-	readonly #token: string;
+	readonly #token: string | (() => Promise<string>);
 	readonly #apiBase: string;
 	readonly #fetch: typeof fetch;
 	readonly #draft: boolean;
 
-	constructor(options: { token: string; apiBase?: string; draft?: boolean; fetch?: typeof fetch }) {
+	constructor(options: { token: string | (() => Promise<string>); apiBase?: string; draft?: boolean; fetch?: typeof fetch }) {
 		this.#token = options.token;
 		this.#draft = options.draft ?? false;
 		this.#apiBase = (options.apiBase || "https://api.github.com").replace(/\/$/, "");
@@ -38,9 +38,10 @@ export class GitHubHost implements GitHost {
 	}
 
 	async #call(method: string, path: string, body?: unknown): Promise<any> {
+		const token = typeof this.#token === "function" ? await this.#token() : this.#token;
 		const response = await this.#fetch(`${this.#apiBase}${path}`, {
 			method,
-			headers: { authorization: `Bearer ${this.#token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", ...(body ? { "content-type": "application/json" } : {}) },
+			headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", ...(body ? { "content-type": "application/json" } : {}) },
 			body: body ? JSON.stringify(body) : undefined,
 		});
 		if (!response.ok) throw new Error(`GitHub ${method} ${path} answered ${response.status}`);

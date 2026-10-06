@@ -50,6 +50,10 @@ services:
       SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
       SANDBOX_WORKSPACES: /workspace
       GIT_TOKEN_FILE: /run/secrets/git-token                # fine-grained, ONE repository: Contents + Pull requests write
+      # A GitHub App instead of the token file (packages/agent-kit/README.md, "GitHub App identity"): remove GIT_TOKEN_FILE, mount the key, set these.
+      # GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      # GITHUB_APP_KEY_FILE: /run/secrets/github-app.pem
+      # GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
       GIT_TOKEN_HOSTS: ${GIT_TOKEN_HOSTS:-github.com}       # the only hosts the token may ever be sent to
       GITHUB_API: ${GITHUB_API:-}                           # only for a GitHub Enterprise API
       GIT_PR_DRAFT: ${GIT_PR_DRAFT:-0}                      # 0 = real pull requests (default), 1 = drafts; either way only agent/* branches, never merged

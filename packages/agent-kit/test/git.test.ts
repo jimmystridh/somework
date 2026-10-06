@@ -106,4 +106,17 @@ describe("git workflow", () => {
 			(error: unknown) => error instanceof GitError && !error.message.includes(secret),
 		);
 	});
+	it("asks the token source before authenticated commands and scrubs whatever it returned", async () => {
+		const workspace = workspaceFor(join(root, "ws"), "repo#6");
+		let asked = 0;
+		const withSource: GitSession = { ...session, tokenSource: async () => `ghs_rotating_${++asked}` };
+		await prepareWorkspace(withSource, params("task_G", workspace));
+		assert.ok(asked > 0, "the source was used");
+		assert.equal(withSource.token, `ghs_rotating_${asked}`, "the latest token is kept for scrubbing");
+		const failing: GitSession = { ...session, tokenSource: async () => "ghs_rotating_secret" };
+		await assert.rejects(
+			() => prepareWorkspace(failing, { repoUrl: "https://ghs_rotating_secret@127.0.0.1:1/nope.git", ref: "main", taskId: "task_H", workspace: workspaceFor(join(root, "ws"), "repo#7") }),
+			(error: unknown) => error instanceof GitError && !error.message.includes("ghs_rotating_secret"),
+		);
+	});
 });

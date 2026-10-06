@@ -15,6 +15,8 @@ export interface GitSession {
 	env: ExecutionEnv;
 	/** Repository access token. It is passed only to the commands that need it, while no model tool is running. */
 	token?: string;
+	/** Supplies a live token before every authenticated command (a GitHub App's installation tokens last an hour). It also refreshes `token`. */
+	tokenSource?: () => Promise<string>;
 	/** Hosts the token may be sent to (the credential helper refuses every other host, including redirect targets). */
 	tokenHosts?: string[];
 	identity: GitIdentity;
@@ -59,6 +61,7 @@ async function git(session: GitSession, cwd: string, args: string[], options: { 
 		GIT_COMMITTER_NAME: session.identity.name,
 		GIT_COMMITTER_EMAIL: session.identity.email,
 	};
+	if (options.auth && session.tokenSource) session.token = await session.tokenSource();
 	if (options.auth && session.token) {
 		env.GIT_TOKEN = session.token;
 		env.GIT_TOKEN_HOSTS = (session.tokenHosts ?? DEFAULT_TOKEN_HOSTS).join(" ");

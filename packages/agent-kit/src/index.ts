@@ -8,6 +8,7 @@ export * from "./events/index.ts";
 export * from "./gate.ts";
 export * from "./git.ts";
 export * from "./githost.ts";
+export * from "./github-app.ts";
 export * from "./handler.ts";
 export * from "./health.ts";
 export * from "./journal.ts";

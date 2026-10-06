@@ -182,6 +182,19 @@ Aikido fixer takes its repository from `AIKIDO_REPOSITORY_URL`. Logs: `chat_rece
 `chat_instruction_refused`, `chat_approval_*`; counters `somework_chat_model_total{result,reason}`, `somework_chat_tokens_total{tier}`,
 `somework_chat_instructions_total{outcome}`. `/status` of the health endpoint shows the chat mode, askers and instructors and the `chat` pool.
 
+## GitHub App identity instead of a personal token
+
+By default a role pushes and opens pull requests with a fine-grained personal access token (`GIT_TOKEN_FILE`): everything it does shows up as the token's owner. A role can use a GitHub App instead, and then its commits, pushes and pull requests are made by `<app name>[bot]`.
+
+| Variable | Meaning |
+| --- | --- |
+| `GITHUB_APP_ID` | the app's numeric id; with `GITHUB_APP_KEY_FILE` it replaces `GIT_TOKEN_FILE` (both set is an error) |
+| `GITHUB_APP_KEY_FILE` | the app's private key (PEM), a 0600 secret file of this role only |
+| `GITHUB_APP_INSTALLATION_ID` | needed when the app is installed more than once; with one installation it is found by itself |
+| `GITHUB_APP_REPOSITORIES` | optional repository names the minted token is narrowed to, within what the installation allows |
+
+The service signs a ten-minute JWT with the key, exchanges it for an installation token (one hour, limited to the installation's repositories and permissions), keeps it, and mints a new one five minutes before it expires; every git command and pull request call asks for a live one, so a long task never meets an expired token. The first token is minted at start, so a wrong key or installation stops the service there. Unless `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` is set, the commit author becomes the app's bot account with its noreply address (GitHub then shows the bot as the author). The token still only goes to `GIT_TOKEN_HOSTS`, through the credential helper, and is scrubbed from git output. Roles that hand the token to their own code (the reviewer's pull request context) receive `ServiceContext.gitTokenSource`. One app per role keeps the permissions separate: developer, fixer and Windows developer need Contents and Pull requests write plus Metadata read; the reviewer needs the same as read only.
+
 ## Observe tools: read-only logs and alerts
 
 `createObserve` (`@somework/agent-kit/observe`) gives a role five read-only tools over the central Grafana: `logs_query` (a stream selector

@@ -138,6 +138,8 @@ export interface ServiceContext {
 	client: SomeWorkClient;
 	/** The git token, when the service has one (it never goes to a host outside `GIT_TOKEN_HOSTS`). */
 	gitToken?: string;
+	/** With a GitHub App the token above is only the first one and expires after an hour: call this for a live one before every use. */
+	gitTokenSource?: () => Promise<string>;
 }
 
 /** Role-specific behaviour that is code rather than data. Every member is optional; the defaults are the developer role's. */

@@ -257,7 +257,7 @@ export function outcomeOf(base: Record<string, unknown>, context: ResultContext,
 /** For `runAgentService`: the hooks of the service being composed. Fails at startup when the deployment cannot work. */
 export async function aikidoFixerHooksFor(context: ServiceContext): Promise<RoleHooks> {
 	const settings = loadSettings(context.env);
-	if (!context.gitToken) throw new Error("the Aikido fixer needs GIT_TOKEN_FILE: a token that can push agent/* branches and open pull requests on its repository");
+	if (!context.gitToken) throw new Error("the Aikido fixer needs GIT_TOKEN_FILE or a GitHub App (GITHUB_APP_ID): a credential that can push agent/* branches and open pull requests on its repository");
 	if (context.config.concurrency !== 1) throw new Error("the Aikido fixer runs one fix at a time: PI_CONCURRENCY must be 1");
 	readCredentials(settings.credentialsFile);
 	const aikido = new AikidoClient({ region: settings.region, credentials: () => readCredentials(settings.credentialsFile), apiBase: settings.apiBase, oauthUrl: settings.oauthUrl });
