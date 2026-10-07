@@ -111,7 +111,7 @@ services:
       - ./config/ca.pem:/run/somework/ca.pem:ro
       - ${TIMERS_TOKEN_HOST:-/dev/null}:/run/secrets/timers-token:ro      # timers: ./secrets/timers-token (`somework-hub timer-token <agent id>` on the hub)
       - ./config/checks.json:/run/config/checks.json:ro      # named check profiles of the repository (see checks.example.json); an empty {} file is fine without one
-      # - ./config/ledger-import.json:/run/config/ledger-import.json:ro    # earlier attempts (AIKIDO_LEDGER_IMPORT=/run/config/ledger-import.json); create the file first or Docker makes a directory of it
+      - ${LEDGER_IMPORT_HOST:-/dev/null}:/run/config/ledger-import.json:ro    # earlier attempts: LEDGER_IMPORT_HOST=./config/ledger-import.json with AIKIDO_LEDGER_IMPORT=/run/config/ledger-import.json (pull requests it opened before outcomes were recorded, so it can follow them up)
       - ./secrets/pi:/run/secrets/pi                         # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./secrets/git-token:/run/secrets/git-token:ro        # fine-grained, ONE repository, Contents + Pull requests: write
