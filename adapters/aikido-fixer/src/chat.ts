@@ -97,6 +97,12 @@ export function fixerChat(options: FixerChatOptions): ChatRoleHooks {
 		extension,
 		askToolNames: ["fixer_status", ...lookup.toolNames],
 		checkout: () => ({ repoUrl: repository }),
+		plainInstruct(text) {
+			// "fix the feedback on PR 5229", "go through the review comments on your last PR": an action word and a pull request, never a question
+			if (!/\b(fix|address|handle|go through|work through|follow[- ]?up|deal with|respond to|resolve)\b/i.test(text) || /\?\s*$/.test(text.trim())) return undefined;
+			const planned = followUpOf(text.trim(), repository);
+			return planned && "capability" in planned ? planned : undefined;
+		},
 		instructInput(text) {
 			const { options: given, rest } = takeOptions(text, ["repo"]);
 			let target = repository;

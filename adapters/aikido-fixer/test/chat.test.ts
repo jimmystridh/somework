@@ -68,6 +68,16 @@ describe("the fixer in chat", () => {
 			assert.match((chat.instructInput!("follow up on PR 99") as any).refuse, /#99 is not one of them/);
 		});
 
+		it("takes a plain message that plainly asks for a follow-up, and leaves questions and unknown pull requests to the open tier", () => {
+			const { chat } = withPullRequests();
+			assert.deepEqual(chat.plainInstruct!("fix the feedback on PR 41"), followUp(41, "11"));
+			assert.deepEqual(chat.plainInstruct!("go through the review comments on your last PR"), followUp(42, "12"));
+			assert.equal(chat.plainInstruct!("what is the state of PR 41?"), undefined);
+			assert.equal(chat.plainInstruct!("fix the feedback on PR 5229"), undefined, "not one of its own");
+			assert.equal(chat.plainInstruct!("fix issue 1234"), undefined, "an issue fix needs the instruct: prefix");
+			assert.equal(setup().chat.plainInstruct!("fix the feedback on your last PR"), undefined, "no pull request on record");
+		});
+
 		it("says so when it has no pull request on record", () => {
 			assert.match((setup().chat.instructInput!("check the comments on your last PR") as any).refuse, /no pull request of my own on record/);
 		});

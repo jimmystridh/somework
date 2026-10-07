@@ -606,6 +606,21 @@ describe("giving an instruction (the instruct tier)", () => {
 		assert.match(reply!, /Branch: agent\/x/);
 	});
 
+	it("runs a plain message from an instructor as a job when the role plainly recognises it, and leaves other plain messages alone", async () => {
+		const h = harness();
+		h.deps.instruct!.plain = (text) => (text.startsWith("do it:") ? { capability: { id: "do.it", version: "1" }, input: { what: text } } : undefined);
+		assert.deepEqual(await h.responder.handle(incoming({ messageId: "p1", text: "do it: the thing" })), { answered: true });
+		assert.equal(h.requests.length, 0, "no ask or open session");
+		assert.equal(h.jobs[0]!.job.taskId, "chat-p1");
+		await h.responder.handle(incoming({ messageId: "p2", text: "how are you?" }));
+		assert.equal(h.jobs.length, 1, "an ordinary question starts no job");
+		assert.equal(h.requests.length, 1);
+		const human = harness();
+		human.deps.instruct!.plain = () => ({ capability: { id: "do.it", version: "1" }, input: {} });
+		await human.responder.handle(incoming({ messageId: "p3", text: "anything", sender: { kind: "human", id: "user/x" } }));
+		assert.equal(human.jobs.length, 0, "only an instructor's message can start a job");
+	});
+
 	it("tells a human who instructs that only the instructors may, and does nothing", async () => {
 		const h = harness();
 		const outcome = await h.responder.handle(incoming({ sender: HUMAN, text: "instruct: fix the thing" }));

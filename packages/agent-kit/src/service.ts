@@ -234,7 +234,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 								},
 							}
 						: {}),
-					...(instructHandler && hooks.chat?.instructInput ? { instruct: { handler: instructHandler, input: hooks.chat.instructInput, describe: hooks.chat.describeResult, gate, approvals, ...(chatArtifacts ? { artifacts: chatArtifacts } : {}) } } : {}),
+					...(instructHandler && hooks.chat?.instructInput ? { instruct: { handler: instructHandler, input: hooks.chat.instructInput, ...(hooks.chat.plainInstruct ? { plain: hooks.chat.plainInstruct } : {}), describe: hooks.chat.describeResult, gate, approvals, ...(chatArtifacts ? { artifacts: chatArtifacts } : {}) } } : {}),
 					log,
 					metrics,
 				});

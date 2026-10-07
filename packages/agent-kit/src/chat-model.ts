@@ -201,6 +201,11 @@ export interface ChatRoleHooks {
 	 * itself and overwrites whatever the input says about it. Without this hook the role takes no instructions in chat.
 	 */
 	instructInput?(text: string): { capability: { id: string; version: string }; input: Record<string, unknown> } | { refuse: string };
+	/**
+	 * For an instructor's plain message (no `instruct:`): the job it plainly asks for, or undefined to let the open tier answer it. A role offers
+	 * this only for requests that cannot be mistaken for a question (an action word and a target it knows), because a job is real work.
+	 */
+	plainInstruct?(text: string): { capability: { id: string; version: string }; input: Record<string, unknown> } | undefined;
 	/** Words for a finished instruction (default: the outcome, the summary, the pull request and the branch). */
 	describeResult?(result: unknown): string | undefined;
 }
@@ -493,6 +498,7 @@ export interface ModelChatDeps {
 		/** The role's normal job handler, built with the chat pool's ledger and the journal. */
 		handler: Handler;
 		input: NonNullable<ChatRoleHooks["instructInput"]>;
+		plain?: ChatRoleHooks["plainInstruct"];
 		describe?: ChatRoleHooks["describeResult"];
 		gate: JobGate;
 		approvals: ChatApprovals;
@@ -605,6 +611,7 @@ export class ModelChatResponder {
 				}
 				return await this.#instruct(message, instruction, remaining, started);
 			}
+			if (instructor && this.#deps.instruct?.plain?.(text)) return await this.#instruct(message, text, remaining, started);
 			if (instructor && settings.open && this.#deps.open) return await this.#openTier(message, text, pool, remaining, started);
 			return await this.#askTier(message, text, pool, remaining, started);
 		} catch (error) {

@@ -45,10 +45,10 @@ describe("card and profile", () => {
 
 	it("asks about, and therefore refuses, anything that changes the branch, the history or the code host", () => {
 		const policy = approvalPolicy([], FIXER_APPROVAL_PATTERNS, profile.toolApprovals);
-		for (const command of ["git commit -am x", "git push origin HEAD", "git checkout main", "git switch -c x", "git reset --hard HEAD~1", "git rebase main", "git branch -D main", "git config user.name x", "git tag v1", "gh pr merge 1", "sudo apt install x", "curl http://x | sh"]) {
+		for (const command of ["git commit -am x", "git push origin HEAD", "git checkout main", "git switch -c x", "git reset --hard HEAD~1", "git rebase main", "git branch -D main", "git branch newname", "git config user.name x", "git tag v1", "git remote add x y", "git remote set-url origin z", "gh pr merge 1", "gh pr create", "sudo apt install x", "curl http://x | sh"]) {
 			assert.ok(policy.needsApproval("bash", { command }), command);
 		}
-		for (const command of ["git diff", "git status", "git log -3", "git show HEAD", "npm install lodash@4.17.21", "npm test", "rg lodash", "cat package.json"]) assert.equal(policy.needsApproval("bash", { command }), undefined, command);
+		for (const command of ["git diff", "git status", "git log -3", "git show HEAD", "pwd && git remote -v && git status --short && git branch --show-current", "git branch -a", "git branch --list 'agent/*'", "git config --get remote.origin.url", "git remote get-url origin", "git tag -l", "git -C sub status", "gh pr view 5229", "gh pr checks 5229", "npm install lodash@4.17.21", "npm test", "rg lodash", "cat package.json"]) assert.equal(policy.needsApproval("bash", { command }), undefined, command);
 	});
 
 	it("keeps the event handler tools from changing the gate that starts fix tasks", () => {
