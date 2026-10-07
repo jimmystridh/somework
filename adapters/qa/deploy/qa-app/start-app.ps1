@@ -32,13 +32,14 @@ if (-not (Test-Listening 8080)) { & schtasks.exe /Run /TN QaAppServer | Out-Null
 if (-not (Test-Listening $WebPort)) { & schtasks.exe /Run /TN QaAppWeb | Out-Null }
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $healthy = $false
-# a web app that prints nothing and never opens its port (seen on a fresh checkout, minutes after a bun install) is started again; a normal start takes under a minute
+# the dev server hangs silently at its config step on about four starts in ten (bun with native modules on this two-processor machine; the same checkout starts fine on the next try):
+# a normal start opens the port within 8 to 15 seconds, so one that has not after 40 is started again
 $webStartedAt = Get-Date
 $webRestarts = 0
 while ((Get-Date) -lt $deadline) {
     if ((Test-Url 'http://127.0.0.1:8080/health') -and (Test-Url "http://127.0.0.1:$WebPort/")) { $healthy = $true; break }
-    if (-not (Test-Listening $WebPort) -and $webRestarts -lt 2 -and ((Get-Date) - $webStartedAt).TotalSeconds -gt 150) {
-        Write-Host "the web app is silent after 150 s: starting it again ($($webRestarts + 1) of 2)"
+    if (-not (Test-Listening $WebPort) -and $webRestarts -lt 8 -and ((Get-Date) - $webStartedAt).TotalSeconds -gt 40) {
+        Write-Host "the web app is silent after 40 s: starting it again ($($webRestarts + 1) of 8)"
         Set-Content "$ctl\stop-web" 'stop'
         $until = (Get-Date).AddSeconds(30)
         while ((Test-TaskRunning 'QaAppWeb') -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
