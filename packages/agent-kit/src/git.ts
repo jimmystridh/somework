@@ -56,6 +56,8 @@ export class GitError extends Error {
 async function git(session: GitSession, cwd: string, args: string[], options: { allow?: number[]; auth?: boolean } = {}): Promise<{ code: number; output: string }> {
 	const env: Record<string, string> = {
 		GIT_TERMINAL_PROMPT: "0",
+		// large files tracked with Git LFS stay pointer files: a checkout from a local mirror has no LFS objects, and a clone has no credentials for the LFS server, so the smudge filter would fail the whole clone
+		GIT_LFS_SKIP_SMUDGE: "1",
 		GIT_AUTHOR_NAME: session.identity.name,
 		GIT_AUTHOR_EMAIL: session.identity.email,
 		GIT_COMMITTER_NAME: session.identity.name,
