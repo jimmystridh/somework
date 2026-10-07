@@ -1,0 +1,33 @@
+# Outbound destinations of the Windows developer's service account, installed by CI (deploy/windows/deploy-from-ci.ps1) where firewall.ps1's refresh reads them.
+10.10.10.14
+api.openai.com
+auth.openai.com
+chatgpt.com
+github.com
+api.github.com
+codeload.github.com
+nuget.pkg.github.com
+api.nuget.org
+registry.npmjs.org
+10.10.10.13
+learn.microsoft.com
+developer.mozilla.org
+stackoverflow.com
+pypi.org
+files.pythonhosted.org
+www.nuget.org
+globalcdn.nuget.org
+docs.rs
+crates.io
+static.crates.io
+index.crates.io
+# GitHub and the model provider rotate addresses faster than the names are refreshed: allow their published ranges too (api.github.com/meta, Cloudflare)
+140.82.112.0/20
+185.199.108.0/22
+192.30.252.0/22
+143.55.64.0/20
+104.18.0.0/15
+172.64.0.0/15
+172.66.0.0/16
+162.159.140.0/22
+objects.githubusercontent.com

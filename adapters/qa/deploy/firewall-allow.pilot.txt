@@ -1,0 +1,36 @@
+# domain (private address)
+10.10.10.14
+# model API and login (behind Cloudflare: its anycast addresses rotate, so the ranges are listed, not one resolved address)
+api.openai.com
+auth.openai.com
+chatgpt.com
+104.18.0.0/15
+172.64.0.0/15
+172.66.0.0/16
+162.159.140.0/22
+# code host (GitHub publishes ranges; a name resolves to a rotating pair of addresses)
+github.com
+codeload.github.com
+objects.githubusercontent.com
+140.82.112.0/20
+185.199.108.0/22
+192.30.252.0/22
+# package feed
+registry.npmjs.org
+# ticket system
+jira.internaltools.visma.com
+# read-only Grafana route for the observe tools
+10.10.10.13
+learn.microsoft.com
+developer.mozilla.org
+stackoverflow.com
+pypi.org
+files.pythonhosted.org
+api.nuget.org
+www.nuget.org
+globalcdn.nuget.org
+docs.rs
+crates.io
+static.crates.io
+index.crates.io
+# docs, language package feeds

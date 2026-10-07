@@ -126,6 +126,22 @@ function Ensure-Access {
 }
 Ensure-Access
 
+# the outbound allow list of the service account lives in the repository: the machine's firewall refresh task reads it from wherever its -AllowFile says
+function Update-FirewallAllowList {
+    $source = "$stage\adapters\$role\deploy\firewall-allow.pilot.txt"
+    if (-not (Test-Path $source)) { return }
+    $refresh = Get-ScheduledTask | Where-Object { $_.TaskName -like '*FirewallRefresh*' } | Select-Object -First 1
+    if (-not $refresh) { return }
+    $arguments = [string](($refresh.Actions | Select-Object -First 1).Arguments)
+    if ($arguments -notmatch '-AllowFile\s+"([^"]+)"') { return }
+    $target = $Matches[1]
+    if ((Test-Path $target) -and ((Get-FileHash $target).Hash -eq (Get-FileHash $source).Hash)) { return }
+    Copy-Item $source $target -Force
+    Start-ScheduledTask -TaskName $refresh.TaskName
+    Write-Host "the firewall allow list was updated: $target"
+}
+Update-FirewallAllowList
+
 trap {
     [Console]::Error.WriteLine("unexpected error: $($_.Exception.Message)")
     try { Restore-Backup } catch { }
