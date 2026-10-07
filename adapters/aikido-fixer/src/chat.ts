@@ -7,7 +7,13 @@ import { createAikidoLookupTools } from "./aikido/tool.ts";
 import { AttemptLedger } from "./attempts.ts";
 import { normaliseRepositoryUrl, type FixerSettings } from "./settings.ts";
 
-export const FIXER_CHAT_INSTRUCTIONS = `You are the Aikido fixer of this platform. Aikido reports security issues; you read one, change the repository the smallest safe amount, and open a pull request that a person must review. You offer the capability code.fix. The state summary and the tools fixer_status and agent_status tell you what you did recently and what your limits are; aikido_lookup reads one Aikido issue by its id. You never merge, never touch protected paths, and you stop at the daily and per-issue limits.`;
+export const FIXER_CHAT_INSTRUCTIONS = `You are the Aikido fixer of this platform. Aikido reports security issues; you read one, change the repository the smallest safe amount, and open a pull request that a person must review. You offer the capabilities code.fix and, for a pull request you opened, code.fix.followup (the review comments, comments and failing checks since your newest commit; "instruct: follow up on your last pull request"). The state summary and the tools fixer_status and agent_status tell you what you did recently and what your limits are; aikido_lookup reads one Aikido issue by its id. You never merge, never touch protected paths, and you stop at the daily and per-issue limits.`;
+
+/** Words that make an instruction a look at one of the agent's own pull requests instead of a fix for an Aikido issue. */
+const FOLLOW_UP = /\b(pull requests?|prs?|review comments?|review feedback|feedback|follow[- ]?up)\b/i;
+const PULL_REQUEST_URL = /https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/(\d{1,9})/i;
+const PULL_REQUEST_PHRASE = /\b(?:pull request|pr)\s*#?(\d{1,9})\b/i;
+const HASH_NUMBER = /(?<![\w./-])#(\d{1,9})\b/;
 
 export interface FixerChatOptions {
 	settings: FixerSettings;
@@ -44,7 +50,9 @@ function factsText(ledger: AttemptLedger, mirrorDir: string | undefined, reposit
  * What the Aikido fixer adds to chat. Questions get `aikido_lookup` (one issue by id, read only) and `fixer_status` (the host's own record of
  * attempts and limits) next to the kit's tools. An instruction `fix issue 1234` (optionally `repo:` of an allowed repository and extra
  * hints after the number) becomes a code.fix task, which runs through the same hooks as a task from an event: eligibility, daily cap, per-issue
- * attempts and cool-down, protected paths, size, secret and check guards, and a pull request for a person to review.
+ * attempts and cool-down, protected paths, size, secret and check guards, and a pull request for a person to review. An instruction about a
+ * pull request ("go through the review comments on your last PR", "follow up on PR 5244", a pull request address) becomes a code.fix.followup
+ * task for a pull request this agent recorded: the latest one, or the one named.
  */
 export function fixerChat(options: FixerChatOptions): ChatRoleHooks {
 	const now = options.now ?? (() => new Date());
@@ -66,6 +74,23 @@ export function fixerChat(options: FixerChatOptions): ChatRoleHooks {
 		},
 	});
 	const extension = defineExtension({ name: "fixer-chat", tools: [status, ...lookup.extension.tools] });
+	/** The pull requests this agent opened and recorded, newest first. */
+	const openedPullRequests = () => ledger.facts(200).recent.filter((entry) => entry.outcome === "pr_opened" && entry.prUrl && entry.branch);
+	const followUpOf = (rest: string, target: string) => {
+		const about = FOLLOW_UP.test(rest);
+		const named = PULL_REQUEST_URL.exec(rest)?.[1] ?? PULL_REQUEST_PHRASE.exec(rest)?.[1] ?? (about ? HASH_NUMBER.exec(rest)?.[1] : undefined);
+		if (!named && !about) return undefined;
+		// a number that is not a pull request's names an Aikido issue: that is a fix, however many pull request words surround it
+		if (!named && /\d/.test(rest)) return undefined;
+		const known = openedPullRequests();
+		if (known.length === 0) return { refuse: "I have no pull request of my own on record to follow up on" };
+		const entry = named ? known.find((candidate) => candidate.prUrl!.endsWith(`/pull/${named}`)) : known[0];
+		if (!entry) return { refuse: `I only follow up on pull requests I opened and recorded, and ${named ? `#${named} is not one of them` : "I know none"}` };
+		return {
+			capability: { id: "code.fix.followup", version: "1" },
+			input: { issue: { id: entry.groupId }, repository: { url: target, ref: entry.branch! }, followUp: { pullRequest: entry.prUrl!, branch: entry.branch!, round: 1 } },
+		};
+	};
 	return {
 		instructions: FIXER_CHAT_INSTRUCTIONS,
 		context: () => factsText(ledger, options.mirrorDir, repository, now()),
@@ -80,6 +105,8 @@ export function fixerChat(options: FixerChatOptions): ChatRoleHooks {
 				if (!match) return { refuse: "I only fix the repository I am configured for" };
 				target = match;
 			}
+			const followUp = followUpOf(rest, target);
+			if (followUp) return followUp;
 			const numbers = [...new Set([...rest.matchAll(/(?<![\w./-])#?(\d{1,12})(?![\w.-])/g)].map((m) => m[1]!))];
 			if (numbers.length !== 1) return { refuse: "name exactly one Aikido issue by its number, for example `instruct: fix issue 1234`" };
 			const id = numbers[0]!;

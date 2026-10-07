@@ -41,6 +41,45 @@ describe("the fixer in chat", () => {
 		assert.deepEqual((chat.extension!.tools as any[]).map((tool) => tool.name).sort(), ["aikido_lookup", "fixer_status"]);
 	});
 
+	describe("an instruction about its own pull request", () => {
+		const opened = (ledger: AttemptLedger, taskId: string, groupId: string, number: number, at: string, clock: { now: Date }) => {
+			clock.now = new Date(at);
+			ledger.recordOutcome(taskId, { groupId, outcome: "pr_opened", branch: `agent/aikido-${groupId}-abc12345`, prUrl: `https://github.com/Acme/Shop/pull/${number}` });
+		};
+		const withPullRequests = () => {
+			const s = setup();
+			const ledger = new AttemptLedger(join(s.stateDir, ATTEMPTS_FILE), { maxAttemptsPerIssue: 2, cooldownMinutes: 180, dailyCap: 5 }, () => s.clock.now);
+			opened(ledger, "t1", "11", 41, "2026-10-06T08:00:00Z", s.clock);
+			opened(ledger, "t2", "12", 42, "2026-10-06T09:00:00Z", s.clock);
+			return s;
+		};
+		const followUp = (number: number, groupId: string) => ({ capability: { id: "code.fix.followup", version: "1" }, input: { issue: { id: groupId }, repository: { url: REPO, ref: `agent/aikido-${groupId}-abc12345` }, followUp: { pullRequest: `https://github.com/Acme/Shop/pull/${number}`, branch: `agent/aikido-${groupId}-abc12345`, round: 1 } } });
+
+		it("follows up on the latest pull request it opened when none is named", () => {
+			const { chat } = withPullRequests();
+			for (const text of ["go through the review comments on the last PR you created and fix the issues raised there", "follow up on your pull request", "handle the feedback"]) assert.deepEqual(chat.instructInput!(text), followUp(42, "12"), text);
+		});
+
+		it("follows up on the one named by address, number or hash, when it is one of its own", () => {
+			const { chat } = withPullRequests();
+			assert.deepEqual(chat.instructInput!("check https://github.com/Acme/Shop/pull/41 for comments"), followUp(41, "11"));
+			assert.deepEqual(chat.instructInput!("follow up on PR 41"), followUp(41, "11"));
+			assert.deepEqual(chat.instructInput!("review feedback on #41"), followUp(41, "11"));
+			assert.match((chat.instructInput!("follow up on PR 99") as any).refuse, /#99 is not one of them/);
+		});
+
+		it("says so when it has no pull request on record", () => {
+			assert.match((setup().chat.instructInput!("check the comments on your last PR") as any).refuse, /no pull request of my own on record/);
+		});
+
+		it("still treats a number that is not a pull request's as an Aikido issue to fix", () => {
+			const { chat } = withPullRequests();
+			assert.equal((chat.instructInput!("fix 1234 and open a pull request") as any).capability.id, "code.fix");
+			assert.equal((chat.instructInput!("fix issue 1234") as any).capability.id, "code.fix");
+			assert.equal((chat.instructInput!("fix #77") as any).capability.id, "code.fix");
+		});
+	});
+
 	it("takes instructions with the fixer's own tools, the same as for a task", () => {
 		assert.deepEqual(instructToolNames(profile.chat, profile.allowedTools), ["read", "write", "edit", "bash", "aikido_issue"]);
 	});
