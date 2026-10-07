@@ -69,7 +69,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): TriageSettin
 		cooldownMinutes: integer(env, "DD_COOLDOWN_MINUTES", 60),
 		dailyCap: integer(env, "DD_DAILY_CAP", 20),
 		windowMinutes: integer(env, "DD_WINDOW_MINUTES", 60, 360),
-		budget: { maxTokens: integer(env, "DD_TRIAGE_BUDGET_TOKENS", 150_000, HARD_BUDGET_CAP.maxTokens), maxMinutes: integer(env, "DD_TRIAGE_BUDGET_MINUTES", 10, HARD_BUDGET_CAP.maxMinutes) },
+		budget: { maxTokens: integer(env, "DD_TRIAGE_BUDGET_TOKENS", 250_000, HARD_BUDGET_CAP.maxTokens), maxMinutes: integer(env, "DD_TRIAGE_BUDGET_MINUTES", 10, HARD_BUDGET_CAP.maxMinutes) },
 		saveFileBytes: integer(env, "DD_SAVE_FILE_BYTES", 5 * MB, 5 * MB),
 		saveTaskBytes: integer(env, "DD_SAVE_TASK_BYTES", 20 * MB, 20 * MB),
 		notifyTo: env.EVENTS_NOTIFY_TO || "agent/manager",

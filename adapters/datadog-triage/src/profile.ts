@@ -34,7 +34,7 @@ export const profile: AgentProfile = validateProfile({
 		handler_disable: () => HANDLER_WRITES,
 		handler_enable: () => HANDLER_WRITES,
 	},
-	defaultBudget: { maxTokens: 150_000, maxMinutes: 10 },
+	defaultBudget: { maxTokens: 250_000, maxMinutes: 10 },
 	requireBudget: true,
 	noRepository: true,
 	git: { push: false, pullRequest: false, branchPrefix: "triage" },

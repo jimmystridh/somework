@@ -56,8 +56,8 @@ describe("the profile", () => {
 		for (const name of profile.allowedTools!) assert.doesNotMatch(name, /mute|downtime|create|update|delete|resolve|acknowledge|trigger|submit|handler/i, name);
 	});
 
-	it("has a default budget of 150k tokens and 10 minutes, and a hard cap of 300k and 20 for tasks it starts itself", () => {
-		assert.deepEqual(profile.defaultBudget, { maxTokens: 150_000, maxMinutes: 10 });
+	it("has a default budget of 250k tokens and 10 minutes, and a hard cap of 300k and 20 for tasks it starts itself", () => {
+		assert.deepEqual(profile.defaultBudget, { maxTokens: 250_000, maxMinutes: 10 });
 		assert.deepEqual(profile.events?.submitBudgetCap, { maxTokens: 300_000, maxMinutes: 20 });
 		assert.equal(profile.events?.enabled, true);
 		assert.equal(profile.events?.notifyTo, "agent/manager");

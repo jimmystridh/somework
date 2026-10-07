@@ -86,7 +86,7 @@ All `DD_*` unless noted; `deploy/.env.example` and `deploy/compose.yaml` list th
 | `DD_COOLDOWN_MINUTES` | `60` | per monitor |
 | `DD_DAILY_CAP` | `20` | triages per UTC day |
 | `DD_WINDOW_MINUTES` | `60` | how far back an event-driven triage looks (5 to 360) |
-| `DD_TRIAGE_BUDGET_TOKENS`, `DD_TRIAGE_BUDGET_MINUTES` | `150000`, `10` | budget the handler puts on the task; at most `300000` and `20` |
+| `DD_TRIAGE_BUDGET_TOKENS`, `DD_TRIAGE_BUDGET_MINUTES` | `250000`, `10` | budget the handler puts on the task; at most `300000` and `20` |
 | `DD_SAVE_FILE_BYTES`, `DD_SAVE_TASK_BYTES` | 5 MB, 20 MB | the most a save-mode file and all of a task's files may take (also the maxima) |
 | `DD_RESEED_HANDLER` | `0` | `1` writes the shipped handler again, with the current settings, as a new version |
 | `EVENTS_NOTIFY_TO` | `agent/manager` | who gets the notice |

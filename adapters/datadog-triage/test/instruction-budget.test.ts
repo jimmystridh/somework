@@ -8,8 +8,9 @@ const now = new Date("2026-10-07T08:00:00Z");
 
 describe("the triage instruction", () => {
 	it("tells the model its budget and to stop investigating well before it, because a run that hits the limit gives no result", () => {
-		const text = buildInstruction(input, monitor, "bnd", now, { maxTokens: 150_000, maxMinutes: 10 });
-		assert.match(text, /about 150k tokens and 10 minutes/);
+		const text = buildInstruction(input, monitor, "bnd", now, { maxTokens: 250_000, maxMinutes: 10 });
+		assert.match(text, /about 250k tokens and 10 minutes/);
+		assert.match(text, /at most 7 tool calls/);
 		assert.match(text, /ends with no result at all/);
 		assert.match(text, /two thirds of the budget/);
 		assert.match(text, /outcome inconclusive/);

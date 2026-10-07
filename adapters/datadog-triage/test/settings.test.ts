@@ -9,7 +9,7 @@ describe("settings", () => {
 		assert.equal(settings.site, "datadoghq.eu");
 		assert.equal(settings.minPriority, "P3");
 		assert.deepEqual([settings.cooldownMinutes, settings.dailyCap, settings.windowMinutes], [60, 20, 60]);
-		assert.deepEqual(settings.budget, { maxTokens: 150_000, maxMinutes: 10 });
+		assert.deepEqual(settings.budget, { maxTokens: 250_000, maxMinutes: 10 });
 		assert.equal(settings.saveFileBytes, 5 * 1024 * 1024);
 		assert.equal(settings.saveTaskBytes, 20 * 1024 * 1024);
 		assert.equal(settings.notifyTo, "agent/manager");

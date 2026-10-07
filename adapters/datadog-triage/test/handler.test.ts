@@ -34,7 +34,7 @@ describe("the shipped handler", () => {
 		assert.deepEqual(decision.task.capability, { id: "ops.triage", version: "1" });
 		assert.deepEqual(decision.task.input, { monitor: { id: 12345, name: "Checkout error rate", status: "alert" }, alert: { eventId: "evt_abc", at: T0 }, windowMinutes: 60 });
 		assert.deepEqual(decision.task.budget, settings.budget);
-		assert.deepEqual(decision.task.budget, { maxTokens: 150_000, maxMinutes: 10 });
+		assert.deepEqual(decision.task.budget, { maxTokens: 250_000, maxMinutes: 10 });
 		assert.doesNotMatch(JSON.stringify(decision.task), /app\.datadoghq|service:checkout|P2/, "no url, tag or priority is copied");
 	});
 
@@ -194,6 +194,6 @@ describe("seeding the handler", () => {
 	it("renders a handler that is valid javascript with every setting in it", () => {
 		const source = renderHandler(loadSettings({ DD_MONITOR_IDS: "1,2", DD_TAG_FILTER: "a:b", DD_MIN_PRIORITY: "P2", DD_COOLDOWN_MINUTES: "5", DD_WINDOW_MINUTES: "90" }));
 		assert.doesNotMatch(source, /__CONFIG__/);
-		for (const part of ['"minPriority": "P2"', '"monitorIds": [\n  "1",\n  "2"\n ]', '"tagFilter"', '"cooldownMinutes": 5', '"windowMinutes": 90', '"maxTokens": 150000']) assert.ok(source.includes(part), part);
+		for (const part of ['"minPriority": "P2"', '"monitorIds": [\n  "1",\n  "2"\n ]', '"tagFilter"', '"cooldownMinutes": 5', '"windowMinutes": 90', '"maxTokens": 250000']) assert.ok(source.includes(part), part);
 	});
 });
