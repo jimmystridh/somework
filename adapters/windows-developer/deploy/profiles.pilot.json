@@ -1,0 +1,44 @@
+{
+  "build": {
+    "tooling-check": {
+      "command": "git --version && node --version",
+      "cwd": ".",
+      "timeoutMinutes": 5,
+      "blockPushOnFailure": false
+    },
+    "node-install": {
+      "command": "npm ci --ignore-scripts",
+      "cwd": ".",
+      "timeoutMinutes": 20,
+      "blockPushOnFailure": true
+    }
+  },
+  "test": {
+    "rules-cli": {
+      "command": "npm test --workspace packages/rules-cli",
+      "cwd": ".",
+      "timeoutMinutes": 15,
+      "blockPushOnFailure": true
+    },
+    "events-hub": {
+      "command": "npm test --workspace packages/events-hub",
+      "cwd": ".",
+      "timeoutMinutes": 20,
+      "blockPushOnFailure": true
+    }
+  },
+  "encoding": {
+    "legacyGlobs": [
+      "**/*.cpp",
+      "**/*.h",
+      "**/*.rc"
+    ],
+    "utf8Globs": [
+      "**/*.md",
+      "**/*.json",
+      "**/*.ts",
+      "**/*.tsx"
+    ],
+    "blockPush": true
+  }
+}
