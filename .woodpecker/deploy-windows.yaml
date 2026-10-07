@@ -15,7 +15,8 @@ when:
 
 # After the checks passed. The key's only permitted command on each Windows machine is C:/somework/bin/deploy-from-ci.ps1 (deploy/windows), from this
 # runner's address only: it unpacks what is piped to it, keeps a backup, installs the kit and the machine's role, restarts the service and waits for
-# /ready, and puts the old code back when the service does not come up. The QA machine goes first.
+# /ready, and puts the old code back when the service does not come up. The QA machine goes first. SSH keepalives make a stalled transfer fail in
+# a minute instead of holding the runner.
 depends_on:
   - check
 
@@ -30,7 +31,7 @@ steps:
       - mkdir -p ~/.ssh
       - printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
       - printf '%s\n' '10.10.10.44 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJGyEV2Z2tfS96agECGUizg+XLzrEitjZrZQIxFaZ4w' > ~/.ssh/known_hosts
-      - tar czf - package.json package-lock.json packages/agent-kit/package.json packages/agent-kit/src sdk/typescript/package.json sdk/typescript/src adapters/qa/package.json adapters/qa/card.json adapters/qa/src adapters/qa/deploy > /tmp/payload.tgz && ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes js@10.10.10.44 "deploy $CI_COMMIT_SHA $(stat -c%s /tmp/payload.tgz)" < /tmp/payload.tgz
+      - tar czf - package.json package-lock.json packages/agent-kit/package.json packages/agent-kit/src sdk/typescript/package.json sdk/typescript/src adapters/qa/package.json adapters/qa/card.json adapters/qa/src adapters/qa/deploy > /tmp/payload.tgz && ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 js@10.10.10.44 "deploy $CI_COMMIT_SHA $(stat -c%s /tmp/payload.tgz)" < /tmp/payload.tgz
 
   - name: deploy-windows-developer
     image: node:22.19.0-bookworm
@@ -42,4 +43,4 @@ steps:
       - mkdir -p ~/.ssh
       - printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
       - printf '%s\n' '10.10.10.45 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK4pFEzwtMneDpLJHSg2HGw4H/rrag9iLH6zSxkB+Da/' > ~/.ssh/known_hosts
-      - tar czf - package.json package-lock.json packages/agent-kit/package.json packages/agent-kit/src sdk/typescript/package.json sdk/typescript/src adapters/windows-developer/package.json adapters/windows-developer/card.json adapters/windows-developer/src adapters/windows-developer/deploy > /tmp/payload.tgz && ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes js@10.10.10.45 "deploy $CI_COMMIT_SHA $(stat -c%s /tmp/payload.tgz)" < /tmp/payload.tgz
+      - tar czf - package.json package-lock.json packages/agent-kit/package.json packages/agent-kit/src sdk/typescript/package.json sdk/typescript/src adapters/windows-developer/package.json adapters/windows-developer/card.json adapters/windows-developer/src adapters/windows-developer/deploy > /tmp/payload.tgz && ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4 js@10.10.10.45 "deploy $CI_COMMIT_SHA $(stat -c%s /tmp/payload.tgz)" < /tmp/payload.tgz
