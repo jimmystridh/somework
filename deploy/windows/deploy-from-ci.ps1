@@ -94,13 +94,30 @@ function Install-Dependencies {
         return ($code -eq 0)
     } finally { Pop-Location }
 }
+# the QA machine's test stack (start, stop and the two launchers its scheduled tasks run) is versioned with the role: these four files are copied over C:\somework\qa-app
+$qaAppFiles = @('start-app.ps1', 'stop-app.ps1', 'run-web.ps1', 'run-server.ps1')
+function Install-QaApp {
+    if ($role -ne 'qa') { return }
+    foreach ($name in $qaAppFiles) { if (Test-Path "$stage\adapters\qa\deploy\qa-app\$name") { Copy-Item "$stage\adapters\qa\deploy\qa-app\$name" "$root\qa-app\$name" -Force } }
+}
+function Backup-QaApp {
+    if ($role -ne 'qa') { return }
+    New-Item -ItemType Directory -Force "$backup\qa-app" | Out-Null
+    foreach ($name in $qaAppFiles) { if (Test-Path "$root\qa-app\$name") { Copy-Item "$root\qa-app\$name" "$backup\qa-app\$name" -Force } }
+}
+function Restore-QaApp {
+    if ($role -ne 'qa') { return }
+    foreach ($name in $qaAppFiles) { if (Test-Path "$backup\qa-app\$name") { Copy-Item "$backup\qa-app\$name" "$root\qa-app\$name" -Force } }
+}
 function Install-Files {
     foreach ($m in $mirrors) { Mirror "$stage\$m" "$agent\$m" }
     foreach ($f in $files) { Copy-Item "$stage\$($f[0])" "$agent\$($f[1])" -Force }
+    Install-QaApp
 }
 function Restore-Backup {
     foreach ($m in $mirrors) { if (Test-Path "$backup\$m") { Mirror "$backup\$m" "$agent\$m" } }
     foreach ($f in $files) { if (Test-Path "$backup\$($f[1])") { Copy-Item "$backup\$($f[1])" "$agent\$($f[1])" -Force } }
+    Restore-QaApp
 }
 function Wait-Ready([int]$seconds) {
     $deadline = (Get-Date).AddSeconds($seconds)
@@ -151,6 +168,7 @@ trap {
     try { Start-ScheduledTask -TaskName $task } catch { }
     exit 1
 }
+Backup-QaApp
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 Install-Files

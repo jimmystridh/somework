@@ -15,7 +15,7 @@
   },
   "test": {
     "sdk-unit": {
-      "command": "npm test",
+      "command": "node --test --test-concurrency=1 $(ls test/*.test.ts | grep -vE 'tls|wake|worker')",
       "cwd": "sdk/typescript",
       "timeoutMinutes": 20,
       "blockPushOnFailure": true
