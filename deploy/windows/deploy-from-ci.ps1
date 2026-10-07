@@ -1,7 +1,7 @@
 # The only thing the CI deploy key may run on a Windows agent machine (administrators_authorized_keys line:
 #   command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/bin/deploy-from-ci.ps1",restrict,from="10.10.10.15" ssh-ed25519 ...).
 #
-#   tar czf - <paths> | ssh machine deploy <40-hex commit>
+#   tar czf payload.tgz <paths>; ssh machine "deploy <40-hex commit> <size of payload.tgz in bytes>" < payload.tgz
 #
 # It unpacks the tar from stdin, keeps a backup of what it replaces, installs the shared kit, the SDK and this machine's role (QA or the Windows developer;
 # the role is read from agent.env) over C:\somework\agent, installs the role's profiles.pilot.json as profiles.json, runs `npm ci` when the lockfile
@@ -15,8 +15,11 @@ $deploy = "$root\deploy"
 
 function Fail([string]$message, [int]$code = 1) { [Console]::Error.WriteLine($message); exit $code }
 
-if ($env:SSH_ORIGINAL_COMMAND -notmatch '^deploy ([0-9a-f]{40})$') { Fail 'only "deploy COMMIT_SHA" (the full lower-case hash) is allowed' 2 }
+# the size is given because Windows OpenSSH does not pass the end of the client's input on to the program: reading "until the end" would wait forever
+if ($env:SSH_ORIGINAL_COMMAND -notmatch '^deploy ([0-9a-f]{40}) ([0-9]{1,9})$') { Fail 'only "deploy COMMIT_SHA SIZE" (the full lower-case hash, the archive size in bytes) is allowed' 2 }
 $sha = $Matches[1]
+$size = [int64]$Matches[2]
+if ($size -lt 1 -or $size -gt 100MB) { Fail 'the archive must be between 1 byte and 100 MB' 2 }
 
 $mutex = New-Object System.Threading.Mutex($false, 'Global\somework-deploy')
 if (-not $mutex.WaitOne(0)) { Fail 'another deployment is running' 3 }
@@ -39,7 +42,14 @@ if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force $stage | Out-Null
 $in = [Console]::OpenStandardInput()
 $file = [IO.File]::Create($tgz)
-$in.CopyTo($file)
+$buffer = New-Object byte[] 65536
+$left = $size
+while ($left -gt 0) {
+    $read = $in.Read($buffer, 0, [int][Math]::Min($buffer.Length, $left))
+    if ($read -le 0) { $file.Close(); Fail "the archive ended after $($size - $left) of $size bytes" }
+    $file.Write($buffer, 0, $read)
+    $left -= $read
+}
 $file.Close()
 & tar.exe -xzf $tgz -C $stage
 if ($LASTEXITCODE -ne 0) { Fail 'the archive could not be unpacked' }
@@ -94,6 +104,16 @@ function Restart-Agent {
     Start-Sleep -Seconds 5
     Start-ScheduledTask -TaskName $task
 }
+
+# what the machine's role needs to be fast and to work, idempotent: installing and building tens of thousands of small files under real-time scanning took a quarter
+# of an hour (the exclusions are for these test machines' working directories only), and the QA web app runs as its own account that must read the checkouts
+function Ensure-Access {
+    $excluded = @("$root\workspaces")
+    if ($role -eq 'qa') { $excluded += @("$root\qa-app", 'C:\tools\bun', 'C:\Users\svc-qa\.bun', 'C:\Users\svc-qa\AppData\Local\Temp') }
+    foreach ($path in $excluded) { Add-MpPreference -ExclusionPath $path -ErrorAction SilentlyContinue }
+    if ($role -eq 'qa') { & icacls.exe "$root\workspaces" /grant 'svc-qa-web:(OI)(CI)M' | Out-Null }
+}
+Ensure-Access
 
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
