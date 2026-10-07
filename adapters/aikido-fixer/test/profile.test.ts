@@ -13,9 +13,9 @@ import { loadSettings, repositoryFullName, roleEnvironment } from "../src/settin
 const capability = card.capabilities[0]!;
 
 describe("card and profile", () => {
-	it("the card offers one write capability, code.fix v1, that requires a budget and a repository", () => {
+	it("the card offers two write capabilities, code.fix v1 (that requires a budget and a repository) and code.fix.followup v1", () => {
 		assert.equal(card.agentId, "agent/aikido-fixer");
-		assert.equal(card.capabilities.length, 1);
+		assert.deepEqual(card.capabilities.map((c) => `${c.id}@${c.version}:${c.sideEffects}`), ["code.fix@1:write", "code.fix.followup@1:write"]);
 		assert.equal(capability.id, "code.fix");
 		assert.equal(capability.version, "1");
 		assert.equal(capability.sideEffects, "write");
@@ -26,7 +26,7 @@ describe("card and profile", () => {
 	});
 
 	it("the profile serves exactly what the card offers, with a conservative budget and a branch prefix that keeps it under agent/", () => {
-		assert.deepEqual(profile.capabilities, [{ id: "code.fix", version: "1" }]);
+		assert.deepEqual(profile.capabilities, [{ id: "code.fix", version: "1" }, { id: "code.fix.followup", version: "1" }]);
 		assert.deepEqual(profile.defaultBudget, { maxTokens: 300_000, maxMinutes: 30 });
 		assert.equal(profile.requireBudget, true);
 		assert.deepEqual(profile.git, { push: true, pullRequest: true, branchPrefix: "agent" });

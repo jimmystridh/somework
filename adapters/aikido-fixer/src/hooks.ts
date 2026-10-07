@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { InvalidInput, silent, type AgentRuntime, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
+import { InvalidInput, silent, type AgentRuntime, type TimersClient, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
 import type { Outcome } from "@somework/sdk";
 import { AikidoClient, AikidoError, readCredentials } from "./aikido/client.ts";
 import { eligibility, summariseIssue, type IssueSummary } from "./aikido/issue.ts";
@@ -12,9 +12,10 @@ import { fixerChat } from "./chat.ts";
 import { discardChange, reviewChange, runCheck, type CheckResult } from "./checks.ts";
 import { matchesAny } from "./paths.ts";
 import { run } from "./sandbox.ts";
-import { aikidoUrl, buildInstruction, parseAnswer, pullRequestText, type FixInput, type ParsedAnswer } from "./prompt.ts";
+import { GitHubPullRequestReader, parseFollowUp, pullRequestRepository, type FollowUpInput, type PullRequestReader, type PullRequestState } from "./followup.ts";
+import { aikidoUrl, buildFollowUpInstruction, buildInstruction, defang, parseAnswer, pullRequestText, type FixInput, type ParsedAnswer } from "./prompt.ts";
 import { seedHandler } from "./seed.ts";
-import { loadSettings, normaliseRepositoryUrl, type FixerSettings } from "./settings.ts";
+import { loadSettings, normaliseRepositoryUrl, repositoryFullName, type FixerSettings } from "./settings.ts";
 
 export const SKIPPED = "skipped: ";
 
@@ -30,11 +31,19 @@ interface TaskState {
 	resumed?: boolean;
 	files: string[];
 	tests?: CheckResult;
+	/** A follow-up on this agent's own pull request, as the reader found it when the task was prepared. */
+	followUp?: { input: FollowUpInput; pullRequest: PullRequestState };
+	/** The next look at the pull request, decided when the result is known and asked of the hub once the task has settled. */
+	nextCheck?: { round: number; minutes: number; pullRequest: string; branch: string };
 }
 
 export interface FixerOptions {
 	settings: FixerSettings;
 	aikido: Pick<AikidoClient, "resolveIssue">;
+	/** Reads the agent's pull requests for follow-ups. Without it a follow-up task is refused. */
+	reader?: PullRequestReader;
+	/** Asks the event hub for the next look at a pull request. Without it no follow-up is scheduled. */
+	timers?: Pick<TimersClient, "request">;
 	stateDir: string;
 	log?: Log;
 	now?: () => Date;
@@ -87,7 +96,10 @@ function parseInput(input: any): FixInput {
  *    contains secret-like text or fails the repository's check profile; it judges everything since the base commit, so a commit an earlier
  *    attempt left in a persisted workspace is held to the same guards as the model's fresh changes;
  *  - `pullRequest` and `branchName` give the pull request its title, body, commit message and `agent/aikido-<issue>-<sha>`;
- *  - `result` reports `pr_opened`, `no_fix`, `skipped` or `blocked`.
+ *  - `result` reports `pr_opened`, `no_fix`, `skipped` or `blocked`;
+ *  - a `code.fix.followup` task looks at the agent's own open pull request for reviews, comments and failing checks that came after its newest
+ *    commit and, when there are some, works on the pull request's branch; after a pull request is opened and after each look, the next look is
+ *    asked of the event hub (`settings.followUpMinutes`).
  */
 export function createFixerHooks(options: FixerOptions): RoleHooks {
 	const { settings } = options;
@@ -116,6 +128,9 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 		async prepareInput(input, { taskId }) {
 			const parsed = parseInput(input);
 			if (!allowedRepositories.has(normaliseRepositoryUrl(parsed.repository.url))) throw new InvalidInput("this agent only fixes the repository it is configured for");
+			const followUp = input?.followUp === undefined ? undefined : parseFollowUp(input.followUp);
+			if (followUp && pullRequestRepository(followUp.pullRequest) !== repositoryFullName(parsed.repository.url)) throw new InvalidInput("the pull request belongs to another repository");
+			if (followUp && !options.reader) throw new InvalidInput("this agent is not set up to follow up on pull requests");
 			let found;
 			try {
 				found = await options.aikido.resolveIssue(parsed.issue.id);
@@ -124,6 +139,13 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 				throw error;
 			}
 			const summary = summariseIssue(found);
+			if (followUp) {
+				const pullRequest = await options.reader!.read(followUp.pullRequest);
+				const skip = pullRequest.state !== "open" ? `the pull request is ${pullRequest.state}` : pullRequest.feedback.length === 0 ? "the pull request has no new review feedback since its newest commit" : undefined;
+				tasks.set(taskId, { input: parsed, summary, followUp: { input: followUp, pullRequest }, ...(skip ? { skip } : {}), files: [] });
+				log("info", "fixer_followup_prepared", { taskId, issue: summary.groupId, round: followUp.round, state: pullRequest.state, feedback: pullRequest.feedback.length, skipped: skip !== undefined });
+				return { ...input, agentKey: `aikido-followup:${summary.groupId}`, repository: { ...input.repository, ref: followUp.branch } };
+			}
 			const verdict = eligibility(summary, settings, parsed.issue.repository);
 			let skip = verdict.eligible ? undefined : verdict.reason;
 			if (!skip) {
@@ -137,11 +159,13 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 
 		instruction(_input, { taskId }) {
 			const state = stateOf(taskId);
+			if (state.followUp) return buildFollowUpInstruction(state.followUp.input.pullRequest, state.summary, state.followUp.pullRequest.feedback, boundary());
 			return buildInstruction(state.input, state.summary, boundary());
 		},
 
 		branchName({ taskId, baseSha }) {
 			const state = stateOf(taskId);
+			if (state.followUp) return state.followUp.input.branch;
 			return attempts.branchFor(taskId, () => `agent/aikido-${state.summary.groupId}-${baseSha.slice(0, 8)}`);
 		},
 
@@ -198,6 +222,11 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 
 		pullRequest(_input, { taskId }) {
 			const state = stateOf(taskId);
+			if (state.followUp) {
+				const title = `fix(security): address review feedback (Aikido #${state.summary.groupId})`;
+				const body = `Follow-up to ${state.followUp.input.pullRequest}.\n\n${defang(state.parsed?.text || state.parsed?.headline || "(the agent gave no description)").slice(0, 6000)}\n\n---\nGenerated by an agent (SomeWork aikido-fixer, task ${taskId}). **Nobody has reviewed it: review before merge.**`;
+				return { title, body, commitMessage: [title, "", `Follow-up to ${state.followUp.input.pullRequest}.`, "", "Generated by an agent (SomeWork aikido-fixer), not reviewed by a person."].join("\n") };
+			}
 			return pullRequestText({
 				summary: state.summary,
 				issueUrl: aikidoUrl(state.input.issue.url),
@@ -215,6 +244,8 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 			const state = tasks.get(context.taskId);
 			if (!state) return { failure: { code: "job_error", message: "the run finished without its Aikido issue", retryable: true } };
 			const result = outcomeOf(base, context, state);
+			state.nextCheck = nextCheck(settings, state, result);
+			if (state.followUp) return { result };
 			attempts.recordOutcome(context.taskId, {
 				groupId: state.summary.groupId,
 				outcome: String(result.outcome),
@@ -228,6 +259,7 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 		onSettled(taskId, outcome: Outcome) {
 			const state = tasks.get(taskId);
 			tasks.delete(taskId);
+			if (state?.nextCheck && outcome.type === "completed") scheduleCheck(options.timers, state.nextCheck, state.summary.groupId, log);
 			if (!state?.env || !state.workspace || outcome.type !== "completed") return;
 			// the result is reported and the branch is pushed (or nothing was to be): the checkout has done its job
 			void state.env.remove(state.workspace, { recursive: true, force: true }, BACKGROUND_CONTEXT).catch(() => undefined);
@@ -241,9 +273,43 @@ const tokensOf = (usage: unknown): number | undefined => {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 };
 
+const PULL_REQUEST_NUMBER = /\/pull\/([0-9]+)$/;
+
+/** When the pull request should be looked at next, given how this task ended: after a pull request was opened, and after each look while it is open and rounds are left. */
+export function nextCheck(settings: Pick<FixerSettings, "followUpMinutes">, state: TaskState, result: Record<string, unknown>): TaskState["nextCheck"] {
+	const minutes = settings.followUpMinutes;
+	if (state.followUp) {
+		const { round } = state.followUp.input;
+		const open = state.followUp.pullRequest.state === "open";
+		const settled = result.outcome === "followup_pushed" || result.outcome === "no_followup_needed" || (result.outcome === "skipped" && open);
+		if (!open || !settled || round >= minutes.length) return undefined;
+		return { round: round + 1, minutes: minutes[round]!, pullRequest: state.followUp.input.pullRequest, branch: state.followUp.input.branch };
+	}
+	if (result.outcome !== "pr_opened" || typeof result.prUrl !== "string" || typeof result.branch !== "string" || minutes.length === 0) return undefined;
+	return PULL_REQUEST_NUMBER.test(result.prUrl) ? { round: 1, minutes: minutes[0]!, pullRequest: result.prUrl, branch: result.branch } : undefined;
+}
+
+function scheduleCheck(timers: FixerOptions["timers"], check: NonNullable<TaskState["nextCheck"]>, issue: string, log: Log): void {
+	if (!timers) {
+		log("info", "fixer_followup_not_scheduled", { reason: "the event hub timers are not configured" });
+		return;
+	}
+	const number = PULL_REQUEST_NUMBER.exec(check.pullRequest)?.[1];
+	void timers
+		.request({
+			delaySeconds: check.minutes * 60,
+			key: `pr-followup:${number}`,
+			note: `Look at pull request #${number} again for review feedback and failing checks (check ${check.round}).`,
+			payload: { kind: "pr-followup", pullRequest: check.pullRequest, branch: check.branch, issue: Number(issue), round: check.round },
+		})
+		.then((timer) => log("info", "fixer_followup_scheduled", { pullRequest: check.pullRequest, round: check.round, dueAt: timer.dueAt }))
+		.catch((error: unknown) => log("warn", "fixer_followup_not_scheduled", { pullRequest: check.pullRequest, round: check.round, error: error instanceof Error ? error.message.slice(0, 160) : "error" }));
+}
+
 /** The card's result for a settled task. */
 export function outcomeOf(base: Record<string, unknown>, context: ResultContext, state: TaskState): Record<string, unknown> {
 	const usage = (base as { usage?: unknown }).usage;
+	if (state.followUp) return followUpOutcome(base, context, state, usage);
 	const common = { aikidoIssueId: Number(state.summary.groupId), files: state.files.slice(0, 100), ...(state.baseSha ? { baseSha: state.baseSha } : {}), ...(state.tests ? { tests: state.tests } : {}), ...(usage ? { usage } : {}) };
 	if (context.blocked) {
 		const skipped = context.blocked.reason.startsWith(SKIPPED);
@@ -259,6 +325,21 @@ export function outcomeOf(base: Record<string, unknown>, context: ResultContext,
 	return { outcome: "pr_opened", summary: clip([state.parsed?.headline, state.parsed?.text].filter(Boolean).join("\n\n") || "a pull request was opened", 4000), prUrl: done.prUrl, branch: done.branch, ...(sha ? { sha } : {}), ...common };
 }
 
+function followUpOutcome(_base: Record<string, unknown>, context: ResultContext, state: TaskState, usage: unknown): Record<string, unknown> {
+	const common = { aikidoIssueId: Number(state.summary.groupId), prUrl: state.followUp!.input.pullRequest, branch: state.followUp!.input.branch, files: state.files.slice(0, 100), round: state.followUp!.input.round, ...(state.baseSha ? { baseSha: state.baseSha } : {}), ...(state.tests ? { tests: state.tests } : {}), ...(usage ? { usage } : {}) };
+	if (context.blocked) {
+		const skipped = context.blocked.reason.startsWith(SKIPPED);
+		return { outcome: skipped ? "skipped" : "blocked", summary: clip(skipped ? context.blocked.reason.slice(SKIPPED.length) : context.blocked.reason, 4000), ...common };
+	}
+	const done = context.finalize;
+	if (!done || done.status === "no_changes") {
+		const why = state.parsed?.kind === "no_fix" ? [state.parsed.headline, state.parsed.text].filter(Boolean).join("\n\n") : "the agent changed nothing";
+		return { outcome: "no_followup_needed", summary: clip(why || "the agent found nothing to change", 4000), ...common };
+	}
+	const sha = done.commits.at(-1);
+	return { outcome: "followup_pushed", summary: clip([state.parsed?.headline, state.parsed?.text].filter(Boolean).join("\n\n") || "a follow-up commit was pushed", 4000), ...(sha ? { sha } : {}), ...common, branch: done.branch };
+}
+
 /** For `runAgentService`: the hooks of the service being composed. Fails at startup when the deployment cannot work. */
 export async function aikidoFixerHooksFor(context: ServiceContext): Promise<RoleHooks> {
 	const settings = loadSettings(context.env);
@@ -267,7 +348,8 @@ export async function aikidoFixerHooksFor(context: ServiceContext): Promise<Role
 	readCredentials(settings.credentialsFile);
 	const aikido = new AikidoClient({ region: settings.region, credentials: () => readCredentials(settings.credentialsFile), apiBase: settings.apiBase, oauthUrl: settings.oauthUrl });
 	seedHandler({ stateDir: context.config.state.dir, settings, log: context.log, reseed: context.env.AIKIDO_RESEED_HANDLER === "1" });
-	const hooks = createFixerHooks({ settings, aikido, stateDir: context.config.state.dir, log: context.log });
+	const reader = new GitHubPullRequestReader({ apiBase: context.config.git.githubApi, token: async () => (context.gitTokenSource ? await context.gitTokenSource() : context.gitToken!) });
+	const hooks = createFixerHooks({ settings, aikido, reader, ...(context.timers ? { timers: context.timers } : {}), stateDir: context.config.state.dir, log: context.log });
 	const chat = fixerChat({ settings, aikido, stateDir: context.config.state.dir, mirrorDir: context.config.git.mirror?.dir, log: context.log });
 	return { ...hooks, chat, readinessChecks: { aikido_credentials: async () => !!readCredentials(settings.credentialsFile) } };
 }

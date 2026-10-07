@@ -62,6 +62,12 @@ All `AIKIDO_*` unless noted; `deploy/.env.example` and `deploy/compose.yaml` lis
 
 The service refuses to start without a git token or with `PI_CONCURRENCY` above 1. `GIT_PR_DRAFT` (default `0`) chooses between real pull requests and drafts; the rest of the safety envelope does not depend on it: only `agent/*` branches, never the default branch, never a force push, never a merge or an approval. The handler's settings are written into it when it is installed; a restart never overwrites the live copy.
 
+## Follow-ups on its own pull requests
+
+After a pull request is opened the agent asks the event hub (`TIMERS_URL`, see `packages/events-hub/README.md`, "Timers") to wake it again after `AIKIDO_FOLLOWUP_MINUTES` (default `15,60,240`; `off` turns follow-ups off). The wake (`clock.timer.aikido_fixer.due`, rule `aikido-fixer-timer`) reaches the second shipped handler, `aikido-followup`, which validates the timer's payload (this repository's pull request address, an `agent/` branch, the issue number, the check number) and submits one `code.fix.followup` task for this agent, at most `AIKIDO_FOLLOWUP_CAP_PER_DAY` (default 10) a day.
+
+The task reads the pull request over GitHub's API with the agent's own credential: reviews, review comments, comments and failing checks from anyone but the agent itself that came after the branch's newest commit. A pull request that is closed or merged, or has nothing new, ends as `skipped` before anything is cloned. Otherwise the workspace is the head of the pull request's branch, the model gets the feedback as data between markers and is told to act only on points that are correct and about the security fix, and the same guards as for a fix (protected paths, file count, secret-like text, check profile) judge the change before the service commits to the **same branch**: the pull request updates, nothing is force-pushed, no new pull request is opened. Results: `followup_pushed`, `no_followup_needed`, `skipped`, `blocked`. After each look, while the pull request is open and checks are left, the next one is asked for; if the hub cannot be reached the follow-up is simply not scheduled (the log says so).
+
 ## Chat
 
 The fixer answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice).

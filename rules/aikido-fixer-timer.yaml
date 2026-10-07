@@ -1,0 +1,5 @@
+name: aikido-fixer-timer
+description: A timer the Aikido fixer asked the hub for ("look at this pull request again in 15 minutes") wakes the fixer, whose own handler decides whether to start a follow-up.
+owner: agent/aikido-fixer
+selector: clock.timer.aikido_fixer.due
+wake: true

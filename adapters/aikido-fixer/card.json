@@ -180,6 +180,190 @@
           }
         }
       }
+    },
+    {
+      "id": "code.fix.followup",
+      "version": "1",
+      "name": "Follow up on a pull request this agent opened",
+      "description": "Give the Aikido issue id, the repository (url, and the pull request's branch as ref) and followUp (the pull request's address, its agent/ branch and the check number). The agent reads the reviews, comments and failing checks that came after the branch's newest commit; when there are some it works on that same branch, so the pull request updates, and reports followup_pushed. When the pull request is closed or merged, or nothing new was said, nothing is cloned and the result is skipped. Started by the agent itself from a timer it asked the event hub for after opening the pull request.",
+      "tags": [
+        "contract:idempotent",
+        "fix",
+        "security",
+        "followup"
+      ],
+      "sideEffects": "write",
+      "timeoutSeconds": 3600,
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "issue",
+          "repository",
+          "followUp",
+          "budget"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "issue": {
+            "type": "object",
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "the Aikido issue group id (or an issue id; the agent resolves it to its group)",
+                "oneOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[0-9]{1,12}$"
+                  }
+                ]
+              }
+            }
+          },
+          "repository": {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "ref": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "default: HEAD, the head of the repository's default branch at the moment the task runs"
+              }
+            }
+          },
+          "followUp": {
+            "type": "object",
+            "required": [
+              "pullRequest",
+              "branch",
+              "round"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "pullRequest": {
+                "type": "string",
+                "maxLength": 300,
+                "pattern": "^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+$"
+              },
+              "branch": {
+                "type": "string",
+                "maxLength": 160,
+                "pattern": "^agent/"
+              },
+              "round": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              }
+            }
+          },
+          "budget": {
+            "type": "object",
+            "required": [
+              "maxTokens",
+              "maxMinutes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "maxMinutes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "outcome",
+          "summary",
+          "aikidoIssueId",
+          "files"
+        ],
+        "properties": {
+          "outcome": {
+            "enum": [
+              "followup_pushed",
+              "no_followup_needed",
+              "skipped",
+              "blocked"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "aikidoIssueId": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "prUrl": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "baseSha": {
+            "type": "string"
+          },
+          "round": {
+            "type": "integer"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tests": {
+            "type": "object",
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "ok": {
+                "type": "boolean"
+              },
+              "summary": {
+                "type": "string"
+              }
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "totalTokens": {
+                "type": "integer"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }

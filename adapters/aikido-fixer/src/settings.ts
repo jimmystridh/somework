@@ -27,6 +27,10 @@ export interface FixerSettings {
 	cooldownMinutes: number;
 	dailyCap: number;
 	budget: { maxTokens: number; maxMinutes: number };
+	/** Minutes after a pull request is opened (and after each check) at which the agent looks at it again for review comments and failing checks; empty turns follow-ups off. */
+	followUpMinutes: number[];
+	/** Follow-up tasks the handler starts per day. */
+	followUpCapPerDay: number;
 	apiBase?: string;
 	oauthUrl?: string;
 	/** A JSON file of earlier attempts to seed the account the chat gives of what the agent did (`AIKIDO_LEDGER_IMPORT`). Imported once, harmlessly again. */
@@ -71,6 +75,16 @@ function checkProfileFrom(env: NodeJS.ProcessEnv): FixerSettings["checkProfile"]
 	return { name, profile: { command: profile.command, ...(profile.cwd ? { cwd: profile.cwd } : {}), ...(profile.timeoutSeconds ? { timeoutSeconds: Number(profile.timeoutSeconds) } : {}) } };
 }
 
+/** `15,60,240` to minutes; `0`, `off` or an empty value to none. */
+function minutesList(env: NodeJS.ProcessEnv, name: string, fallback: number[]): number[] {
+	const raw = env[name];
+	if (raw === undefined) return fallback;
+	if (raw.trim() === "" || raw.trim() === "0" || raw.trim().toLowerCase() === "off") return [];
+	const minutes = raw.split(/[\s,]+/).filter(Boolean).map(Number);
+	if (minutes.length > 10 || minutes.some((value) => !Number.isInteger(value) || value < 1 || value > 10_080)) throw new Error(`${name} must be up to 10 whole numbers of minutes from 1 to 10080, or off`);
+	return minutes;
+}
+
 /** The role's settings from the environment (everything is `AIKIDO_*` except the kit's own variables). Fails at startup, not at the first event. */
 export function loadSettings(env: NodeJS.ProcessEnv = process.env): FixerSettings {
 	const repositories = list(env.AIKIDO_ALLOWED_REPOSITORIES ?? env.AIKIDO_REPOSITORY_URL, []);
@@ -102,6 +116,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): FixerSetting
 		cooldownMinutes: integer(env, "AIKIDO_ATTEMPT_COOLDOWN_MINUTES", 180),
 		dailyCap: integer(env, "AIKIDO_DAILY_CAP", 5),
 		budget: { maxTokens: integer(env, "AIKIDO_FIX_BUDGET_TOKENS", 300_000), maxMinutes: integer(env, "AIKIDO_FIX_BUDGET_MINUTES", 30) },
+		followUpMinutes: minutesList(env, "AIKIDO_FOLLOWUP_MINUTES", [15, 60, 240]),
+		followUpCapPerDay: integer(env, "AIKIDO_FOLLOWUP_CAP_PER_DAY", 10),
 		...(env.AIKIDO_LEDGER_IMPORT ? { ledgerImport: env.AIKIDO_LEDGER_IMPORT } : {}),
 		...(override && env.AIKIDO_API_BASE ? { apiBase: env.AIKIDO_API_BASE } : {}),
 		...(override && env.AIKIDO_OAUTH_URL ? { oauthUrl: env.AIKIDO_OAUTH_URL } : {}),
