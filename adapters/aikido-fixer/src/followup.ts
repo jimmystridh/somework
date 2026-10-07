@@ -41,9 +41,9 @@ export interface FeedbackItem {
 export interface PullRequestState {
 	state: "open" | "closed" | "merged";
 	headSha: string;
-	/** Who opened the pull request: the agent itself, whose own comments are not feedback. */
+	/** Who opened the pull request (the account the agent pushes as). */
 	author: string;
-	/** Reviews, comments and failing checks that came after the newest commit on the branch. */
+	/** Reviews, review comments, comments from people and failing checks that came after the newest commit on the branch. */
 	feedback: FeedbackItem[];
 }
 
@@ -98,16 +98,18 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		]);
 		const items: FeedbackItem[] = [];
 		const later = (at: unknown) => Date.parse(String(at)) > since;
-		const others = (login: unknown) => String(login ?? "") !== author;
+		// the agent writes no comments of its own (the service only commits and opens the pull request), so nobody is left out, not even the account it pushes as;
+		// a bot's plain comment (a preview deployment, a summary) is noise, while its reviews, inline comments and failed checks are the point
+		const person = (comment: any) => comment?.user?.type !== "Bot" && !String(comment?.user?.login ?? "").endsWith("[bot]");
 		for (const review of Array.isArray(reviews) ? reviews : []) {
 			const body = String(review?.body ?? "").trim();
-			if (later(review?.submitted_at) && others(review?.user?.login) && (body !== "" || review?.state === "CHANGES_REQUESTED")) items.push({ kind: "review", author: String(review?.user?.login ?? "unknown"), at: String(review.submitted_at), body: clip(`${review.state}${body ? `: ${body}` : ""}`, MAX_BODY) });
+			if (later(review?.submitted_at) && (body !== "" || review?.state === "CHANGES_REQUESTED")) items.push({ kind: "review", author: String(review?.user?.login ?? "unknown"), at: String(review.submitted_at), body: clip(`${review.state}${body ? `: ${body}` : ""}`, MAX_BODY) });
 		}
 		for (const comment of Array.isArray(inline) ? inline : []) {
-			if (later(comment?.created_at) && others(comment?.user?.login) && String(comment?.body ?? "").trim() !== "") items.push({ kind: "review_comment", author: String(comment?.user?.login ?? "unknown"), at: String(comment.created_at), body: clip(String(comment.body).trim(), MAX_BODY), ...(typeof comment.path === "string" ? { path: comment.path } : {}), ...(Number.isInteger(comment.line) ? { line: comment.line } : {}) });
+			if (later(comment?.created_at) && String(comment?.body ?? "").trim() !== "") items.push({ kind: "review_comment", author: String(comment?.user?.login ?? "unknown"), at: String(comment.created_at), body: clip(String(comment.body).trim(), MAX_BODY), ...(typeof comment.path === "string" ? { path: comment.path } : {}), ...(Number.isInteger(comment.line) ? { line: comment.line } : {}) });
 		}
 		for (const comment of Array.isArray(comments) ? comments : []) {
-			if (later(comment?.created_at) && others(comment?.user?.login) && String(comment?.body ?? "").trim() !== "") items.push({ kind: "comment", author: String(comment?.user?.login ?? "unknown"), at: String(comment.created_at), body: clip(String(comment.body).trim(), MAX_BODY) });
+			if (later(comment?.created_at) && person(comment) && String(comment?.body ?? "").trim() !== "") items.push({ kind: "comment", author: String(comment?.user?.login ?? "unknown"), at: String(comment.created_at), body: clip(String(comment.body).trim(), MAX_BODY) });
 		}
 		for (const run of Array.isArray(checks?.check_runs) ? checks.check_runs : []) {
 			if (FAILED_CHECKS.has(String(run?.conclusion))) items.push({ kind: "check", author: String(run?.app?.slug ?? "check"), at: String(run?.completed_at ?? ""), body: clip(`check "${String(run?.name ?? "?")}" ${run.conclusion}${run?.output?.title ? `: ${String(run.output.title)}` : ""}`, 400) });

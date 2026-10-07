@@ -50,11 +50,15 @@ describe("reading a pull request", () => {
 			"/repos/Acme/Shop/pulls/42/reviews": [
 				{ submitted_at: "2026-10-06T10:05:00Z", user: { login: "anna" }, state: "CHANGES_REQUESTED", body: "please add a test" },
 				{ submitted_at: "2026-10-06T09:00:00Z", user: { login: "old" }, state: "COMMENTED", body: "before the newest commit" },
-				{ submitted_at: "2026-10-06T10:06:00Z", user: { login: "fixer-bot" }, state: "COMMENTED", body: "my own reply" },
+				{ submitted_at: "2026-10-06T10:06:00Z", user: { login: "fixer-bot" }, state: "COMMENTED", body: "the account the agent pushes as is a person too" },
 				{ submitted_at: "2026-10-06T10:07:00Z", user: { login: "lgtm" }, state: "APPROVED", body: "" },
 			],
 			"/repos/Acme/Shop/pulls/42/comments": [{ created_at: "2026-10-06T10:10:00Z", user: { login: "reviewer-bot" }, body: "unused import", path: "src/a.ts", line: 7 }],
-			"/repos/Acme/Shop/issues/42/comments": [{ created_at: "2026-10-06T10:20:00Z", user: { login: "bob" }, body: "what about v5?" }],
+			"/repos/Acme/Shop/issues/42/comments": [
+				{ created_at: "2026-10-06T10:20:00Z", user: { login: "bob", type: "User" }, body: "what about v5?" },
+				{ created_at: "2026-10-06T10:21:00Z", user: { login: "github-actions[bot]", type: "Bot" }, body: "Preview environment deployed" },
+				{ created_at: "2026-10-06T10:22:00Z", user: { login: "chatgpt-codex-connector[bot]" }, body: "Codex Review Summary" },
+			],
 			[`/repos/Acme/Shop/commits/${HEAD}/check-runs`]: { check_runs: [{ name: "build", conclusion: "failure", completed_at: "2026-10-06T10:15:00Z", app: { slug: "woodpecker" }, output: { title: "1 test failed" } }, { name: "lint", conclusion: "success", completed_at: "2026-10-06T10:16:00Z" }] },
 			...overrides,
 		};
@@ -67,15 +71,15 @@ describe("reading a pull request", () => {
 		return { seen, reader: new GitHubPullRequestReader({ token: async () => "tok", fetch: fetcher }) };
 	};
 
-	it("keeps what came after the newest commit from others, in order, with failing checks", async () => {
+	it("keeps what came after the newest commit, in order, with failing checks and without a bot's plain comments", async () => {
 		const r = reader();
 		const state = await r.reader.read(PR);
 		assert.equal(state.state, "open");
 		assert.equal(state.headSha, HEAD);
-		assert.deepEqual(state.feedback.map((f) => [f.kind, f.author]), [["review", "anna"], ["review_comment", "reviewer-bot"], ["check", "woodpecker"], ["comment", "bob"]]);
+		assert.deepEqual(state.feedback.map((f) => [f.kind, f.author]), [["review", "anna"], ["review", "fixer-bot"], ["review_comment", "reviewer-bot"], ["check", "woodpecker"], ["comment", "bob"]]);
 		assert.match(state.feedback[0]!.body, /CHANGES_REQUESTED: please add a test/);
-		assert.deepEqual([state.feedback[1]!.path, state.feedback[1]!.line], ["src/a.ts", 7]);
-		assert.match(state.feedback[2]!.body, /check "build" failure: 1 test failed/);
+		assert.deepEqual([state.feedback[2]!.path, state.feedback[2]!.line], ["src/a.ts", 7]);
+		assert.match(state.feedback[3]!.body, /check "build" failure: 1 test failed/);
 		assert.ok(r.seen.every((line) => line.endsWith("Bearer tok")));
 	});
 
