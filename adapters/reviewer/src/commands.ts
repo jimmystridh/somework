@@ -15,7 +15,7 @@ export const DENIED_REASON = "denied by the read-only reviewer policy";
 const GIT_READ = new Set(["diff", "diff-tree", "log", "show", "status", "blame", "ls-files", "ls-tree", "cat-file", "rev-parse", "rev-list", "merge-base", "shortlog", "describe", "grep", "name-rev", "show-ref", "for-each-ref", "count-objects", "whatchanged"]);
 const GIT_WRITE = new Set(["push", "commit", "checkout", "switch", "reset", "clean", "apply", "am", "merge", "rebase", "cherry-pick", "revert", "stash", "add", "rm", "mv", "restore", "fetch", "pull", "clone", "config", "worktree", "submodule", "gc", "init", "update-ref", "symbolic-ref", "filter-branch", "notes", "remote", "tag", "branch", "bisect", "format-patch", "send-email", "lfs"]);
 const WRITE_COMMANDS = new Set(["rm", "rmdir", "mv", "cp", "chmod", "chown", "ln", "mkdir", "touch", "tee", "dd", "truncate", "shred", "install", "sudo", "su", "doas", "curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "rsync", "ftp", "apt", "apt-get", "dpkg", "kill", "pkill", "killall", "tar", "unzip", "zip", "gzip", "gunzip", "bzip2", "xz", "patch", "ed", "ex", "vi", "vim", "nano", "emacs", "mount", "umount", "crontab", "at", "reboot", "shutdown", "mkfs", "docker", "podman"]);
-const READ_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file", "stat", "tree", "nl", "sort", "uniq", "cut", "tr", "rg", "grep", "egrep", "fgrep", "ag", "jq", "diff", "realpath", "basename", "dirname", "pwd", "du", "which", "true", "column", "fold", "expand", "strings", "xxd", "od", "md5sum", "sha1sum", "sha256sum", "cmp", "cd", "echo", "printf"]);
+const READ_COMMANDS = new Set(["cat", "head", "tail", "ls", "wc", "file", "stat", "tree", "nl", "sort", "uniq", "cut", "tr", "rg", "grep", "egrep", "fgrep", "ag", "jq", "diff", "realpath", "basename", "dirname", "pwd", "du", "which", "true", "column", "fold", "expand", "strings", "xxd", "od", "md5sum", "sha1sum", "sha256sum", "cmp", "cd", "echo", "printf", "date", "pwd", "whoami", "uname", "id", "echo", "printf"]);
 /** Commands that may only appear after a pipe: they read the previous command's output. */
 const FILTERS = new Set(["head", "tail", "wc", "sort", "uniq", "cut", "tr", "nl", "grep", "egrep", "fgrep", "rg", "jq", "column", "fold", "expand", "cat"]);
 
@@ -61,6 +61,7 @@ function classifySegment(segment: string, piped: boolean): SegmentVerdict {
 		return /^sed\s+-n\s+["']?\d+(,(\d+|\$))?p["']?(\s+[^\s;&|]+)?$/.test(segment.trim()) ? "allow" : "approve";
 	}
 	if (head === "awk" || head === "perl" || head === "python" || head === "python3" || head === "node" || head === "ruby" || head === "bash" || head === "sh" || head === "env" || head === "xargs" || head === "eval" || head === "exec") return "approve";
+	if (head === "date" && tokens.some((t) => /^-[a-zA-Z]*s/.test(t) || t.startsWith("--set"))) return "deny"; // sets the clock
 	if (head === "find") return "allow"; // -exec, -delete and friends were refused above
 	if (piped && FILTERS.has(head)) return "allow";
 	if (READ_COMMANDS.has(head)) return "allow";

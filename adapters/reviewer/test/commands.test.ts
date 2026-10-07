@@ -24,6 +24,8 @@ describe("read-only command classification", () => {
 			"cd /workspace/x && git status --short",
 			"find . -name '*.ts' | wc -l",
 			"echo ---",
+			"date -u",
+			"pwd && whoami && uname -a",
 		]) assert.equal(classifyCommand(command), "allow", command);
 	});
 
@@ -49,6 +51,8 @@ describe("read-only command classification", () => {
 			"git log; rm -rf /",
 			"ls && git reset --hard",
 			"git fetch origin",
+			"date -s '2020-01-01'",
+			"date --set=2020-01-01",
 		]) assert.equal(classifyCommand(command), "deny", command);
 	});
 
