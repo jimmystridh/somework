@@ -154,7 +154,7 @@ export class AppRunner {
 	async start(profile: AppProfile, workspace: string, signal?: AbortSignal): Promise<StartResult> {
 		const startedAtMs = Date.now();
 		const cwd = profile.cwd ? `${workspace}/${profile.cwd}` : workspace;
-		const launched = await this.#run(profile.start, cwd, profile.env, Math.min(profile.startupTimeoutSeconds, 300), signal);
+		const launched = await this.#run(profile.start, cwd, profile.env, Math.min(profile.startupTimeoutSeconds, 900), signal);
 		if (!launched.ok) return { ok: false, reason: redactLog(`the start command failed${launched.exitCode !== undefined ? ` (exit ${launched.exitCode})` : ""}${launched.error ? `: ${launched.error}` : ""}\n${launched.output}`, this.#secrets).trim() };
 		const deadline = Date.now() + profile.startupTimeoutSeconds * 1000;
 		while (Date.now() < deadline) {

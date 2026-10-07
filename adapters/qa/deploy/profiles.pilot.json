@@ -1,13 +1,13 @@
 {
   "app": {
     "local": {
-      "start": "W=\"$(pwd -W)/Source/admin.web\"; C:/tools/bun/bun.exe install --frozen-lockfile --cwd \"$W\" && C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/start-app.ps1 -WebRoot \"$W\" -WebPort 4499 -TenantMode multi -TimeoutSeconds 240",
+      "start": "W=\"$(pwd -W)/Source/admin.web\"; C:/tools/bun/bun.exe install --frozen-lockfile --cwd \"$W\" && C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/start-app.ps1 -WebRoot \"$W\" -WebPort 4499 -TenantMode multi -TimeoutSeconds 420",
       "health": [
         "http://127.0.0.1:8080/health",
         "http://127.0.0.1:4499/"
       ],
       "stop": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/stop-app.ps1",
-      "startupTimeoutSeconds": 330
+      "startupTimeoutSeconds": 600
     }
   }
 }

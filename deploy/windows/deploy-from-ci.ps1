@@ -27,6 +27,7 @@ if (-not $mutex.WaitOne(0)) { Fail 'another deployment is running' 3 }
 $settings = @{}
 foreach ($line in Get-Content "$agent\agent.env") { if ($line -match '^([A-Z0-9_]+)=(.*)$') { $settings[$Matches[1]] = $Matches[2] } }
 $role = if ($settings.ContainsKey('QA_PROFILES_FILE')) { 'qa' } else { 'windows-developer' }
+$package = "@somework/$role"
 $task = if ($role -eq 'qa') { 'SomeWorkQa' } else { 'SomeWorkWindowsDeveloper' }
 $bind = if ($settings.ContainsKey('WINDOWS_HEALTH_BIND')) { $settings['WINDOWS_HEALTH_BIND'] } else { '127.0.0.1' }
 $port = $settings['HEALTH_PORT']
@@ -80,6 +81,16 @@ Get-ChildItem "$deploy\backup" -Directory | Sort-Object Name -Descending | Selec
 
 $lockChanged = (Test-Path "$agent\package-lock.json") -and ((Get-FileHash "$agent\package-lock.json").Hash -ne (Get-FileHash "$stage\package-lock.json").Hash)
 
+# npm writes its warnings to stderr, which Windows PowerShell turns into errors: run it through cmd and look at the exit code only
+function Install-Dependencies {
+    Push-Location $agent
+    try {
+        $output = & cmd.exe /c "npm ci --omit=dev --ignore-scripts -w $package 2>&1"
+        $code = $LASTEXITCODE
+        $output | Select-Object -Last 4 | ForEach-Object { Write-Host $_ }
+        return ($code -eq 0)
+    } finally { Pop-Location }
+}
 function Install-Files {
     foreach ($m in $mirrors) { Mirror "$stage\$m" "$agent\$m" }
     foreach ($f in $files) { Copy-Item "$stage\$($f[0])" "$agent\$($f[1])" -Force }
@@ -115,16 +126,18 @@ function Ensure-Access {
 }
 Ensure-Access
 
+trap {
+    [Console]::Error.WriteLine("unexpected error: $($_.Exception.Message)")
+    try { Restore-Backup } catch { }
+    try { Start-ScheduledTask -TaskName $task } catch { }
+    exit 1
+}
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 Install-Files
 if ($lockChanged) {
-    Write-Host 'the lockfile changed: npm ci'
-    Push-Location $agent
-    try {
-        & npm.cmd ci --omit=dev --ignore-scripts 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -ne 0) { Write-Host 'npm ci failed'; Restore-Backup; Restart-Agent; Fail 'npm ci failed: the old code was put back' }
-    } finally { Pop-Location }
+    Write-Host "the lockfile changed: npm ci for $package"
+    if (-not (Install-Dependencies)) { Write-Host 'npm ci failed'; Restore-Backup; Restart-Agent; Fail 'npm ci failed: the old code was put back' }
 }
 Start-ScheduledTask -TaskName $task
 if (Wait-Ready 120) {
@@ -136,7 +149,7 @@ Write-Host "the $role agent did not become ready in 120 s: putting the old code 
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 Restore-Backup
-if ($lockChanged) { Push-Location $agent; try { & npm.cmd ci --omit=dev --ignore-scripts 2>&1 | Out-Null } finally { Pop-Location } }
+if ($lockChanged) { Install-Dependencies | Out-Null }
 Start-ScheduledTask -TaskName $task
 if (Wait-Ready 120) { Fail 'the new code did not start; the old code is running again' }
 Fail 'the new code did not start and neither did the old code: look at the machine'
