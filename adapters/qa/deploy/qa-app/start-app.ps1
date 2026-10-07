@@ -32,16 +32,34 @@ if (-not (Test-Listening 8080)) { & schtasks.exe /Run /TN QaAppServer | Out-Null
 if (-not (Test-Listening $WebPort)) { & schtasks.exe /Run /TN QaAppWeb | Out-Null }
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $healthy = $false
+# a web app that prints nothing and never opens its port (seen on a fresh checkout, minutes after a bun install) is started again; a normal start takes under a minute
+$webStartedAt = Get-Date
+$webRestarts = 0
 while ((Get-Date) -lt $deadline) {
     if ((Test-Url 'http://127.0.0.1:8080/health') -and (Test-Url "http://127.0.0.1:$WebPort/")) { $healthy = $true; break }
+    if (-not (Test-Listening $WebPort) -and $webRestarts -lt 2 -and ((Get-Date) - $webStartedAt).TotalSeconds -gt 150) {
+        Write-Host "the web app is silent after 150 s: starting it again ($($webRestarts + 1) of 2)"
+        Set-Content "$ctl\stop-web" 'stop'
+        $until = (Get-Date).AddSeconds(30)
+        while ((Test-TaskRunning 'QaAppWeb') -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+        if (Test-TaskRunning 'QaAppWeb') { & schtasks.exe /End /TN QaAppWeb | Out-Null; Start-Sleep -Seconds 3 }
+        Remove-Item "$ctl\stop-web" -ErrorAction SilentlyContinue
+        & schtasks.exe /Run /TN QaAppWeb | Out-Null
+        $webRestarts++
+        $webStartedAt = Get-Date
+    }
     Start-Sleep -Seconds 3
 }
 if (-not $healthy) {
-    Write-Host 'FAIL: the stack did not become healthy in time'
-    foreach ($t in 'QaAppServer', 'QaAppWeb') { Write-Host ("task {0}: {1}" -f $t, ((& schtasks.exe /Query /TN $t /FO LIST 2>$null | Select-String -Pattern 'Status:|Last Result:') -join ' ')) }
-    Write-Host ("listening: 8080={0} {1}={2}" -f (Test-Listening 8080), $WebPort, (Test-Listening $WebPort))
-    foreach ($f in 'web.log', 'web.err.log', 'bfs.err.log') { $path = "$root\logs\$f"; Write-Host ("{0}: {1} bytes" -f $f, $(if (Test-Path $path) { (Get-Item $path).Length } else { 'missing' })); if ((Test-Path $path) -and (Get-Item $path).Length -gt 0) { Get-Content $path -Tail 8 } }
-    Get-Process bun, node, vite -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("process {0} {1} cpu={2} started={3}" -f $_.Id, $_.ProcessName, [int]$_.CPU, $_.StartTime) }
+    $diag = New-Object System.Collections.Generic.List[string]
+    $diag.Add('FAIL: the stack did not become healthy in time')
+    foreach ($t in 'QaAppServer', 'QaAppWeb') { $diag.Add(("task {0}: {1}" -f $t, ((& schtasks.exe /Query /TN $t /FO LIST 2>$null | Select-String -Pattern 'Status:|Last Result:') -join ' '))) }
+    $diag.Add(("listening: 8080={0} {1}={2}; web restarts={3}" -f (Test-Listening 8080), $WebPort, (Test-Listening $WebPort), $webRestarts))
+    foreach ($f in 'web.log', 'web.err.log', 'bfs.err.log') { $path = "$root\logs\$f"; $diag.Add(("{0}: {1} bytes" -f $f, $(if (Test-Path $path) { (Get-Item $path).Length } else { 'missing' }))); if ((Test-Path $path) -and (Get-Item $path).Length -gt 0) { Get-Content $path -Tail 8 | ForEach-Object { $diag.Add("  $_") } } }
+    Get-Process bun, node, vite -ErrorAction SilentlyContinue | ForEach-Object { $diag.Add(("process {0} {1} cpu={2} started={3}" -f $_.Id, $_.ProcessName, [int]$_.CPU, $_.StartTime)) }
+    # the agent shows only the beginning of this command's output, so the details also go to a file
+    Set-Content "$root\logs\last-start-failure.txt" $diag
+    Write-Host ($diag[0] + ' (details: C:\somework\qa-app\logs\last-start-failure.txt)')
     exit 1
 }
 Write-Host "UP backend=http://127.0.0.1:8080 web=http://127.0.0.1:$WebPort tenantMode=$TenantMode"
