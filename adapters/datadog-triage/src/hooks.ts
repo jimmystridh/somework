@@ -10,7 +10,7 @@ import { DatadogClient, DatadogError, readCredentials } from "./datadog/client.t
 import { summariseMonitor, type MonitorSummary } from "./datadog/summaries.ts";
 import { createDatadogTools, type IssuedRefs } from "./datadog/tools.ts";
 import { eligibility } from "./eligibility.ts";
-import { buildNotice, monitorUrl } from "./notice.ts";
+import { buildNotice, displayName, monitorUrl } from "./notice.ts";
 import { buildInstruction, type TriageInput } from "./prompt.ts";
 import type { Triage } from "./result.ts";
 import { seedHandler } from "./seed.ts";
@@ -84,7 +84,7 @@ export function createTriageHooks(options: TriageOptions): { hooks: RoleHooks; l
 	const notify = async (taskId: string, triage: Triage, state: TaskState): Promise<void> => {
 		// a noisy alert needs no message, and a triage a person asked for in chat is answered in that chat
 		if (triage.outcome === "noise" || taskId.startsWith(CHAT_TASK_PREFIX)) return;
-		const text = buildNotice(triage, { monitorId: state.monitor.id, monitorName: state.monitor.name, site: settings.site });
+		const text = buildNotice(triage, { monitorId: state.monitor.id, monitorName: displayName(state.monitor.name, state.input.monitor.name), site: settings.site });
 		try {
 			await options.client.post(
 				"/v1/messages",
@@ -118,9 +118,10 @@ export function createTriageHooks(options: TriageOptions): { hooks: RoleHooks; l
 			return { ...input, agentKey: `datadog:${monitor.id}:${taskId}` };
 		},
 
-		instruction(_input, { taskId }) {
+		instruction(input, { taskId }) {
 			const state = stateOf(taskId);
-			return buildInstruction(state.input, state.monitor, boundary(), now());
+			const budget = input?.budget?.maxTokens > 0 && input?.budget?.maxMinutes > 0 ? { maxTokens: Number(input.budget.maxTokens), maxMinutes: Number(input.budget.maxMinutes) } : undefined;
+			return buildInstruction(state.input, state.monitor, boundary(), now(), budget);
 		},
 
 		async beforeRun(context) {

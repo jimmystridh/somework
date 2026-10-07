@@ -67,7 +67,7 @@ export class TriageRuntime implements AgentRuntime {
 		const guarded: RunHooks = {
 			...hooks,
 			requestApproval: async (approval) => {
-				this.#log("info", "triage_approval_refused", { requestId: request.requestId, tool: approval.tool });
+				this.#log("info", "triage_approval_refused", { requestId: request.requestId, tool: approval.tool, why: approval.summary.slice(0, 160) });
 				return { approved: false, reason: approval.summary.startsWith(REFUSED) ? approval.summary.slice(0, 400) : `${approval.summary.slice(0, 200)}. ${NO_ONE_ANSWERS}` };
 			},
 		};

@@ -18,6 +18,13 @@ export function oneLine(text: string, max: number): string {
 	return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
+/** The name to show: the monitor's own, unless it is a template (`{{host.name}}`), then the name the alert event carried with its status prefix (`[Triggered]`) taken off. */
+export function displayName(monitorName: string | undefined, alertName: string | undefined): string | undefined {
+	if (monitorName && !monitorName.includes("{{")) return monitorName;
+	const resolved = alertName?.replace(/^\s*\[[^\]]*\]\s*/, "").trim();
+	return resolved ? resolved : monitorName;
+}
+
 const LABEL: Record<Triage["outcome"], string> = { diagnosed: "diagnosed", inconclusive: "inconclusive", noise: "looks like noise" };
 
 /**
