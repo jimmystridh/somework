@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { createHub } from "./bootstrap.ts";
-import { hookToken, signingSecret } from "./derive.ts";
+import { hookToken, signingSecret, timerToken } from "./derive.ts";
 import { jsonLogger } from "./log.ts";
 import { parseBody } from "./mapping.ts";
 
@@ -15,6 +15,7 @@ const USAGE = `somework-hub <command>
   urls [--host <https://hooks.example>] [--receiver-config <file>]
                                      the webhook URL of every source: the secret part of each URL is printed, keep it out of logs and chat
   signing-secret <source>            the key a code host signs deliveries with for a source verified with github-hmac
+  timer-token <agent>                the token one agent presents to ask for timers (keep it out of logs and chat)
 
 Configuration is read from HUB_CONFIG and HUB_SECRET_FILE, like the service.`;
 
@@ -81,6 +82,11 @@ async function main(argv: string[]): Promise<number> {
 			const source = config.sources.find((s) => s.name === action);
 			if (!source) return fail(`unknown source ${action}`);
 			console.log(signingSecret(secret, source.name, source.version));
+			return 0;
+		}
+		if (area === "timer-token" && action) {
+			if (!config.timers?.agents.includes(action)) return fail(`${action} is not listed in timers.agents`);
+			console.log(timerToken(secret, action));
 			return 0;
 		}
 		console.error(USAGE);

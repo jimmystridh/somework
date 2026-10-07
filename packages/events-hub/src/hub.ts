@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ForwardConfig, HubConfig, SourceConfig } from "./config.ts";
 import { Clock } from "./clock.ts";
+import { Timers } from "./timers.ts";
 import { hookToken, safeEqual } from "./derive.ts";
 import type { Forwarder } from "./forwarder.ts";
 import { silent, type Log } from "./log.ts";
@@ -46,6 +47,7 @@ export const backoffMs = (attempt: number): number => Math.min(MAX_BACKOFF_MS, 1
 export class Hub {
 	readonly metrics = new Metrics();
 	readonly clock: Clock | undefined;
+	readonly timers: Timers | undefined;
 	readonly #deps: HubDeps;
 	readonly #log: Log;
 	readonly #sleep: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -60,6 +62,8 @@ export class Hub {
 	readonly #failures;
 	readonly #forwarded;
 	readonly #ticks;
+	readonly #timerEvents;
+	readonly #timersPending;
 	readonly #pending;
 	readonly #oldest;
 	readonly #queued;
@@ -82,6 +86,8 @@ export class Hub {
 		this.#failures = m.counter("hub_publish_failures_total", "Failed attempts to publish or forward, by source and kind (transient or permanent).");
 		this.#forwarded = m.counter("hub_forwarded_total", "Webhooks replayed to a private target, by source.");
 		this.#ticks = m.counter("hub_clock_ticks_total", "Clock ticks, by schedule and outcome.");
+		this.#timerEvents = m.counter("hub_timers_total", "Timers that came due, by agent and outcome.");
+		this.#timersPending = m.gauge("hub_timers_pending", "Timers waiting to come due.");
 		this.#pending = m.gauge("hub_dead_letters", "Dead letters waiting for a replay, by source.");
 		this.#oldest = m.gauge("hub_receiver_oldest_pending_age_seconds", "Age of the oldest webhook still queued at the receiver.");
 		this.#queued = m.gauge("hub_receiver_queued", "Webhooks queued at the receiver.");
@@ -95,6 +101,16 @@ export class Hub {
 					log: this.#log,
 					publish: (event, occurredAt) => this.#publishClock(event, occurredAt),
 					onTick: (schedule, missed, published) => this.#ticks({ schedule, outcome: published ? (missed ? "published_late" : "published") : "skipped" }),
+				})
+			: undefined;
+		this.timers = deps.config.timers
+			? new Timers({
+					config: deps.config.timers,
+					store: deps.store,
+					now: deps.now,
+					log: this.#log,
+					publish: (event, occurredAt) => this.#publishClock(event, occurredAt),
+					onFire: (agent, outcome, late) => this.#timerEvents({ agent, outcome: outcome === "published" && late ? "published_late" : outcome }),
 				})
 			: undefined;
 	}
@@ -234,12 +250,14 @@ export class Hub {
 	start(): void {
 		this.#loops.push(this.#pullLoop(), this.#inboxLoop(), this.#maintenanceLoop());
 		this.clock?.run();
+		this.timers?.run();
 		this.#log("info", "hub_started", { sources: this.#sources.size, schedules: this.#deps.config.clock.schedules.length });
 	}
 
 	async stop(): Promise<void> {
 		this.#abort.abort();
 		this.clock?.stop();
+		this.timers?.stop();
 		this.#inboxWake?.();
 		await Promise.allSettled(this.#loops);
 		this.#log("info", "hub_stopped", {});
@@ -317,6 +335,7 @@ export class Hub {
 		while (!signal.aborted) {
 			const rows = store.inbox(20);
 			this.#inboxSize.set(store.inboxSize());
+			this.#timersPending.set(store.pendingTimerCount());
 			if (rows.length === 0) {
 				await new Promise<void>((resolve) => {
 					const timer = setTimeout(resolve, 1000);

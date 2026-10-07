@@ -36,6 +36,15 @@ export interface ScheduleConfig {
 	missed: "run-once" | "skip" | "auto";
 }
 
+/** One-shot timers that agents ask the hub for ("trigger me with this in 15 minutes"). Needs the clock's producer, the events are published as its source. */
+export interface TimersConfig {
+	/** The agents that may ask, by id. Each has its own token (`somework-hub timer-token <agent>`). */
+	agents: string[];
+	minDelaySeconds: number;
+	maxDelaySeconds: number;
+	maxPendingPerAgent: number;
+}
+
 export interface HubConfig {
 	domain: { url: string; caFile?: string; requireTls: boolean };
 	receiver: { url: string; caFile?: string; waitSeconds: number };
@@ -45,6 +54,7 @@ export interface HubConfig {
 	maxAttempts: number;
 	sources: SourceConfig[];
 	clock: { producer?: ProducerConfig; schedules: ScheduleConfig[] };
+	timers?: TimersConfig;
 }
 
 const SOURCE_NAME = /^[a-z][a-z0-9-]{0,30}$/;
@@ -92,6 +102,7 @@ export function parseConfig(raw: unknown, baseDir = "."): HubConfig {
 		return { name, cron: need(entry.cron, `schedule ${name}: cron`), timeZone: String(entry.timeZone ?? "Europe/Stockholm"), jitterSeconds: Number(entry.jitterSeconds ?? 0), missed };
 	});
 	if (schedules.length > 0 && !input.clock?.producer?.keyFile) throw new Error("clock schedules need clock.producer.keyFile");
+	const timers = input.timers === undefined ? undefined : parseTimers(input.timers, Boolean(input.clock?.producer?.keyFile));
 	return {
 		domain: { url: need(input.domain?.url, "domain.url"), ...(input.domain?.caFile ? { caFile: String(input.domain.caFile) } : {}), requireTls: input.domain?.requireTls !== false },
 		receiver: { url: need(input.receiver?.url, "receiver.url"), ...(input.receiver?.caFile ? { caFile: String(input.receiver.caFile) } : {}), waitSeconds: Number(input.receiver?.waitSeconds ?? 25) },
@@ -101,7 +112,34 @@ export function parseConfig(raw: unknown, baseDir = "."): HubConfig {
 		maxAttempts: Number(input.maxAttempts ?? 20),
 		sources,
 		clock: { ...(input.clock?.producer ? { producer: { keyFile: String(input.clock.producer.keyFile) } } : {}), schedules },
+		...(timers ? { timers } : {}),
 	};
+}
+
+export const AGENT_ID = /^agent\/[a-z0-9][a-z0-9._-]{0,48}$/;
+
+function parseTimers(raw: unknown, hasClockProducer: boolean): TimersConfig {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("timers must be an object");
+	const input = raw as Record<string, any>;
+	if (!hasClockProducer) throw new Error("timers need clock.producer.keyFile (timer events are published as the clock)");
+	const agents: string[] = Array.isArray(input.agents) ? input.agents.map(String) : [];
+	if (agents.length === 0) throw new Error("timers.agents must list at least one agent id");
+	for (const agent of agents) if (!AGENT_ID.test(agent)) throw new Error(`timers.agents: invalid agent id "${agent}"`);
+	const topics = new Set(agents.map((agent) => agent.slice("agent/".length).replace(/[^a-z0-9]/g, "_")));
+	if (topics.size !== new Set(agents).size) throw new Error("timers.agents: two agents would share one timer topic (hyphens and dots become underscores)");
+	const whole = (value: unknown, fallback: number, label: string): number => {
+		const number = Number(value ?? fallback);
+		if (!Number.isInteger(number) || number < 1) throw new Error(`timers.${label} must be a positive whole number`);
+		return number;
+	};
+	const config: TimersConfig = {
+		agents: [...new Set(agents)],
+		minDelaySeconds: whole(input.minDelaySeconds, 60, "minDelaySeconds"),
+		maxDelaySeconds: whole(input.maxDelaySeconds, 7 * 86_400, "maxDelaySeconds"),
+		maxPendingPerAgent: whole(input.maxPendingPerAgent, 20, "maxPendingPerAgent"),
+	};
+	if (config.minDelaySeconds > config.maxDelaySeconds) throw new Error("timers.minDelaySeconds is larger than maxDelaySeconds");
+	return config;
 }
 
 export function loadConfig(path: string): HubConfig {

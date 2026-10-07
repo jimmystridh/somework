@@ -13,6 +13,8 @@ const derive = (secret: string, label: string): string => createHmac("sha256", s
 
 export const hookToken = (secret: string, source: string, version: number): string => derive(secret, `hook:${source}:${version}`);
 export const pullToken = (secret: string): string => derive(secret, "pull");
+/** What one agent presents to ask for timers; a leaked token lets one agent schedule events for itself, nothing else. */
+export const timerToken = (secret: string, agent: string): string => derive(secret, `timer:${agent}`);
 export const adminToken = (secret: string): string => derive(secret, "admin");
 /** The key a code host signs deliveries with for one source (the `github-hmac` check); it is never put in a URL. */
 export const signingSecret = (secret: string, source: string, version: number): string => derive(secret, `hmac:${source}:${version}`);

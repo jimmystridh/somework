@@ -140,6 +140,8 @@ export interface ServiceContext {
 	gitToken?: string;
 	/** With a GitHub App the token above is only the first one and expires after an hour: call this for a live one before every use. */
 	gitTokenSource?: () => Promise<string>;
+	/** Asks the event hub to wake this agent later; present only when `TIMERS_URL` is set. */
+	timers?: import("./timers/client.ts").TimersClient;
 }
 
 /** Role-specific behaviour that is code rather than data. Every member is optional; the defaults are the developer role's. */

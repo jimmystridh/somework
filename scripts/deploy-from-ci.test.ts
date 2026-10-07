@@ -23,9 +23,9 @@ function rig(options: { failRoll?: string; busy?: boolean } = {}) {
 	write(join(bin, "flock"), options.busy ? "#!/bin/sh\nexit 1\n" : "#!/bin/sh\nexit 0\n");
 	write(join(pilot, "bin", "roll-agent.sh"), `#!/bin/sh\necho "roll $(basename "$1") $2 $3 $4 $(cat "$5")" >> "${root}/calls.log"\n[ "$(basename "$1")" != "${options.failRoll ?? "-"}" ]\n`);
 	const repository = join(root, "repository");
-	for (const adapter of ["pi", "reviewer", "aikido-fixer", "datadog-triage"]) {
-		mkdirSync(join(repository, "adapters", adapter, "deploy"), { recursive: true });
-		writeFileSync(join(repository, "adapters", adapter, "deploy", "compose.yaml"), `# ${adapter}\n`);
+	for (const dir of ["adapters/pi", "adapters/reviewer", "adapters/aikido-fixer", "adapters/datadog-triage", "packages/events-hub"]) {
+		mkdirSync(join(repository, dir, "deploy"), { recursive: true });
+		writeFileSync(join(repository, dir, "deploy", "compose.yaml"), `# ${dir.split("/")[1]}\n`);
 	}
 	const archive = join(root, "repository.tgz");
 	spawnSync("tar", ["czf", archive, "-C", repository, "."]);
@@ -36,27 +36,28 @@ function rig(options: { failRoll?: string; busy?: boolean } = {}) {
 }
 
 describe("deploy-from-ci.sh", () => {
-	it("builds every image as ci-<short sha> and rolls the four stacks with the repository's compose files", () => {
+	it("builds every image as ci-<short sha> and rolls the hub, then the four agent stacks, with the repository's compose files", () => {
 		const r = rig();
 		const out = r.run(`deploy ${SHA}`);
 		assert.equal(out.status, 0, out.stderr);
 		const calls = r.calls();
-		for (const image of ["somework-pi-agent", "somework-pi-sandbox", "somework-pi-egress", "somework-reviewer", "somework-aikido-fixer", "somework-datadog-triage", "somework-datadog-triage-sandbox"]) {
+		for (const image of ["somework-events-hub", "somework-pi-agent", "somework-pi-sandbox", "somework-pi-egress", "somework-reviewer", "somework-aikido-fixer", "somework-datadog-triage", "somework-datadog-triage-sandbox"]) {
 			assert.ok(calls.some((call) => call.startsWith("docker build") && call.includes(`-t ${image}:ci-0123456`)), image);
 		}
 		assert.ok(calls.some((call) => call.includes("--build-arg SANDBOX_BASE=somework-pi-sandbox:ci-0123456")));
 		assert.deepEqual(
-			calls.filter((call) => call.startsWith("roll")).map((call) => call.replace(/ http.*? /, " ")),
-			["roll datadog-triage DATADOG_VERSION ci-0123456 # datadog-triage", "roll reviewer REVIEWER_VERSION,SANDBOX_VERSION ci-0123456 # reviewer", "roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION ci-0123456 # aikido-fixer", "roll pi-agent PI_VERSION ci-0123456 # pi"],
+			calls.filter((call) => call.startsWith("roll")).map((call) => call.replace(/ http\S* /, " ")),
+			["roll events-hub HUB_VERSION ci-0123456 # events-hub", "roll datadog-triage DATADOG_VERSION ci-0123456 # datadog-triage", "roll reviewer REVIEWER_VERSION,SANDBOX_VERSION ci-0123456 # reviewer", "roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION ci-0123456 # aikido-fixer", "roll pi-agent PI_VERSION ci-0123456 # pi"],
 		);
 		assert.match(calls.find((call) => call.startsWith("roll reviewer")) ?? "", /http:\/\/10\.10\.10\.11:8082\/ready/);
+		assert.match(calls.find((call) => call.startsWith("roll events-hub")) ?? "", /http:\/\/10\.10\.10\.11:8090\/healthz/);
 	});
 
 	it("stops at the first stack that does not become ready", () => {
 		const r = rig({ failRoll: "reviewer" });
 		const out = r.run(`deploy ${SHA}`);
 		assert.notEqual(out.status, 0);
-		assert.deepEqual(r.calls().filter((call) => call.startsWith("roll")).map((call) => call.split(" ")[1]), ["datadog-triage", "reviewer"]);
+		assert.deepEqual(r.calls().filter((call) => call.startsWith("roll")).map((call) => call.split(" ")[1]), ["events-hub", "datadog-triage", "reviewer"]);
 	});
 
 	it("refuses anything but 'deploy' and a full commit hash, before it builds anything", () => {

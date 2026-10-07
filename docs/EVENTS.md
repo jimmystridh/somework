@@ -14,6 +14,7 @@ The domain gains one primitive, the `submitTask` subscription action, executed f
 ## Producers
 
 * **Clock**: time zone Europe/Stockholm, jitter up to 60 s for anything that calls a model; a missed daily or nightly run executes once on recovery, a job firing more than hourly skips missed runs; both overridable per schedule.
+* **Timers**: an agent can ask the hub for a one-shot wake ("in 15 minutes, with this note"); the hub publishes `clock.timer.<agent>.due` when it is due and the agent's own rule and handler decide what it means (`packages/events-hub/README.md`, "Timers").
 * **Webhooks** (issue tracker, code host, Datadog): through the **receiver** on the public edge (own Cloudflare host, Authenticated Origin Pulls, WAF allow-list of each source's published ranges where they exist). The receiver verifies a per-source token, caps the body, and writes the raw request to a durable queue. It never opens connections inward. The **hub** pulls over the single allowed route (long poll), maps the payload and publishes the event as a producer.
 * **Log-stack alerts** post straight to the hub on the private network.
 * **Secrets**: one hub secret; per-source tokens are derived from it with HMAC (version number per source for rotation). A leaked token cannot forge another source.

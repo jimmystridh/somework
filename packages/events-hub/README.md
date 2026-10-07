@@ -69,6 +69,19 @@ A mapping written before a real payload exists (today: `aikido`) is refined from
 * **Health and metrics.** `GET /healthz`; `GET /metrics` (Prometheus text): `hub_events_received_total`, `hub_events_published_total`, `hub_events_duplicate_total`, `hub_events_dropped_total{reason}`, `hub_events_dead_lettered_total{kind}`, `hub_dead_letters`, `hub_receiver_oldest_pending_age_seconds`, `hub_receiver_queued`, `hub_receiver_up`, `hub_publish_failures_total{kind}`, `hub_forwarded_total`, `hub_clock_ticks_total`. Alert on `hub_receiver_up == 0`, a growing `hub_receiver_oldest_pending_age_seconds`, and `hub_dead_letters > 0`.
 * **Logs** are JSON (`hub_started`, `event_published`, `event_duplicate`, `event_dropped`, `event_dead_lettered`, `event_retry`, `clock_tick`, ...) with ids and counts only.
 
+## Timers: an agent asks to be woken later
+
+An agent that wants "trigger me with this in 15 minutes" (for example the Aikido fixer, to look at the pull request it opened once reviewers had time to comment) asks the hub; the hub keeps time and publishes an event when it is due. The agent's own rule and handler decide what to do with the wake, so the hub never starts work itself.
+
+```json
+"timers": { "agents": ["agent/aikido-fixer"], "minDelaySeconds": 60, "maxDelaySeconds": 604800, "maxPendingPerAgent": 20 }
+```
+
+* Needs `clock.producer` (the events are published as the clock source, topic `clock.timer.<agent>.due` with `-` and `.` in the agent id as `_`: `clock.timer.aikido_fixer.due`). Only listed agents may ask, each with its own token from `somework-hub timer-token <agent id>`; a leaked token can schedule events for that one agent and nothing else.
+* `POST /v1/timers` (headers `x-somework-agent: agent/<id>` and `authorization: Bearer <token>`; body `{ "delaySeconds": 900 | "at": "<ISO time>", "note": "<why, at most 500 characters>", "key": "<optional name>", "payload": <optional JSON, at most 2 KiB> }`) answers `201` with `{ id, key, dueAt, note, payload }`; `GET /v1/timers` lists the agent's pending timers; `DELETE /v1/timers/<id or key>` cancels one. Asking again with the same key moves the timer instead of adding one, which also makes a repeated request after a crash harmless. At most `maxPendingPerAgent` are pending per agent (`429` beyond that); a time outside `minDelaySeconds`..`maxDelaySeconds` is a `400` with the reason.
+* The event carries `{ timerId, key, agent, note, payload, requestedAt, dueAt, late }` and the key `timer:<id>`, so a repeat after a crash is a duplicate. A timer that came due while the hub was down fires on the next tick with `late: true`; if the domain is down it stays pending and is retried every 10 seconds. Fired timers are kept seven days, then pruned. Metrics: `hub_timers_total{agent,outcome}` and `hub_timers_pending`.
+* The agent side is `TIMERS_URL`, `TIMERS_TOKEN_FILE` and `TIMERS_CA_FILE` (kit tools `schedule_followup`, `list_followups`, `cancel_followup`, and `context.timers` for role code); one rule per agent turns the topic into a wake (`rules/aikido-fixer-timer.yaml`).
+
 ## Cloudflare host and the origin
 
 The webhook host is one label under the zone (so Universal SSL covers it) with a proxied A record to the origin, the same shape as the Penpot host:

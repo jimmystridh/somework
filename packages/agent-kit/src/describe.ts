@@ -32,6 +32,7 @@ export interface AgentDescription {
 	chat: { mode: string; askers?: string[]; instructors?: string[] };
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
+	timers?: { enabled: boolean };
 	/** Of everything above; changes when the setup changes. */
 	hash: string;
 }
@@ -49,6 +50,7 @@ export interface DescribeInput {
 	chat: { mode: string; askers?: string[]; instructors?: string[] };
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
+	timers?: { enabled: boolean };
 	/** False leaves out the prompt text (its hash and length stay). */
 	includePrompt: boolean;
 }
@@ -93,6 +95,7 @@ export function describeAgent(input: DescribeInput): AgentDescription {
 		chat: input.chat,
 		events: input.events,
 		observe: input.observe,
+		...(input.timers ? { timers: input.timers } : {}),
 	};
 	return { ...body, hash: sha256(JSON.stringify({ ...body, systemPrompt: { ...body.systemPrompt, text: undefined }, version: undefined })) };
 }

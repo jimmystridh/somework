@@ -3,8 +3,8 @@
 #
 #   tar czf - REPOSITORY | ssh deploy-key-host deploy COMMIT_SHA
 #
-# It unpacks the repository from stdin, builds every agent image as ci-<short sha> and rolls the four agent stacks one after the other with
-# roll-agent.sh (backup, wait for /ready, automatic restore). It stops at the first stack that does not become ready; that stack is back on its old
+# It unpacks the repository from stdin, builds the event hub and every agent image as ci-<short sha> and rolls the hub, then the four agent stacks, one
+# after the other with roll-agent.sh (backup, wait for /ready, automatic restore). The hub goes first: agents may use what a new hub offers. It stops at the first stack that does not become ready; that stack is back on its old
 # version, the ones before it stay on the new one. Install on the host by hand (a deploy key that could replace this file could run anything).
 set -eu
 
@@ -31,15 +31,17 @@ echo "deploying $sha as $tag"
 
 export DOCKER_BUILDKIT=1
 build() { docker build -q -f "$1" --target "$2" -t "$3:$tag" ${4:+--build-arg "$4"} . >/dev/null && echo "built $3:$tag"; }
+build packages/events-hub/Dockerfile hub somework-events-hub
 for target in agent sandbox egress; do build adapters/pi/Dockerfile "$target" "somework-pi-$target"; done
 build adapters/reviewer/Dockerfile agent somework-reviewer
 build adapters/aikido-fixer/Dockerfile agent somework-aikido-fixer
 build adapters/datadog-triage/Dockerfile agent somework-datadog-triage
 build adapters/datadog-triage/Dockerfile sandbox somework-datadog-triage-sandbox "SANDBOX_BASE=somework-pi-sandbox:$tag"
 
-roll() { "$pilot/bin/roll-agent.sh" "$pilot/$1" "$2" "$tag" "http://$host:$3/ready" "$src/adapters/$4/deploy/compose.yaml"; }
-roll datadog-triage DATADOG_VERSION 8084 datadog-triage
-roll reviewer REVIEWER_VERSION,SANDBOX_VERSION 8082 reviewer
-roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION 8083 aikido-fixer
-roll pi-agent PI_VERSION 8081 pi
+roll() { "$pilot/bin/roll-agent.sh" "$pilot/$1" "$2" "$tag" "$3" "$src/$4/deploy/compose.yaml"; }
+roll events-hub HUB_VERSION "http://$host:8090/healthz" packages/events-hub
+roll datadog-triage DATADOG_VERSION "http://$host:8084/ready" adapters/datadog-triage
+roll reviewer REVIEWER_VERSION,SANDBOX_VERSION "http://$host:8082/ready" adapters/reviewer
+roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION "http://$host:8083/ready" adapters/aikido-fixer
+roll pi-agent PI_VERSION "http://$host:8081/ready" adapters/pi
 echo "deployed $tag"

@@ -37,6 +37,10 @@ services:
       SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
       SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
       SOMEWORK_CA_FILE: /run/somework/ca.pem
+      # Timers: ask the event hub to wake this agent later ("check this pull request in 15 minutes"). Off while TIMERS_URL is empty.
+      TIMERS_URL: ${TIMERS_URL:-}
+      TIMERS_TOKEN_FILE: /run/secrets/timers-token
+      TIMERS_CA_FILE: /run/somework/ca.pem
       SOMEWORK_REQUIRE_TLS: "1"
       SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
       PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
@@ -105,6 +109,7 @@ services:
     volumes:
       - ${FIXER_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
       - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ${TIMERS_TOKEN_HOST:-/dev/null}:/run/secrets/timers-token:ro      # timers: ./secrets/timers-token (`somework-hub timer-token <agent id>` on the hub)
       - ./config/checks.json:/run/config/checks.json:ro      # named check profiles of the repository (see checks.example.json); an empty {} file is fine without one
       # - ./config/ledger-import.json:/run/config/ledger-import.json:ro    # earlier attempts (AIKIDO_LEDGER_IMPORT=/run/config/ledger-import.json); create the file first or Docker makes a directory of it
       - ./secrets/pi:/run/secrets/pi                         # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.

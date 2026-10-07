@@ -35,6 +35,10 @@ services:
       SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
       SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
       SOMEWORK_CA_FILE: /run/somework/ca.pem
+      # Timers: ask the event hub to wake this agent later ("check this pull request in 15 minutes"). Off while TIMERS_URL is empty.
+      TIMERS_URL: ${TIMERS_URL:-}
+      TIMERS_TOKEN_FILE: /run/secrets/timers-token
+      TIMERS_CA_FILE: /run/somework/ca.pem
       SOMEWORK_REQUIRE_TLS: "1"
       SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
       AGENT_VERSION: ${DATADOG_VERSION}                        # shown on /profile (the image tag this container runs)
@@ -83,6 +87,7 @@ services:
     volumes:
       - ${DATADOG_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
       - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ${TIMERS_TOKEN_HOST:-/dev/null}:/run/secrets/timers-token:ro      # timers: ./secrets/timers-token (`somework-hub timer-token <agent id>` on the hub)
       - ./secrets/pi:/run/secrets/pi                         # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./secrets/datadog-keys.json:/run/secrets/datadog-keys.json:ro   # 0600, uid 10001; {"apiKey": "...", "appKey": "..."}

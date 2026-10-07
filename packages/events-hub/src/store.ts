@@ -33,6 +33,30 @@ interface DeadRow {
 
 const toDead = (row: DeadRow): DeadLetter => ({ id: row.id, source: row.source, receivedAt: row.received_at, headers: JSON.parse(row.headers), body: Buffer.from(row.body), kind: row.kind, error: row.error, attempts: row.attempts, createdAt: row.created_at, replayedAt: row.replayed_at, path: row.path, query: row.query });
 
+export interface TimerRow {
+	id: string;
+	agent: string;
+	key: string;
+	dueAt: number;
+	note: string;
+	payload: string | null;
+	createdAt: number;
+	firedAt: number | null;
+}
+
+interface TimerDbRow {
+	id: string;
+	agent: string;
+	key: string;
+	due_at: number;
+	note: string;
+	payload: string | null;
+	created_at: number;
+	fired_at: number | null;
+}
+
+const toTimer = (row: TimerDbRow): TimerRow => ({ id: row.id, agent: row.agent, key: row.key, dueAt: row.due_at, note: row.note, payload: row.payload, createdAt: row.created_at, firedAt: row.fired_at });
+
 /** The hub's own durable state: pull cursor, dead letters, the inbox of the internal listener, clock progress and source switches. */
 export class Store {
 	readonly #db: DatabaseSync;
@@ -57,11 +81,60 @@ export class Store {
 			);
 			CREATE TABLE IF NOT EXISTS clock_state (name TEXT PRIMARY KEY, last_scheduled INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS paused_sources (name TEXT PRIMARY KEY);
+			CREATE TABLE IF NOT EXISTS timers (
+				id TEXT PRIMARY KEY, agent TEXT NOT NULL, key TEXT NOT NULL, due_at INTEGER NOT NULL, note TEXT NOT NULL, payload TEXT,
+				created_at INTEGER NOT NULL, fired_at INTEGER, UNIQUE (agent, key)
+			);
 		`);
 		for (const table of ["dead_letters", "inbox"]) {
 			const columns = (this.#db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 			for (const column of ["path", "query"]) if (!columns.includes(column)) this.#db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
 		}
+	}
+
+	// ---- timers -------------------------------------------------------------------------------------------------------------------
+	/** Stores a timer; a timer of the same agent and key, pending or already fired, is replaced. Returns false when the agent has too many others pending. */
+	putTimer(timer: Omit<TimerRow, "firedAt">, maxPending: number): boolean {
+		this.#db.exec("BEGIN IMMEDIATE");
+		try {
+			this.#db.prepare("DELETE FROM timers WHERE agent = ? AND key = ?").run(timer.agent, timer.key);
+			const pending = (this.#db.prepare("SELECT COUNT(*) AS n FROM timers WHERE agent = ? AND fired_at IS NULL").get(timer.agent) as { n: number }).n;
+			if (pending >= maxPending) {
+				this.#db.exec("ROLLBACK");
+				return false;
+			}
+			this.#db.prepare("INSERT INTO timers(id, agent, key, due_at, note, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(timer.id, timer.agent, timer.key, timer.dueAt, timer.note, timer.payload, timer.createdAt);
+			this.#db.exec("COMMIT");
+			return true;
+		} catch (error) {
+			this.#db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	dueTimers(now: number, limit: number): TimerRow[] {
+		return (this.#db.prepare("SELECT * FROM timers WHERE fired_at IS NULL AND due_at <= ? ORDER BY due_at LIMIT ?").all(now, limit) as unknown as TimerDbRow[]).map(toTimer);
+	}
+
+	markTimerFired(id: string, at: number): void {
+		this.#db.prepare("UPDATE timers SET fired_at = ? WHERE id = ?").run(at, id);
+	}
+
+	pendingTimers(agent: string): TimerRow[] {
+		return (this.#db.prepare("SELECT * FROM timers WHERE agent = ? AND fired_at IS NULL ORDER BY due_at").all(agent) as unknown as TimerDbRow[]).map(toTimer);
+	}
+
+	pendingTimerCount(): number {
+		return (this.#db.prepare("SELECT COUNT(*) AS n FROM timers WHERE fired_at IS NULL").get() as { n: number }).n;
+	}
+
+	/** Cancels a pending timer by id or key of that agent; true when one was removed. */
+	cancelTimer(agent: string, idOrKey: string): boolean {
+		return Number(this.#db.prepare("DELETE FROM timers WHERE agent = ? AND fired_at IS NULL AND (id = ? OR key = ?)").run(agent, idOrKey, idOrKey).changes) > 0;
+	}
+
+	pruneTimers(firedBefore: number): void {
+		this.#db.prepare("DELETE FROM timers WHERE fired_at IS NOT NULL AND fired_at < ?").run(firedBefore);
 	}
 
 	#get(name: string): string | undefined {

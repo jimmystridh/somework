@@ -31,6 +31,7 @@ import { registerProviders } from "./providers/index.ts";
 import { RemoteExecutionEnv } from "./sandbox/remote-env.ts";
 import { skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
+import { createTimers } from "./timers/index.ts";
 
 const read = (path: string): string => readFileSync(path, "utf8").trim();
 
@@ -95,7 +96,8 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			// the client the role's code and the task handler use: an instruction given in chat is a job the domain has no task for, so its uploads are kept on this host instead
 			const chatArtifacts = chatSettings ? new ChatArtifacts({ dir: join(config.state.dir, "chat-artifacts"), log }) : undefined;
 			const taskClient = chatArtifacts ? chatArtifacts.wrap(client) : client;
-			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, gitTokenSource }) : (options.hooks ?? {});
+			const timers = createTimers({ env, agentId: identity.agentId, log });
+			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, gitTokenSource, ...(timers ? { timers: timers.client } : {}) }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
@@ -134,11 +136,12 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				...(events ? [events.extension] : []),
 				...(chatTools ? [chatTools.extension] : []),
 				...(observe ? [observe.extension] : []),
+				...(timers ? [timers.extension] : []),
 				...(chatSettings && hooks.chat?.extension ? [hooks.chat.extension] : []),
 				...(skillAllow.length > 0 ? [skillsExtension({ allow: skillAllow, overlayDir: config.skills.overlayDir ?? profile.skills.overlayDir, log })] : []),
 			];
 			// the chat's own tools are registered with the runtime but offered only to chat sessions: a role that lists no tools gets the coding tools spelled out
-			const normalTools = profile.allowedTools ? [...profile.allowedTools, ...(events?.toolNames ?? []), ...(observe?.toolNames ?? [])] : chatTools ? ["read", "write", "edit", "bash", ...(events?.toolNames ?? []), ...(observe?.toolNames ?? [])] : undefined;
+			const normalTools = profile.allowedTools ? [...profile.allowedTools, ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])] : chatTools ? ["read", "write", "edit", "bash", ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])] : undefined;
 			const runtime = new PiDurableRuntime({
 				storagePath: join(config.state.dir, "pi.sqlite"),
 				models,
@@ -190,7 +193,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				const known = new Set(runtime.knownTools());
 				// the observe tools only read (logs and alert states, in the role's own scope) and are allowed in both chat tiers
 				const ask = [...new Set([...askToolNames(profile.chat, hooks.chat), ...(observe?.toolNames ?? [])])];
-				const instruct = [...new Set([...instructToolNames(profile.chat, profile.allowedTools), ...(observe?.toolNames ?? [])])];
+				const instruct = [...new Set([...instructToolNames(profile.chat, profile.allowedTools), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])])];
 				for (const name of [...ask, ...instruct]) if (!known.has(name)) throw new Error(`chat: the tool ${name} does not exist (known: ${[...known].join(", ")})`);
 				const instructHandler = hooks.chat?.instructInput
 					? createHandler({ ...baseDeps, source: "chat", requestTools: instruct, ledger: { remaining: () => ledger.chatRemaining(), record: (tokens) => ledger.record(tokens, "chat") } })
@@ -259,6 +262,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					chat: chatSettings ? { mode: "model", askers: chatSettings.askers, instructors: chatSettings.instructors } : { mode: "notice" },
 					events: { enabled: eventsConfig.enabled, notifyTo: eventsConfig.notifyTo },
 					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
+					timers: { enabled: Boolean(timers) },
 					includePrompt: env.PROFILE_PROMPT !== "0",
 				}),
 				join(config.state.dir, "profile-hash.json"),

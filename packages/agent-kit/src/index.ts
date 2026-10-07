@@ -16,6 +16,7 @@ export * from "./ledger.ts";
 export * from "./log.ts";
 export * from "./metrics.ts";
 export * from "./observe/index.ts";
+export * from "./timers/index.ts";
 export * from "./pi-runtime.ts";
 export * from "./policy.ts";
 export * from "./profile.ts";

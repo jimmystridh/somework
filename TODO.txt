@@ -73,6 +73,9 @@ F. DECISIONS WAITING FOR THE OWNER (also in sections 11b and 12)
 - Wire the remaining senders: GitHub and Datadog webhooks (Jira and Aikido already deliver); refine the Aikido mapping from a real payload.
 
 G. KNOWN MINOR (nobody blocked)
+- Timers (2026-10-07): an agent can ask the hub for a one-shot wake (hub `timers`, kit tools schedule_followup/list_followups/cancel_followup, docs/AGENT_FLEET.md
+  "Asking the hub for a timer"); the Aikido fixer follows up on its pull requests with it (code.fix.followup, after 15, 60 and 240 minutes). Not yet: other roles using
+  timers (list them in the hub's timers.agents, give each a token and a rule); a hub outage at the moment a follow-up is scheduled loses that follow-up.
 - Budgets: the owner asks the Manager to raise a pool for today (somework_control raise_budget, confirmed in Telegram, applied by the agent, ends at the day's rollover;
   docs/AGENT_FLEET.md "Raising a budget"). Permanent changes (daily limit, per-job caps, chat instruction budget) are .env settings rolled through CI.
 - The developer's events token pool stays throttled until the daily rollover; 163 failed acceptance tasks remain in the domain history;

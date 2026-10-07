@@ -162,6 +162,7 @@ export interface World {
 export interface WorldOptions {
 	sources?: object[];
 	clock?: object;
+	timers?: object;
 	forwardUrl?: string;
 	mappingsDir?: string;
 	maxAttempts?: number;
@@ -195,6 +196,7 @@ export async function startWorld(options: WorldOptions = {}): Promise<World> {
 			{ name: "woodpecker", version: 1, forward: { baseUrl: options.forwardUrl ?? "http://127.0.0.1:9" } },
 		],
 		clock: options.clock ?? { producer: prod("clock"), schedules: [] },
+		...(options.timers ? { timers: options.timers } : {}),
 	});
 	const store = new Store(config.storePath);
 	const sleeps: number[] = [];
