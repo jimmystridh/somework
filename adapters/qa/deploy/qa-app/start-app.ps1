@@ -55,11 +55,18 @@ if (-not $healthy) {
     $diag.Add('FAIL: the stack did not become healthy in time')
     foreach ($t in 'QaAppServer', 'QaAppWeb') { $diag.Add(("task {0}: {1}" -f $t, ((& schtasks.exe /Query /TN $t /FO LIST 2>$null | Select-String -Pattern 'Status:|Last Result:') -join ' '))) }
     $diag.Add(("listening: 8080={0} {1}={2}; web restarts={3}" -f (Test-Listening 8080), $WebPort, (Test-Listening $WebPort), $webRestarts))
-    foreach ($f in 'web.log', 'web.err.log', 'bfs.err.log') { $path = "$root\logs\$f"; $diag.Add(("{0}: {1} bytes" -f $f, $(if (Test-Path $path) { (Get-Item $path).Length } else { 'missing' }))); if ((Test-Path $path) -and (Get-Item $path).Length -gt 0) { Get-Content $path -Tail 8 | ForEach-Object { $diag.Add("  $_") } } }
+    foreach ($f in 'web.log', 'web.err.log', 'bfs.err.log') {
+        $path = "$root\logs\$f"
+        try {
+            if (-not (Test-Path $path)) { $diag.Add("${f}: missing"); continue }
+            $diag.Add(("{0}: {1} bytes" -f $f, (Get-Item $path -ErrorAction Stop).Length))
+            Get-Content $path -Tail 8 -ErrorAction Stop | ForEach-Object { $diag.Add("  $_") }
+        } catch { $diag.Add("${f}: not readable") }
+    }
     Get-Process bun, node, vite -ErrorAction SilentlyContinue | ForEach-Object { $diag.Add(("process {0} {1} cpu={2} started={3}" -f $_.Id, $_.ProcessName, [int]$_.CPU, $_.StartTime)) }
     # the agent shows only the beginning of this command's output, so the details also go to a file
-    Set-Content "$root\logs\last-start-failure.txt" $diag
-    Write-Host ($diag[0] + ' (details: C:\somework\qa-app\logs\last-start-failure.txt)')
+    try { Set-Content "$ctl\last-start-failure.txt" $diag } catch { }
+    Write-Host ($diag[0] + ' (details: C:\somework\qa-app\control\last-start-failure.txt)')
     exit 1
 }
 Write-Host "UP backend=http://127.0.0.1:8080 web=http://127.0.0.1:$WebPort tenantMode=$TenantMode"

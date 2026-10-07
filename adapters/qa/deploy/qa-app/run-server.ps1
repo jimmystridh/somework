@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 $root = 'C:\somework\qa-app'
 $logs = "$root\logs"; $ctl = "$root\control"; $pids = "$root\pids"
 foreach ($d in $logs, $ctl, $pids) { New-Item -ItemType Directory -Force $d | Out-Null }
+# the QA agent's own account reads the logs (to tell why a start failed); this task runs as SYSTEM and may grant it
+& icacls.exe $logs /grant 'svc-qa:(OI)(CI)R' /T /C | Out-Null
 $stopFlag = "$ctl\stop-server"
 Remove-Item $stopFlag -ErrorAction SilentlyContinue
 if (@(Get-NetTCPConnection -State Listen -LocalPort 8080 -ErrorAction SilentlyContinue).Count -gt 0) { 'the server already listens on 8080'; exit 0 }
