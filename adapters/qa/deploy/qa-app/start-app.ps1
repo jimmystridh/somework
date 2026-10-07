@@ -9,7 +9,8 @@ param(
     [int]$TimeoutSeconds = 240
 )
 $ErrorActionPreference = 'Stop'
-$ctl = 'C:\somework\qa-app\control'
+$root = 'C:\somework\qa-app'
+$ctl = "$root\control"
 if (-not (Test-Path (Join-Path $WebRoot 'package.json'))) { throw "no package.json in $WebRoot" }
 function Test-Listening([int]$Port) { return @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0 }
 function Test-TaskRunning([string]$Name) { return @(& schtasks.exe /Query /TN $Name /FO LIST 2>$null | Select-String -Pattern 'Status:\s+Running').Count -gt 0 }
@@ -35,5 +36,12 @@ while ((Get-Date) -lt $deadline) {
     if ((Test-Url 'http://127.0.0.1:8080/health') -and (Test-Url "http://127.0.0.1:$WebPort/")) { $healthy = $true; break }
     Start-Sleep -Seconds 3
 }
-if (-not $healthy) { Write-Host 'FAIL: the stack did not become healthy in time (see C:\somework\qa-app\logs)'; exit 1 }
+if (-not $healthy) {
+    Write-Host 'FAIL: the stack did not become healthy in time'
+    foreach ($t in 'QaAppServer', 'QaAppWeb') { Write-Host ("task {0}: {1}" -f $t, ((& schtasks.exe /Query /TN $t /FO LIST 2>$null | Select-String -Pattern 'Status:|Last Result:') -join ' ')) }
+    Write-Host ("listening: 8080={0} {1}={2}" -f (Test-Listening 8080), $WebPort, (Test-Listening $WebPort))
+    foreach ($f in 'web.log', 'web.err.log', 'bfs.err.log') { $path = "$root\logs\$f"; Write-Host ("{0}: {1} bytes" -f $f, $(if (Test-Path $path) { (Get-Item $path).Length } else { 'missing' })); if ((Test-Path $path) -and (Get-Item $path).Length -gt 0) { Get-Content $path -Tail 8 } }
+    Get-Process bun, node, vite -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("process {0} {1} cpu={2} started={3}" -f $_.Id, $_.ProcessName, [int]$_.CPU, $_.StartTime) }
+    exit 1
+}
 Write-Host "UP backend=http://127.0.0.1:8080 web=http://127.0.0.1:$WebPort tenantMode=$TenantMode"
