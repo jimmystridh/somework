@@ -60,7 +60,7 @@ export function runQaService(options: { env?: NodeJS.ProcessEnv } = {}): void {
 	const client = settings.jira && secrets ? new JiraClient({ baseUrl: settings.jira.url, token: secrets.token, pfx: secrets.pfx, passphrase: secrets.passphrase, ca: secrets.ca }) : undefined;
 	const tools = client && settings.jira ? createJiraTools({ jira: client, session, pattern: settings.ticketPattern, testStatus: settings.jira.testStatus, inProgressStatus: settings.jira.inProgressStatus, verifiedLabel: settings.jira.verifiedLabel, log: jsonLogger() }) : undefined;
 	runAgentService({
-		profile: qaProfile({ toolNames: tools?.toolNames, toolApprovals: settings.jira ? jiraToolApprovals(session, settings.jira.verifiedLabel, settings.jira.inProgressStatus) : undefined }),
+		profile: qaProfile({ toolNames: tools?.toolNames, toolApprovals: settings.jira ? jiraToolApprovals(session, settings.jira.verifiedLabel, settings.jira.inProgressStatus, settings.jira.approve) : undefined }),
 		// the kit requires a sandbox URL and workspace root; here the "sandbox" is this process and its root is the confined directory
 		env: { ...env, SANDBOX_URL: env.SANDBOX_URL ?? "local://windows", SANDBOX_WORKSPACES: settings.root, PI_CONCURRENCY: "1" },
 		hooks: (context) => composeQa(settings, context, session, profiles, tools, client, secrets),

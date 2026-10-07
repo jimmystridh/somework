@@ -47,6 +47,19 @@ describe("the QA profile", () => {
 		for (const read of ["jira_get_issue", "jira_search", "jira_changelog", "jira_get_comments", "qa_record_verdict", "read"]) assert.equal(policy.needsApproval(read, {}), undefined, `${read} needs no approval`);
 	});
 
+	it("can be narrowed to the hand-back, so the verdict's comment, evidence and label run without asking while moving a ticket still waits", () => {
+		const { session, toolNames } = tools();
+		const profile = qaProfile({ toolNames, toolApprovals: jiraToolApprovals(session, "AgentTested", "In Progress", ["jira_transition_to_in_progress_and_reassign"]) });
+		const policy = approvalPolicy([], profile.approvalPatterns, profile.toolApprovals);
+		for (const tool of ["jira_comment", "jira_attach", "jira_add_label", "jira_remove_label"]) assert.equal(policy.needsApproval(tool, { body: "x", file: "f", label: "l" }), undefined, `${tool} runs without asking`);
+		assert.match(policy.needsApproval("jira_transition_to_in_progress_and_reassign", { comment: "still broken" })!, /hand QA-1 back/);
+	});
+
+	it("takes a verification-sized budget and chat pool for an instruction in chat", () => {
+		assert.deepEqual(qaProfile().chat?.instructBudget, { maxTokens: 800_000, maxMinutes: 60 });
+		assert.equal(qaProfile().chat?.hardTokenCap, 1_000_000);
+	});
+
 	it("asks before a shell command that would change the checkout, on top of the default and Windows rules", () => {
 		const policy = approvalPolicy([], QA_APPROVAL_PATTERNS);
 		for (const command of ["git commit -am x", "git add .", "git reset --hard", "git clean -fd", "git apply fix.patch", "git stash"]) assert.ok(policy.needsApproval("bash", { command }), command);

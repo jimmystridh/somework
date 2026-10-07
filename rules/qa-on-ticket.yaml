@@ -17,10 +17,10 @@ reaction:
       url: ${/data/repository/cloneUrl}
       ref: ${/data/repository/ref}
     budget:
-      maxTokens: 400000
-      maxMinutes: 45
+      maxTokens: 800000
+      maxMinutes: 60
   budget:
-    maxTokens: 400000
-    maxMinutes: 45
+    maxTokens: 800000
+    maxMinutes: 60
   maxDepth: 2
   maxFiringsPerHour: 10

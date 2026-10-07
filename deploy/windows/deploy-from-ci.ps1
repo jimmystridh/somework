@@ -62,7 +62,7 @@ $files = @(
     @('package.json', 'package.json'), @('package-lock.json', 'package-lock.json'),
     @('packages\agent-kit\package.json', 'packages\agent-kit\package.json'), @('sdk\typescript\package.json', 'sdk\typescript\package.json'),
     @("adapters\$role\package.json", "adapters\$role\package.json"), @("adapters\$role\card.json", "adapters\$role\card.json"),
-    @("adapters\$role\deploy\profiles.pilot.json", 'profiles.json')
+    @("adapters\$role\deploy\profiles.pilot.json", 'profiles.json'), @("adapters\$role\deploy\managed.env", 'managed.env')
 )
 foreach ($m in $mirrors) { if (-not (Test-Path "$stage\$m")) { Fail "the archive has no $m" } }
 foreach ($f in $files) { if (-not (Test-Path "$stage\$($f[0])")) { Fail "the archive has no $($f[0])" } }

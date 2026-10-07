@@ -16,6 +16,8 @@ export interface JiraSettings {
 	inProgressStatus: string;
 	/** The label that marks a ticket as verified; only ever added for a `verified` result. */
 	verifiedLabel: string;
+	/** The writes that wait for the requester's approval (tool names). Absent: all of them. The hand-back that moves a ticket should always stay on the list. */
+	approve?: string[];
 }
 
 export interface QaSettings extends WindowsEnvSettings {
@@ -36,6 +38,7 @@ const list = (value: string | undefined): string[] => (value ?? "").split(/[,\s]
  *   QA_BROWSER_ALLOW_HOSTS   hosts the browser may reach, comma separated (default `127.0.0.1,localhost`)
  *   JIRA_URL, JIRA_TOKEN_FILE, JIRA_PFX_FILE, JIRA_PFX_PASSWORD_FILE, JIRA_CA_FILE   the ticket system; without JIRA_URL there is none
  *   JIRA_TEST_STATUS, JIRA_IN_PROGRESS_STATUS, JIRA_VERIFIED_LABEL                      names in that system (defaults Test, In Progress, AgentTested)
+ *   QA_JIRA_APPROVE                                                                      the write tools that wait for the requester (default all; a comma list narrows it)
  * Exactly one job runs at a time (`PI_CONCURRENCY=1`): the application under test, the browser and the ticket state are per machine.
  */
 export function loadQaSettings(env: Record<string, string | undefined>, exists: (path: string) => boolean = existsSync): QaSettings {
@@ -64,6 +67,7 @@ export function loadQaSettings(env: Record<string, string | undefined>, exists: 
 			testStatus: env.JIRA_TEST_STATUS || "Test",
 			inProgressStatus: env.JIRA_IN_PROGRESS_STATUS || "In Progress",
 			verifiedLabel: env.JIRA_VERIFIED_LABEL || "AgentTested",
+			...(env.QA_JIRA_APPROVE !== undefined ? { approve: list(env.QA_JIRA_APPROVE) } : {}),
 		};
 	}
 	return {

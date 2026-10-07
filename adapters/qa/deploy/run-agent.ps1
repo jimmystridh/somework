@@ -45,6 +45,9 @@ while ($true) {
     Get-ChildItem -LiteralPath $LogRoot -Filter 'agent-*' -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-14) } | Remove-Item -Force -ErrorAction SilentlyContinue
 
     Import-EnvFile $EnvFile
+    # settings that live in the repository and come with every deployment (the machine's own secrets and paths stay in agent.env)
+    $managed = Join-Path $InstallRoot 'managed.env'
+    if (Test-Path -LiteralPath $managed) { Import-EnvFile $managed }
     $node = $env:NODE_EXE
     if (-not $node) { $node = 'C:\Program Files\nodejs\node.exe' }
     $env:NODE_OPTIONS = '--disable-warning=ExperimentalWarning'

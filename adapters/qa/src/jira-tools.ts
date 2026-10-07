@@ -275,13 +275,15 @@ const flat = (value: unknown, max: number): string => String(value ?? "").replac
  * What the requester is shown before each write, built from the call's arguments and the job being verified. These are the tool names the
  * profile lists in `toolApprovals`; every other tool of this role runs without asking.
  */
-export function jiraToolApprovals(session: QaSession, verifiedLabel: string, inProgressStatus: string): NonNullable<AgentProfile["toolApprovals"]> {
+export function jiraToolApprovals(session: QaSession, verifiedLabel: string, inProgressStatus: string, approve?: readonly string[]): NonNullable<AgentProfile["toolApprovals"]> {
 	const ticket = (): string => session.job?.ticket ?? "the ticket under verification";
-	return {
+	const all: NonNullable<AgentProfile["toolApprovals"]> = {
 		jira_comment: (args) => `post a comment on ${ticket()} (${String(args.body ?? "").length} characters): "${flat(args.body, 200)}"`,
 		jira_attach: (args) => `attach ${flat(args.file, 120)} to ${ticket()}`,
 		jira_add_label: (args) => `add the label ${flat(args.label, 64) || verifiedLabel} to ${ticket()}`,
 		jira_remove_label: (args) => `remove the label ${flat(args.label, 64) || verifiedLabel} from ${ticket()}`,
 		jira_transition_to_in_progress_and_reassign: (args) => `hand ${ticket()} back: comment "${flat(args.comment, 200)}", move it to "${inProgressStatus}" and give it to its previous assignee`,
 	};
+	// a narrower list lets the other writes run without asking (the verdict's comment, evidence and label); the others still wait
+	return approve === undefined ? all : Object.fromEntries(Object.entries(all).filter(([name]) => approve.includes(name)));
 }
