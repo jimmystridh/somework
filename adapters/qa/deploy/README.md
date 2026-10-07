@@ -150,3 +150,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\somework\agent\adapters\q
 ```
 On the domain host: `set-agent-status --id agent/qa --status disabled` removes it from the catalog's reach. Nothing else on the machine
 is changed by the install except the account, its user-rights entries, the firewall rules and the two scheduled tasks.
+
+## Budgets and the machine
+
+One browser step re-reads the whole conversation (30k to 45k tokens), so a verification of about 90 steps takes 4M tokens: the chat budget and the `qa-on-ticket` rule both say 4M tokens and 60 minutes, `managed.env` sets the cap to 5M and the day's limit to 20M. The machine has two processors and 8 GB shared by SQL Server, the back end, the web dev server and the browser, which is why a click may take seconds, why a recording of fewer than 2 KB is refused as evidence, and why `start-app.ps1` starts a silent dev server again after 40 s (it hangs at its config step on about four starts in ten; a second start works). A failed start writes its diagnosis to `C:\somework\qa-app\control\last-start-failure.txt`.

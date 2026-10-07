@@ -124,3 +124,7 @@ Not verifiable without the machine, so `deploy/smoke.ps1` checks them there: Git
 `printf` byte output, CRLF), junction and 8.3 handling on NTFS, `taskkill` of a real process tree, the scheduled task and account setup,
 the user-rights changes made with `secedit`, the firewall rules on the machine's Windows build, and a build profile that calls the real
 build tooling.
+
+## Budgets for an instruction in chat
+
+An instruction in chat (`instruct:`) is the same kind of job as a task: a code change with builds and tests, and every step re-reads the whole conversation (30k tokens or more). It therefore gets 600k tokens and 30 minutes (hard cap 800k) from a chat pool of half the day's limit; `managed.env` sets the day's limit to 4M tokens. The kit's default (150k, 10 % of the day) ended such a job after a few steps with `budget_exceeded`.
