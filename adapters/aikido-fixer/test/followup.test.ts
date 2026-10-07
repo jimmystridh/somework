@@ -338,3 +338,13 @@ describe("when the pull request is looked at next", () => {
 		assert.equal(nextCheck(s, state(1), { outcome: "blocked" }), undefined);
 	});
 });
+
+describe("a follow-up with the asker's own words", () => {
+	it("runs even when no reviewer has said anything, and shows the model those words as trusted", async () => {
+		const reader: PullRequestReader = { read: async () => ({ state: "open", headSha: HEAD, author: "x", feedback: [], ci: { visible: false, pending: 0 } }) };
+		const hooks = createFixerHooks({ settings: settings(), stateDir: mkdtempSync(join(tmpdir(), "aikido-fu-")), boundary: () => "b", reader, aikido: { resolveIssue: async () => ({ group, issue }) } });
+		const prepared = (await hooks.prepareInput!({ issue: { id: 12 }, repository: { url: REPO, ref: BRANCH }, followUp: { pullRequest: PR, branch: BRANCH, round: 1 }, hint: "bun.lock is stale after the override: run bun install", budget: { maxTokens: 1, maxMinutes: 1 } }, { taskId: "t9", log: () => undefined })) as any;
+		assert.equal(await hooks.beforeWorkspace!(prepared, { taskId: "t9" } as never), undefined, "not skipped");
+		assert.match(hooks.instruction!(prepared, { taskId: "t9" }), /What the person who asked said \(trusted\):\nbun\.lock is stale after the override: run bun install/);
+	});
+});

@@ -78,6 +78,13 @@ describe("the fixer in chat", () => {
 			assert.equal(setup().chat.plainInstruct!("fix the feedback on your last PR"), undefined, "no pull request on record");
 		});
 
+		it("passes on what the asker said is wrong, as their own words, and not a bare request", () => {
+			const { chat } = withPullRequests();
+			const planned = chat.plainInstruct!("fix the feedback on PR 41: CI fails because bun.lock is stale after the override, run bun install and commit it") as any;
+			assert.match(planned.input.hint, /bun\.lock is stale/);
+			assert.equal((chat.plainInstruct!("fix the feedback on PR 41") as any).input.hint, undefined);
+		});
+
 		it("says so when it has no pull request on record", () => {
 			assert.match((setup().chat.instructInput!("check the comments on your last PR") as any).refuse, /no pull request of my own on record/);
 		});

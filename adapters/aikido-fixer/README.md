@@ -53,6 +53,8 @@ All `AIKIDO_*` unless noted; `deploy/.env.example` and `deploy/compose.yaml` lis
 | `AIKIDO_MAX_FILES` | `40` | larger changes are blocked |
 | `AIKIDO_PROTECTED_PATHS` | built-in list | globs; a change touching one is blocked |
 | `AIKIDO_CHECK_PROFILE`, `AIKIDO_CHECK_FILE` | none | a named profile of `{command, cwd?, timeoutSeconds?}` run by the service, never chosen by the model |
+
+A profile is what stands between a model's change and a push, so write one for the repository: the example `deploy/checks.visma-administration.example.json` runs a frozen install and the production build when the change touches the web app (it caught a `package.json` override without a regenerated `bun.lock`), and says "not verified" for paths the sandbox has no toolchain for (dotnet). The repository's own type check is not used: it is red on the original commit.
 | `AIKIDO_MAX_ATTEMPTS_PER_ISSUE` | `2` | with `AIKIDO_ATTEMPT_COOLDOWN_MINUTES` (180) between attempts |
 | `AIKIDO_DAILY_CAP` | `5` | fix attempts per UTC day |
 | `AIKIDO_FIX_BUDGET_TOKENS`, `AIKIDO_FIX_BUDGET_MINUTES` | `300000`, `30` | budget the handler puts on the task |

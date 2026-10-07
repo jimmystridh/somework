@@ -11,6 +11,8 @@ export const FIXER_CHAT_INSTRUCTIONS = `You are the Aikido fixer of this platfor
 
 /** Words that make an instruction a look at one of the agent's own pull requests instead of a fix for an Aikido issue. */
 const FOLLOW_UP = /\b(pull requests?|prs?|review comments?|review feedback|feedback|follow[- ]?up)\b/i;
+/** A request that says what is wrong or what to do (not just "fix the feedback on PR 5229") carries its words to the model. */
+const EXPLAINS = /[:;]|\b(because|since|fails?|failing|failed|broken|stale|needs?|needed|must|should|regenerate|run)\b/i;
 const PULL_REQUEST_URL = /https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/pull\/(\d{1,9})/i;
 const PULL_REQUEST_PHRASE = /\b(?:pull request|pr)\s*#?(\d{1,9})\b/i;
 const HASH_NUMBER = /(?<![\w./-])#(\d{1,9})\b/;
@@ -86,9 +88,11 @@ export function fixerChat(options: FixerChatOptions): ChatRoleHooks {
 		if (known.length === 0) return { refuse: "I have no pull request of my own on record to follow up on" };
 		const entry = named ? known.find((candidate) => candidate.prUrl!.endsWith(`/pull/${named}`)) : known[0];
 		if (!entry) return { refuse: `I only follow up on pull requests I opened and recorded, and ${named ? `#${named} is not one of them` : "I know none"}` };
+		// words beyond the request itself (what to do, what is wrong) go to the model as the asker's own, trusted, instruction
+		const hint = rest.replace(PULL_REQUEST_URL, "").replace(/\s+/g, " ").trim();
 		return {
 			capability: { id: "code.fix.followup", version: "1" },
-			input: { issue: { id: entry.groupId }, repository: { url: target, ref: entry.branch! }, followUp: { pullRequest: entry.prUrl!, branch: entry.branch!, round: 1 } },
+			input: { issue: { id: entry.groupId }, repository: { url: target, ref: entry.branch! }, followUp: { pullRequest: entry.prUrl!, branch: entry.branch!, round: 1 }, ...(EXPLAINS.test(hint) ? { hint: hint.slice(0, 2000) } : {}) },
 		};
 	};
 	return {

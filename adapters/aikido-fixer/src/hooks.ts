@@ -141,7 +141,7 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 			const summary = summariseIssue(found);
 			if (followUp) {
 				const pullRequest = await options.reader!.read(followUp.pullRequest);
-				const skip = pullRequest.state !== "open" ? `the pull request is ${pullRequest.state}` : pullRequest.feedback.length === 0 ? "the pull request has no new review feedback since its newest commit" : undefined;
+				const skip = pullRequest.state !== "open" ? `the pull request is ${pullRequest.state}` : pullRequest.feedback.length === 0 && !parsed.hint ? "the pull request has no new review feedback since its newest commit" : undefined;
 				tasks.set(taskId, { input: parsed, summary, followUp: { input: followUp, pullRequest }, ...(skip ? { skip } : {}), files: [] });
 				log("info", "fixer_followup_prepared", { taskId, issue: summary.groupId, round: followUp.round, state: pullRequest.state, feedback: pullRequest.feedback.length, ciVisible: pullRequest.ci.visible, ciPending: pullRequest.ci.pending, skipped: skip !== undefined });
 				return { ...input, agentKey: `aikido-followup:${summary.groupId}`, repository: { ...input.repository, ref: followUp.branch } };
@@ -159,7 +159,7 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 
 		instruction(_input, { taskId }) {
 			const state = stateOf(taskId);
-			if (state.followUp) return buildFollowUpInstruction(state.followUp.input.pullRequest, state.summary, state.followUp.pullRequest.feedback, boundary());
+			if (state.followUp) return buildFollowUpInstruction(state.followUp.input.pullRequest, state.summary, state.followUp.pullRequest.feedback, boundary(), state.input.hint);
 			return buildInstruction(state.input, state.summary, boundary());
 		},
 

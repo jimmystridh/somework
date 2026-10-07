@@ -1,0 +1,6 @@
+{
+  "web": {
+    "command": "changed=$( (git diff --cached --name-only HEAD; git show --name-only --format= HEAD) 2>/dev/null ); case \"$changed\" in *Source/admin.web/*) ;; *) echo \"not verified: nothing in this sandbox can check these paths (no dotnet)\"; exit 0;; esac; cd Source/admin.web && bun install --frozen-lockfile && bun run build",
+    "timeoutSeconds": 1500
+  }
+}
