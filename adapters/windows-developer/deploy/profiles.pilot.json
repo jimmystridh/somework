@@ -6,23 +6,17 @@
       "timeoutMinutes": 5,
       "blockPushOnFailure": false
     },
-    "node-install": {
-      "command": "npm ci --ignore-scripts",
-      "cwd": ".",
+    "sdk-install": {
+      "command": "npm ci --ignore-scripts --no-audit --no-fund",
+      "cwd": "sdk/typescript",
       "timeoutMinutes": 20,
       "blockPushOnFailure": true
     }
   },
   "test": {
-    "rules-cli": {
-      "command": "npm test --workspace packages/rules-cli",
-      "cwd": ".",
-      "timeoutMinutes": 15,
-      "blockPushOnFailure": true
-    },
-    "events-hub": {
-      "command": "npm test --workspace packages/events-hub",
-      "cwd": ".",
+    "sdk-unit": {
+      "command": "npm test",
+      "cwd": "sdk/typescript",
       "timeoutMinutes": 20,
       "blockPushOnFailure": true
     }
