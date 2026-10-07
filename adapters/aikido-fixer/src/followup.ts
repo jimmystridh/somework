@@ -51,6 +51,11 @@ export interface PullRequestReader {
 	read(pullRequest: string): Promise<PullRequestState>;
 }
 
+/** GitHub said the credential may not read this (for example check runs, which a fine-grained token needs the checks permission for). */
+class ForbiddenError extends Error {
+	override readonly name = "ForbiddenError";
+}
+
 const MAX_ITEMS = 40;
 const MAX_BODY = 1500;
 const FAILED_CHECKS = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
@@ -69,8 +74,19 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		this.#fetch = options.fetch ?? fetch;
 	}
 
+	/** A read the credential may not be allowed to make (a token without the checks permission): the answer is "not available", not a failed follow-up. */
+	async #getIfAllowed(path: string): Promise<any | undefined> {
+		try {
+			return await this.#get(path);
+		} catch (error) {
+			if (error instanceof ForbiddenError) return undefined;
+			throw error;
+		}
+	}
+
 	async #get(path: string): Promise<any> {
 		const response = await this.#fetch(`${this.#apiBase}${path}`, { headers: { authorization: `Bearer ${await this.#token()}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", "user-agent": "somework-aikido-fixer" }, signal: AbortSignal.timeout(20_000), redirect: "error" });
+		if (response.status === 403) throw new ForbiddenError(`GitHub refused ${path.split("?")[0]} for this credential`);
 		if (response.status === 404) throw new InvalidInput("the pull request cannot be read with this agent's credential");
 		if (!response.ok) throw new Error(`GitHub answered ${response.status} for ${path.split("?")[0]}`);
 		return await response.json();
@@ -94,7 +110,7 @@ export class GitHubPullRequestReader implements PullRequestReader {
 			this.#get(`${repo}/pulls/${number}/reviews?per_page=100`),
 			this.#get(`${repo}/pulls/${number}/comments?per_page=100`),
 			this.#get(`${repo}/issues/${number}/comments?per_page=100`),
-			this.#get(`${repo}/commits/${headSha}/check-runs?per_page=100`),
+			this.#getIfAllowed(`${repo}/commits/${headSha}/check-runs?per_page=100`),
 		]);
 		const items: FeedbackItem[] = [];
 		const later = (at: unknown) => Date.parse(String(at)) > since;

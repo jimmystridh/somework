@@ -90,6 +90,23 @@ describe("reading a pull request", () => {
 		assert.ok(!closed.seen.some((line) => line.includes("/comments")));
 	});
 
+	it("reads the rest when the credential may not read check runs", async () => {
+		const forbidden = (async (url: string) => {
+			const path = String(url).replace("https://api.github.com", "").split("?")[0]!;
+			if (path.endsWith("/check-runs")) return new Response("{}", { status: 403 });
+			const answers: Record<string, any> = {
+				"/repos/Acme/Shop/pulls/42": { state: "open", user: { login: "x" }, head: { sha: HEAD } },
+				[`/repos/Acme/Shop/git/commits/${HEAD}`]: { committer: { date: COMMIT_DATE } },
+				"/repos/Acme/Shop/pulls/42/reviews": [{ submitted_at: "2026-10-06T10:05:00Z", user: { login: "anna" }, state: "COMMENTED", body: "please add a test" }],
+				"/repos/Acme/Shop/pulls/42/comments": [],
+				"/repos/Acme/Shop/issues/42/comments": [],
+			};
+			return new Response(JSON.stringify(answers[path]), { status: 200 });
+		}) as unknown as typeof fetch;
+		const state = await new GitHubPullRequestReader({ token: async () => "tok", fetch: forbidden }).read(PR);
+		assert.deepEqual(state.feedback.map((f) => f.kind), ["review"]);
+	});
+
 	it("says so when the pull request cannot be read, and refuses addresses outside GitHub", async () => {
 		await assert.rejects(reader({ "/repos/Acme/Shop/pulls/42": undefined }).reader.read(PR), /cannot be read/);
 		await assert.rejects(reader().reader.read("https://example.com/a/b/pull/1"), /not a pull request address/);
