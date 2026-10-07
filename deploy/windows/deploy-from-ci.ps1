@@ -46,7 +46,10 @@ $file = [IO.File]::Create($tgz)
 $buffer = New-Object byte[] 65536
 $left = $size
 while ($left -gt 0) {
-    $read = $in.Read($buffer, 0, [int][Math]::Min($buffer.Length, $left))
+    # a read that waits for ever would hold the deployment lock: give up when the client sends nothing for a minute (the pipeline tries again)
+    $pending = $in.ReadAsync($buffer, 0, [int][Math]::Min($buffer.Length, $left))
+    if (-not $pending.Wait(60000)) { $file.Close(); Fail "nothing arrived for 60 s after $($size - $left) of $size bytes" 4 }
+    $read = $pending.Result
     if ($read -le 0) { $file.Close(); Fail "the archive ended after $($size - $left) of $size bytes" }
     $file.Write($buffer, 0, $read)
     $left -= $read
