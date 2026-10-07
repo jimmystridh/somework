@@ -1,4 +1,4 @@
-import { InvalidInput } from "@somework/agent-kit";
+import { InvalidInput, redactText } from "@somework/agent-kit";
 
 /** A pull request this agent opened, as the follow-up task is told about it. */
 export interface FollowUpInput {
@@ -53,14 +53,16 @@ export interface PullRequestReader {
 	read(pullRequest: string): Promise<PullRequestState>;
 }
 
-/** GitHub said the credential may not read this (for example check runs, which a fine-grained token needs the checks permission for). */
+/** GitHub said the credential may not read this (a fine-grained token has no permission for check runs or commit statuses, but can read GitHub Actions). */
 class ForbiddenError extends Error {
 	override readonly name = "ForbiddenError";
 }
 
 const MAX_ITEMS = 40;
 const MAX_BODY = 1500;
-const FAILED_CHECKS = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
+const FAILED_RUNS = new Set(["failure", "timed_out", "startup_failure"]);
+const MAX_FAILED_JOBS = 3;
+const LOG_TAIL_LINES = 40;
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
 
@@ -76,7 +78,7 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		this.#fetch = options.fetch ?? fetch;
 	}
 
-	/** A read the credential may not be allowed to make (a token without the checks permission): the answer is "not available", not a failed follow-up. */
+	/** A read the credential may not be allowed to make: the answer is "not available", not a failed follow-up. */
 	async #getIfAllowed(path: string): Promise<any | undefined> {
 		try {
 			return await this.#get(path);
@@ -108,12 +110,11 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		const commit = await this.#get(`${repo}/git/commits/${headSha}`);
 		const since = Date.parse(String(commit?.committer?.date ?? commit?.author?.date ?? ""));
 		if (!Number.isFinite(since)) throw new Error("GitHub gave no date for the head commit");
-		const [reviews, inline, comments, checks, statuses] = await Promise.all([
+		const [reviews, inline, comments, ci] = await Promise.all([
 			this.#get(`${repo}/pulls/${number}/reviews?per_page=100`),
 			this.#get(`${repo}/pulls/${number}/comments?per_page=100`),
 			this.#get(`${repo}/issues/${number}/comments?per_page=100`),
-			this.#getIfAllowed(`${repo}/commits/${headSha}/check-runs?per_page=100`),
-			this.#getIfAllowed(`${repo}/commits/${headSha}/status`),
+			this.#ci(match[1]!, match[2]!, Number(number), headSha),
 		]);
 		const items: FeedbackItem[] = [];
 		const later = (at: unknown) => Date.parse(String(at)) > since;
@@ -130,15 +131,75 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		for (const comment of Array.isArray(comments) ? comments : []) {
 			if (later(comment?.created_at) && person(comment) && String(comment?.body ?? "").trim() !== "") items.push({ kind: "comment", author: String(comment?.user?.login ?? "unknown"), at: String(comment.created_at), body: clip(String(comment.body).trim(), MAX_BODY) });
 		}
-		for (const run of Array.isArray(checks?.check_runs) ? checks.check_runs : []) {
-			if (FAILED_CHECKS.has(String(run?.conclusion))) items.push({ kind: "check", author: String(run?.app?.slug ?? "check"), at: String(run?.completed_at ?? ""), body: clip(`check "${String(run?.name ?? "?")}" ${run.conclusion}${run?.output?.title ? `: ${String(run.output.title)}` : ""}`, 400) });
-		}
-		for (const status of Array.isArray(statuses?.statuses) ? statuses.statuses : []) {
-			if (status?.state === "failure" || status?.state === "error") items.push({ kind: "check", author: "status", at: String(status?.updated_at ?? ""), body: clip(`status "${String(status?.context ?? "?")}" ${status.state}${status?.description ? `: ${String(status.description)}` : ""}`, 400) });
-		}
-		const runs: any[] = Array.isArray(checks?.check_runs) ? checks.check_runs : [];
-		const pending = runs.filter((run) => run?.status !== "completed").length + (Array.isArray(statuses?.statuses) ? statuses.statuses.filter((status: any) => status?.state === "pending").length : 0);
+		items.push(...ci.items);
 		items.sort((a, b) => a.at.localeCompare(b.at));
-		return { state, headSha, author, feedback: items.slice(-MAX_ITEMS), ci: { visible: checks !== undefined || statuses !== undefined, pending } };
+		return { state, headSha, author, feedback: items.slice(-MAX_ITEMS), ci: { visible: ci.visible, pending: ci.pending } };
+	}
+
+	/**
+	 * What the repository's CI says about the head commit, through what a fine-grained token can read: GitHub Actions (runs, their failed jobs and steps and the
+	 * end of each failed job's log) and the pull request's overall status (GraphQL), which does not need the checks permission. Anything else that reports
+	 * to the commit only shows up as the overall state.
+	 */
+	async #ci(owner: string, name: string, number: number, headSha: string): Promise<{ items: FeedbackItem[]; visible: boolean; pending: number }> {
+		const repo = `/repos/${owner}/${name}`;
+		const items: FeedbackItem[] = [];
+		const runs = await this.#getIfAllowed(`${repo}/actions/runs?head_sha=${headSha}&per_page=50`);
+		const rollup = await this.#rollupState(owner, name, number);
+		const list: any[] = Array.isArray(runs?.workflow_runs) ? runs.workflow_runs : [];
+		let pending = list.filter((run) => run?.status !== "completed").length;
+		if (rollup === "PENDING" || rollup === "EXPECTED") pending = Math.max(pending, 1);
+		let jobsRead = 0;
+		for (const run of list.filter((candidate) => FAILED_RUNS.has(String(candidate?.conclusion)))) {
+			const jobs = await this.#getIfAllowed(`${repo}/actions/runs/${Number(run.id)}/jobs?filter=latest&per_page=50`);
+			for (const job of (Array.isArray(jobs?.jobs) ? jobs.jobs : []).filter((candidate: any) => FAILED_RUNS.has(String(candidate?.conclusion)))) {
+				if (jobsRead >= MAX_FAILED_JOBS) break;
+				jobsRead++;
+				const step = (Array.isArray(job?.steps) ? job.steps : []).find((candidate: any) => FAILED_RUNS.has(String(candidate?.conclusion)));
+				const tail = await this.#logTail(`${repo}/actions/jobs/${Number(job.id)}/logs`);
+				items.push({
+					kind: "check",
+					author: "github-actions",
+					at: String(job?.completed_at ?? run?.updated_at ?? ""),
+					body: clip(`workflow "${String(run?.name ?? "?")}", job "${String(job?.name ?? "?")}" ${String(job?.conclusion)}${step ? ` at step "${String(step?.name ?? "?")}"` : ""}${tail ? `\n${tail}` : ""}`, MAX_BODY),
+				});
+			}
+		}
+		if (items.length === 0 && (rollup === "FAILURE" || rollup === "ERROR")) {
+			items.push({ kind: "check", author: "ci", at: new Date().toISOString(), body: `the pull request's overall status is ${rollup}; the failing check is not one this credential can read (it is not a GitHub Actions run)` });
+		}
+		return { items, visible: runs !== undefined || rollup !== undefined, pending };
+	}
+
+	/** SUCCESS, FAILURE, PENDING, ERROR or EXPECTED for the pull request's head commit, or undefined when it cannot be read. */
+	async #rollupState(owner: string, name: string, number: number): Promise<string | undefined> {
+		try {
+			const response = await this.#fetch(`${this.#apiBase}/graphql`, {
+				method: "POST",
+				headers: { authorization: `Bearer ${await this.#token()}`, "content-type": "application/json", "user-agent": "somework-aikido-fixer" },
+				body: JSON.stringify({ query: "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}", variables: { owner, name, number } }),
+				signal: AbortSignal.timeout(20_000),
+				redirect: "error",
+			});
+			if (!response.ok) return undefined;
+			const state = ((await response.json()) as any)?.data?.repository?.pullRequest?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state;
+			return typeof state === "string" ? state : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** The last lines of a job's log: the API answers with a redirect to the log file, which is fetched without the token. Empty when it cannot be had. */
+	async #logTail(path: string): Promise<string> {
+		try {
+			const first = await this.#fetch(`${this.#apiBase}${path}`, { headers: { authorization: `Bearer ${await this.#token()}`, accept: "application/vnd.github+json", "user-agent": "somework-aikido-fixer" }, signal: AbortSignal.timeout(20_000), redirect: "manual" });
+			const location = first.headers.get("location");
+			const body = location ? await this.#fetch(location, { signal: AbortSignal.timeout(30_000), redirect: "error" }) : first;
+			if (!body.ok) return "";
+			const lines = (await body.text()).split("\n").map((line) => line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, "").trimEnd()).filter((line) => line !== "");
+			return redactText(lines.slice(-LOG_TAIL_LINES).join("\n"));
+		} catch {
+			return "";
+		}
 	}
 }

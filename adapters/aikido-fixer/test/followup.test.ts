@@ -60,13 +60,19 @@ describe("reading a pull request", () => {
 				{ created_at: "2026-10-06T10:21:00Z", user: { login: "github-actions[bot]", type: "Bot" }, body: "Preview environment deployed" },
 				{ created_at: "2026-10-06T10:22:00Z", user: { login: "chatgpt-codex-connector[bot]" }, body: "Codex Review Summary" },
 			],
-			[`/repos/Acme/Shop/commits/${HEAD}/check-runs`]: { check_runs: [{ name: "build", conclusion: "failure", completed_at: "2026-10-06T10:15:00Z", app: { slug: "woodpecker" }, output: { title: "1 test failed" } }, { name: "lint", conclusion: "success", completed_at: "2026-10-06T10:16:00Z" }] },
+			[`/repos/Acme/Shop/actions/runs`]: { workflow_runs: [{ id: 7, name: "CI", status: "completed", conclusion: "failure", updated_at: "2026-10-06T10:15:00Z" }, { id: 8, name: "Lint", status: "completed", conclusion: "success" }] },
+			"/repos/Acme/Shop/actions/runs/7/jobs": { jobs: [{ id: 70, name: "build", conclusion: "failure", completed_at: "2026-10-06T10:15:00Z", steps: [{ name: "Install", conclusion: "success" }, { name: "Build", conclusion: "failure" }] }, { id: 71, name: "docs", conclusion: "success" }] },
+			"/repos/Acme/Shop/actions/jobs/70/logs": "REDIRECT:https://logs.example/70.txt",
+			"https://logs.example/70.txt": "TEXT:2026-10-06T10:14:58.1234567Z npm ERR! missing script: build\n2026-10-06T10:14:59.0000000Z Error: Process completed with exit code 1.\n",
+			"GRAPHQL": { data: { repository: { pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] } } } } },
 			...overrides,
 		};
 		const fetcher = (async (url: string, init: any) => {
 			const path = String(url).replace("https://api.github.com", "").split("?")[0]!;
-			seen.push(`${path} ${init.headers.authorization}`);
-			const body = answers[path];
+			seen.push(`${path} ${init.headers?.authorization ?? "(no token)"}`);
+			const body = path === "/graphql" ? answers.GRAPHQL : answers[path];
+			if (typeof body === "string" && body.startsWith("REDIRECT:")) return new Response(null, { status: 302, headers: { location: body.slice(9) } });
+			if (typeof body === "string" && body.startsWith("TEXT:")) return new Response(body.slice(5), { status: 200 });
 			return body === undefined ? new Response("{}", { status: 404 }) : new Response(JSON.stringify(body), { status: 200 });
 		}) as unknown as typeof fetch;
 		return { seen, reader: new GitHubPullRequestReader({ token: async () => "tok", fetch: fetcher }) };
@@ -77,21 +83,26 @@ describe("reading a pull request", () => {
 		const state = await r.reader.read(PR);
 		assert.equal(state.state, "open");
 		assert.equal(state.headSha, HEAD);
-		assert.deepEqual(state.feedback.map((f) => [f.kind, f.author]), [["review", "anna"], ["review", "fixer-bot"], ["review_comment", "reviewer-bot"], ["check", "woodpecker"], ["comment", "bob"]]);
+		assert.deepEqual(state.feedback.map((f) => [f.kind, f.author]), [["review", "anna"], ["review", "fixer-bot"], ["review_comment", "reviewer-bot"], ["check", "github-actions"], ["comment", "bob"]]);
 		assert.match(state.feedback[0]!.body, /CHANGES_REQUESTED: please add a test/);
 		assert.deepEqual([state.feedback[2]!.path, state.feedback[2]!.line], ["src/a.ts", 7]);
-		assert.match(state.feedback[3]!.body, /check "build" failure: 1 test failed/);
-		assert.ok(r.seen.every((line) => line.endsWith("Bearer tok")));
+		assert.match(state.feedback[3]!.body, /workflow "CI", job "build" failure at step "Build"\nnpm ERR! missing script: build\nError: Process completed with exit code 1\./);
+		assert.ok(r.seen.filter((line) => !line.includes("(no token)")).every((line) => line.endsWith("Bearer tok")));
+		assert.ok(r.seen.some((line) => line === "/70.txt (no token)" || line.startsWith("https://logs.example/70.txt")), "the log file is fetched without the token");
 	});
 
-	it("sees failing commit statuses and counts what is still running", async () => {
-		const r = reader({
-			[`/repos/Acme/Shop/commits/${HEAD}/status`]: { statuses: [{ context: "ci/deploy", state: "failure", description: "boom", updated_at: "2026-10-06T10:30:00Z" }, { context: "ci/other", state: "pending", updated_at: "2026-10-06T10:31:00Z" }] },
-			[`/repos/Acme/Shop/commits/${HEAD}/check-runs`]: { check_runs: [{ name: "build", status: "in_progress", conclusion: null }, { name: "lint", status: "completed", conclusion: "success" }] },
+	it("counts what is still running, and says when the overall status is red but no Actions run explains it", async () => {
+		const running = reader({
+			[`/repos/Acme/Shop/actions/runs`]: { workflow_runs: [{ id: 9, name: "CI", status: "in_progress", conclusion: null }] },
+			GRAPHQL: { data: { repository: { pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] } } } } },
 		});
-		const state = await r.reader.read(PR);
-		assert.deepEqual(state.ci, { visible: true, pending: 2 });
-		assert.ok(state.feedback.some((f) => f.kind === "check" && /status "ci\/deploy" failure: boom/.test(f.body)));
+		assert.deepEqual((await running.reader.read(PR)).ci, { visible: true, pending: 1 });
+		const external = reader({
+			[`/repos/Acme/Shop/actions/runs`]: { workflow_runs: [] },
+			GRAPHQL: { data: { repository: { pullRequest: { commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] } } } } },
+		});
+		const state = await external.reader.read(PR);
+		assert.ok(state.feedback.some((f) => f.kind === "check" && /overall status is FAILURE.*not a GitHub Actions run/.test(f.body)));
 	});
 
 	it("reports a merged or closed pull request without reading its comments", async () => {
@@ -101,10 +112,10 @@ describe("reading a pull request", () => {
 		assert.ok(!closed.seen.some((line) => line.includes("/comments")));
 	});
 
-	it("reads the rest when the credential may not read check runs", async () => {
+	it("reads the rest when the credential can see no CI at all", async () => {
 		const forbidden = (async (url: string) => {
 			const path = String(url).replace("https://api.github.com", "").split("?")[0]!;
-			if (path.endsWith("/check-runs") || path.endsWith("/status")) return new Response("{}", { status: 403 });
+			if (path.includes("/actions/") || path === "/graphql") return new Response("{}", { status: path === "/graphql" ? 403 : 403 });
 			const answers: Record<string, any> = {
 				"/repos/Acme/Shop/pulls/42": { state: "open", user: { login: "x" }, head: { sha: HEAD } },
 				[`/repos/Acme/Shop/git/commits/${HEAD}`]: { committer: { date: COMMIT_DATE } },
