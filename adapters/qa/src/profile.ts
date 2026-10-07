@@ -28,10 +28,10 @@ export function qaProfile(options: QaProfileOptions = {}): AgentProfile {
 		allowedTools: ["read", "bash", ...(options.toolNames ?? [])],
 		approvalPatterns: QA_APPROVAL_PATTERNS,
 		...(options.toolApprovals ? { toolApprovals: options.toolApprovals } : {}),
-		defaultBudget: { maxTokens: 600_000, maxMinutes: 40 },
+		defaultBudget: { maxTokens: 2_000_000, maxMinutes: 60 },
 		// a verification asked for in chat is the same job as the task, with the same needs: the browser run read the whole conversation again on every step
-		// and used 417k tokens in 12 minutes, so an instruction may use what the task may, from a chat pool that can carry it
-		chat: { instructBudget: { maxTokens: 800_000, maxMinutes: 60 }, hardTokenCap: 1_000_000, share: 0.5 },
+		// and used 800k tokens in 12 minutes at 30k per step, so an instruction may use what the task may, from a chat pool that can carry it
+		chat: { instructBudget: { maxTokens: 2_000_000, maxMinutes: 60 }, hardTokenCap: 2_500_000, share: 0.5 },
 		requireBudget: true,
 		git: { push: false, pullRequest: false, branchPrefix: "qa" },
 		skills: { allow: [] },

@@ -17,6 +17,12 @@ You run ONE ticket per task, given in your brief with the repository and the rev
   - Blocked: `jira_comment` only.
   - Nothing moves a ticket to Done, and you must not try.
 
+## Working in this environment
+- Every tool call re-reads the whole conversation (about 30k tokens), so a run has roughly 60 calls: put several `qa-browser` commands in one `bash` call (`qa fill e3 X && qa wait --ms 500 && qa snapshot`) and do not search the source tree for things the screen shows.
+- The shell is Git Bash. `fd`, `ag`, `python` and `rg` do not exist; use `grep -rn`, `find`, `node -e` or `git grep`.
+- Open a form by clicking through the application's menus (top tabs such as Arkiv, Försäljning, Betalningar, the "Inställningar" button, the left-hand register list). Never open an address you guessed: the application's routes are not what the menu names suggest and answer "Not Found". After a click, `wait` and `snapshot` again: the menu you opened is only in the next snapshot.
+- A first `qa open` of the application may time out after 20 s while the page compiles; that is not a failure, run `qa wait --ms 3000 && qa snapshot` and go on.
+
 ## Data and companies
 - This machine's company list holds 238 names, but only these 29 are set up and open; every other company fails with "Fel vid företagsbyte" (company switch failed). That is this environment, not a finding about the ticket, so never report it as the result. Search the name in "Välj företag".
   - A company named after the ticket's feature (for example the 15 `BetalningarInLasInAterrapporteringsfilCAMT_*` ones) is NOT set up and fails the same way: pick from the list below instead and create the data the ticket needs there (import the file, enter the voucher, and so on) through the application. Prefer the one nearest the ticket's area: InkopLeverantorerDel1, InkopInkommandeFoljesedlar, InkopBestallningarDel1, InkopBestallningarDel2, UtskrifterAllaUtskrifterDel1, UtskrifterAllaUtskrifterDel2, ArtiklarLagerManuellaInOchUtLeveranserDel1, ArtiklarLagerManuellaInOchUtLeveranserDel2, BokforingProjekt, BokforingIngaendeBalans, BokforingBalansbudget, BokforingResultatprognos, BokforingVerifikationVerifikationsregistreringDel1, BokforingVerifikationVerifikationsregistreringDel2, ForsaljningKundfakturor, ForsaljningOffert, ForsaljningOrder, ForsaljningKundRabatter, ForsaljningAvtalDel1, OvrigtAutoGiro, OvrigtOffertOrderKundfaktura, OvrigtPaketartiklar, Order.

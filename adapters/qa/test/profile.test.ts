@@ -56,8 +56,8 @@ describe("the QA profile", () => {
 	});
 
 	it("takes a verification-sized budget and chat pool for an instruction in chat", () => {
-		assert.deepEqual(qaProfile().chat?.instructBudget, { maxTokens: 800_000, maxMinutes: 60 });
-		assert.equal(qaProfile().chat?.hardTokenCap, 1_000_000);
+		assert.deepEqual(qaProfile().chat?.instructBudget, { maxTokens: 2_000_000, maxMinutes: 60 });
+		assert.equal(qaProfile().chat?.hardTokenCap, 2_500_000);
 	});
 
 	it("asks before a shell command that would change the checkout, on top of the default and Windows rules", () => {
