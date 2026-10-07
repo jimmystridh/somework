@@ -68,7 +68,7 @@ export class PlaywrightBackend implements BrowserBackend {
 			return route.abort("blockedbyclient");
 		});
 		const page = await context.newPage();
-		page.setDefaultTimeout(15_000);
+		page.setDefaultTimeout(30_000);
 		page.on("console", (message: any) => {
 			if (message.type() === "error" || message.type() === "warning") this.#note("console", `${message.type()}: ${message.text()}`);
 		});
@@ -103,7 +103,7 @@ export class PlaywrightBackend implements BrowserBackend {
 	async click(ref: string): Promise<PageInfo> {
 		const target = this.#target(ref);
 		if ((await target.count()) === 0) throw new Error(`no control ${ref} on the page (take a new snapshot)`);
-		await target.first().click({ timeout: 10_000 });
+		await target.first().click({ timeout: 30_000 });
 		await this.#page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});
 		return this.#info();
 	}
@@ -111,7 +111,7 @@ export class PlaywrightBackend implements BrowserBackend {
 	async fill(ref: string, text: string): Promise<PageInfo> {
 		const target = this.#target(ref);
 		if ((await target.count()) === 0) throw new Error(`no control ${ref} on the page (take a new snapshot)`);
-		await target.first().fill(text, { timeout: 10_000 });
+		await target.first().fill(text, { timeout: 30_000 });
 		return this.#info();
 	}
 
@@ -122,7 +122,7 @@ export class PlaywrightBackend implements BrowserBackend {
 	}
 
 	async wait(options: WaitOptions): Promise<PageInfo> {
-		const timeout = options.timeoutMs ?? 15_000;
+		const timeout = options.timeoutMs ?? 30_000;
 		if (options.ms !== undefined) await this.#page.waitForTimeout(options.ms);
 		if (options.text !== undefined) await this.#page.getByText(options.text).first().waitFor({ timeout });
 		if (options.selector !== undefined) await this.#page.locator(options.selector).first().waitFor({ timeout });

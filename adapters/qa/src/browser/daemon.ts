@@ -138,7 +138,7 @@ export class BrowserDaemon {
 				const text = args.text === undefined ? undefined : str("text", 300);
 				const selector = args.selector === undefined ? undefined : str("selector", 300);
 				if (ms === undefined && text === undefined && selector === undefined) throw new UsageError("wait: give --ms, --text or --selector");
-				return `waited; now ${page(await this.#backend.wait({ ms, text, selector, timeoutMs: 15_000 }))}`;
+				return `waited; now ${page(await this.#backend.wait({ ms, text, selector, timeoutMs: 30_000 }))}`;
 			}
 			case "screenshot": {
 				const name = safeName(typeof args.name === "string" ? args.name : undefined, `screenshot-${++this.#screenshotCount}`);

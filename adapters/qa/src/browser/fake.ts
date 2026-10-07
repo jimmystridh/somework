@@ -79,7 +79,7 @@ export class FakeBackend implements BrowserBackend {
 		if (!this.#recording) return undefined;
 		const file = join(this.#recording, `fake-${++this.#videos}.webm`);
 		mkdirSync(this.#recording, { recursive: true });
-		writeFileSync(file, Buffer.from("1a45dfa3", "hex"));
+		writeFileSync(file, Buffer.concat([Buffer.from("1a45dfa3", "hex"), Buffer.alloc(4096, 1)]));
 		this.#recording = undefined;
 		return file;
 	}

@@ -22,6 +22,8 @@ export interface JiraToolsOptions {
 }
 
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+/** A recording that stalled leaves a file with no frames in it; it is not evidence and must not reach the ticket. */
+const MIN_VIDEO_BYTES = 2048;
 const MAX_TEXT = 12_000;
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
 const failure = (value: string) => ({ isError: true as const, content: [{ type: "text" as const, text: value }] });
@@ -170,6 +172,8 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 						throw new Refusal(`there is no file ${args.file} in the evidence folder`);
 					}
 					if (size > MAX_ATTACHMENT_BYTES) throw new Refusal("that file is larger than 50 MiB");
+					if (extension === ".webm" && size < MIN_VIDEO_BYTES) throw new Refusal(`that video is ${size} bytes: the recording produced no frames (the machine was too busy). Record it again with fewer steps in between, or report the result as blocked`);
+					if (size === 0) throw new Refusal("that file is empty");
 					const name = `${current.ticket}-${args.file.split(/[\\/]/).pop()}`;
 					await options.jira.attach(current.ticket, name, readFile(absolute), CONTENT_TYPES[extension]!);
 					if (extension === ".webm") current.jira.attachedVideo = true;
@@ -185,6 +189,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 			async execute(args: { body: string }) {
 				return wrap(async () => {
 					const { current } = await writable();
+					if (current.verdict === "verified" && !current.jira.attachedVideo) throw new Refusal("a verified comment goes after the attached video: attach the video first (a recording with no frames is refused; then the result is blocked, not verified)");
 					const posted = await options.jira.addComment(current.ticket, args.body);
 					current.jira.commented = true;
 					log("info", "jira_write", { taskId: current.taskId, action: "comment", id: posted.id });
