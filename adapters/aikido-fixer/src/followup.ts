@@ -45,6 +45,8 @@ export interface PullRequestState {
 	author: string;
 	/** Reviews, review comments, comments from people and failing checks that came after the newest commit on the branch. */
 	feedback: FeedbackItem[];
+	/** What the credential can see of the pull request's CI: `visible` is false when GitHub refused both check runs and commit statuses (the token lacks the permission). */
+	ci: { visible: boolean; pending: number };
 }
 
 export interface PullRequestReader {
@@ -79,7 +81,7 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		try {
 			return await this.#get(path);
 		} catch (error) {
-			if (error instanceof ForbiddenError) return undefined;
+			if (error instanceof ForbiddenError || error instanceof InvalidInput) return undefined;
 			throw error;
 		}
 	}
@@ -102,15 +104,16 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		if (!/^[0-9a-f]{40}$/.test(headSha)) throw new Error("GitHub gave no head commit for the pull request");
 		const state = pull.merged === true || pull.merged_at ? "merged" : pull.state === "closed" ? "closed" : "open";
 		const author = String(pull?.user?.login ?? "");
-		if (state !== "open") return { state, headSha, author, feedback: [] };
+		if (state !== "open") return { state, headSha, author, feedback: [], ci: { visible: false, pending: 0 } };
 		const commit = await this.#get(`${repo}/git/commits/${headSha}`);
 		const since = Date.parse(String(commit?.committer?.date ?? commit?.author?.date ?? ""));
 		if (!Number.isFinite(since)) throw new Error("GitHub gave no date for the head commit");
-		const [reviews, inline, comments, checks] = await Promise.all([
+		const [reviews, inline, comments, checks, statuses] = await Promise.all([
 			this.#get(`${repo}/pulls/${number}/reviews?per_page=100`),
 			this.#get(`${repo}/pulls/${number}/comments?per_page=100`),
 			this.#get(`${repo}/issues/${number}/comments?per_page=100`),
 			this.#getIfAllowed(`${repo}/commits/${headSha}/check-runs?per_page=100`),
+			this.#getIfAllowed(`${repo}/commits/${headSha}/status`),
 		]);
 		const items: FeedbackItem[] = [];
 		const later = (at: unknown) => Date.parse(String(at)) > since;
@@ -130,7 +133,12 @@ export class GitHubPullRequestReader implements PullRequestReader {
 		for (const run of Array.isArray(checks?.check_runs) ? checks.check_runs : []) {
 			if (FAILED_CHECKS.has(String(run?.conclusion))) items.push({ kind: "check", author: String(run?.app?.slug ?? "check"), at: String(run?.completed_at ?? ""), body: clip(`check "${String(run?.name ?? "?")}" ${run.conclusion}${run?.output?.title ? `: ${String(run.output.title)}` : ""}`, 400) });
 		}
+		for (const status of Array.isArray(statuses?.statuses) ? statuses.statuses : []) {
+			if (status?.state === "failure" || status?.state === "error") items.push({ kind: "check", author: "status", at: String(status?.updated_at ?? ""), body: clip(`status "${String(status?.context ?? "?")}" ${status.state}${status?.description ? `: ${String(status.description)}` : ""}`, 400) });
+		}
+		const runs: any[] = Array.isArray(checks?.check_runs) ? checks.check_runs : [];
+		const pending = runs.filter((run) => run?.status !== "completed").length + (Array.isArray(statuses?.statuses) ? statuses.statuses.filter((status: any) => status?.state === "pending").length : 0);
 		items.sort((a, b) => a.at.localeCompare(b.at));
-		return { state, headSha, author, feedback: items.slice(-MAX_ITEMS) };
+		return { state, headSha, author, feedback: items.slice(-MAX_ITEMS), ci: { visible: checks !== undefined || statuses !== undefined, pending } };
 	}
 }

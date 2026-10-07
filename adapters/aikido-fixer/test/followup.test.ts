@@ -21,8 +21,9 @@ const issue = { id: 99, group_id: 12, status: "open", affected_package: "lodash"
 const settings = (env: NodeJS.ProcessEnv = {}) => loadSettings({ AIKIDO_REPOSITORY_URL: REPO, ...env });
 
 describe("follow-up settings", () => {
-	it("check after 15, 60 and 240 minutes unless told otherwise, and can be turned off", () => {
-		assert.deepEqual(settings().followUpMinutes, [15, 60, 240]);
+	it("check after 10, 20, 40, 90, 180 and 360 minutes unless told otherwise, and can be turned off", () => {
+		assert.deepEqual(settings().followUpMinutes, [10, 20, 40, 90, 180, 360]);
+		assert.equal(settings().ciWatchMinutes, 10);
 		assert.deepEqual(settings({ AIKIDO_FOLLOWUP_MINUTES: "5, 30" }).followUpMinutes, [5, 30]);
 		for (const off of ["off", "0", ""]) assert.deepEqual(settings({ AIKIDO_FOLLOWUP_MINUTES: off }).followUpMinutes, []);
 		assert.throws(() => settings({ AIKIDO_FOLLOWUP_MINUTES: "15,soon" }), /AIKIDO_FOLLOWUP_MINUTES/);
@@ -83,6 +84,16 @@ describe("reading a pull request", () => {
 		assert.ok(r.seen.every((line) => line.endsWith("Bearer tok")));
 	});
 
+	it("sees failing commit statuses and counts what is still running", async () => {
+		const r = reader({
+			[`/repos/Acme/Shop/commits/${HEAD}/status`]: { statuses: [{ context: "ci/deploy", state: "failure", description: "boom", updated_at: "2026-10-06T10:30:00Z" }, { context: "ci/other", state: "pending", updated_at: "2026-10-06T10:31:00Z" }] },
+			[`/repos/Acme/Shop/commits/${HEAD}/check-runs`]: { check_runs: [{ name: "build", status: "in_progress", conclusion: null }, { name: "lint", status: "completed", conclusion: "success" }] },
+		});
+		const state = await r.reader.read(PR);
+		assert.deepEqual(state.ci, { visible: true, pending: 2 });
+		assert.ok(state.feedback.some((f) => f.kind === "check" && /status "ci\/deploy" failure: boom/.test(f.body)));
+	});
+
 	it("reports a merged or closed pull request without reading its comments", async () => {
 		assert.deepEqual((await reader({ "/repos/Acme/Shop/pulls/42": { state: "closed", merged: true, user: { login: "x" }, head: { sha: HEAD } } }).reader.read(PR)).state, "merged");
 		const closed = reader({ "/repos/Acme/Shop/pulls/42": { state: "closed", merged: false, user: { login: "x" }, head: { sha: HEAD } } });
@@ -93,7 +104,7 @@ describe("reading a pull request", () => {
 	it("reads the rest when the credential may not read check runs", async () => {
 		const forbidden = (async (url: string) => {
 			const path = String(url).replace("https://api.github.com", "").split("?")[0]!;
-			if (path.endsWith("/check-runs")) return new Response("{}", { status: 403 });
+			if (path.endsWith("/check-runs") || path.endsWith("/status")) return new Response("{}", { status: 403 });
 			const answers: Record<string, any> = {
 				"/repos/Acme/Shop/pulls/42": { state: "open", user: { login: "x" }, head: { sha: HEAD } },
 				[`/repos/Acme/Shop/git/commits/${HEAD}`]: { committer: { date: COMMIT_DATE } },
@@ -105,6 +116,7 @@ describe("reading a pull request", () => {
 		}) as unknown as typeof fetch;
 		const state = await new GitHubPullRequestReader({ token: async () => "tok", fetch: forbidden }).read(PR);
 		assert.deepEqual(state.feedback.map((f) => f.kind), ["review"]);
+		assert.deepEqual(state.ci, { visible: false, pending: 0 }, "CI is not visible to this credential");
 	});
 
 	it("says so when the pull request cannot be read, and refuses addresses outside GitHub", async () => {
@@ -170,7 +182,7 @@ describe("the follow-up handler", () => {
 		assert.equal((await h.run(timer(goodPayload({ pullRequest: "https://evil.example/Acme/Shop/pull/1" })))).action, "deliver");
 		assert.equal((await h.run(timer(goodPayload({ branch: "main" })))).action, "deliver");
 		assert.equal((await h.run(timer(goodPayload({ issue: "12; rm" })))).action, "deliver");
-		assert.equal((await h.run(timer(goodPayload({ round: 4 })))).action, "drop", "beyond the three configured checks");
+		assert.equal((await h.run(timer(goodPayload({ round: 7 })))).action, "drop", "beyond the six configured checks");
 	});
 
 	it("handles a delivery once and stops at the daily cap", async () => {
@@ -200,7 +212,7 @@ describe("the follow-up handler", () => {
 });
 
 describe("a follow-up task", () => {
-	const open = (feedback: FeedbackItem[], state: PullRequestState["state"] = "open"): PullRequestReader => ({ read: async () => ({ state, headSha: HEAD, author: "fixer-bot", feedback }) });
+	const open = (feedback: FeedbackItem[], state: PullRequestState["state"] = "open"): PullRequestReader => ({ read: async () => ({ state, headSha: HEAD, author: "fixer-bot", feedback, ci: { visible: false, pending: 0 } }) });
 	const feedback: FeedbackItem[] = [{ kind: "review", author: "anna", at: "2026-10-06T10:05:00Z", body: "CHANGES_REQUESTED: add a test" }];
 	const rig = (reader: PullRequestReader, env: NodeJS.ProcessEnv = {}) => {
 		const requests: any[] = [];
@@ -269,7 +281,7 @@ describe("a follow-up task", () => {
 		r.hooks.result!({}, resultContext({ taskId: "t0", finalize: { status: "completed", branch: BRANCH, commits: ["b".repeat(40)], prUrl: PR, patch: "" } as never }));
 		r.hooks.onSettled!("t0", { type: "completed" } as never);
 		await new Promise((resolve) => setImmediate(resolve));
-		assert.deepEqual(r.requests, [{ delaySeconds: 900, key: "pr-followup:42", note: "Look at pull request #42 again for review feedback and failing checks (check 1).", payload: { kind: "pr-followup", pullRequest: PR, branch: BRANCH, issue: 12, round: 1 } }]);
+		assert.deepEqual(r.requests, [{ delaySeconds: 600, key: "pr-followup:42", note: "Look at pull request #42 again for review feedback and failing checks (check 1).", payload: { kind: "pr-followup", pullRequest: PR, branch: BRANCH, issue: 12, round: 1 } }]);
 	});
 
 	it("asks again after a follow-up while the pull request is open, and not after a task that did not complete", async () => {
@@ -279,7 +291,7 @@ describe("a follow-up task", () => {
 		r.hooks.onSettled!("t1", { type: "completed" } as never);
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.equal(r.requests.length, 1);
-		assert.equal(r.requests[0].delaySeconds, 3600);
+		assert.equal(r.requests[0].delaySeconds, 1200);
 		assert.equal(r.requests[0].payload.round, 2);
 		const failed = rig(open(feedback));
 		await prepare(failed, "t2");
@@ -305,7 +317,7 @@ describe("a follow-up task", () => {
 });
 
 describe("when the pull request is looked at next", () => {
-	const s = { followUpMinutes: [15, 60, 240] };
+	const s = { followUpMinutes: [15, 60, 240], ciWatchMinutes: 10 };
 	const state = (round: number, pr: PullRequestState["state"] = "open") => ({ followUp: { input: { pullRequest: PR, number: 42, branch: BRANCH, round }, pullRequest: { state: pr } } }) as never;
 	it("starts after a pull request is opened, with the first delay", () => {
 		const fix = { summary: { groupId: "12" } } as never;
@@ -316,7 +328,8 @@ describe("when the pull request is looked at next", () => {
 	});
 	it("continues with the next delay while the pull request is open and checks are left", () => {
 		assert.deepEqual(nextCheck(s, state(1), { outcome: "no_followup_needed" }), { round: 2, minutes: 60, pullRequest: PR, branch: BRANCH });
-		assert.deepEqual(nextCheck(s, state(2), { outcome: "followup_pushed" }), { round: 3, minutes: 240, pullRequest: PR, branch: BRANCH });
+		assert.deepEqual(nextCheck(s, state(2), { outcome: "followup_pushed" }), { round: 3, minutes: 10, pullRequest: PR, branch: BRANCH }, "after a push the CI is watched soon");
+		assert.equal(nextCheck(s, state(2), { outcome: "no_followup_needed" })?.minutes, 240, "without a push the table decides");
 		assert.deepEqual(nextCheck(s, state(1), { outcome: "skipped" })?.round, 2, "nothing new yet: look again later");
 	});
 	it("stops after the last check, when the pull request is closed, or when a guard blocked the change", () => {

@@ -29,6 +29,8 @@ export interface FixerSettings {
 	budget: { maxTokens: number; maxMinutes: number };
 	/** Minutes after a pull request is opened (and after each check) at which the agent looks at it again for review comments and failing checks; empty turns follow-ups off. */
 	followUpMinutes: number[];
+	/** After the agent pushed a follow-up, the next look at the pull request comes this soon (its CI starts), whatever the table says. */
+	ciWatchMinutes: number;
 	/** Follow-up tasks the handler starts per day. */
 	followUpCapPerDay: number;
 	apiBase?: string;
@@ -116,7 +118,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): FixerSetting
 		cooldownMinutes: integer(env, "AIKIDO_ATTEMPT_COOLDOWN_MINUTES", 180),
 		dailyCap: integer(env, "AIKIDO_DAILY_CAP", 5),
 		budget: { maxTokens: integer(env, "AIKIDO_FIX_BUDGET_TOKENS", 300_000), maxMinutes: integer(env, "AIKIDO_FIX_BUDGET_MINUTES", 30) },
-		followUpMinutes: minutesList(env, "AIKIDO_FOLLOWUP_MINUTES", [15, 60, 240]),
+		followUpMinutes: minutesList(env, "AIKIDO_FOLLOWUP_MINUTES", [10, 20, 40, 90, 180, 360]),
+		ciWatchMinutes: integer(env, "AIKIDO_CI_WATCH_MINUTES", 10),
 		followUpCapPerDay: integer(env, "AIKIDO_FOLLOWUP_CAP_PER_DAY", 10),
 		...(env.AIKIDO_LEDGER_IMPORT ? { ledgerImport: env.AIKIDO_LEDGER_IMPORT } : {}),
 		...(override && env.AIKIDO_API_BASE ? { apiBase: env.AIKIDO_API_BASE } : {}),

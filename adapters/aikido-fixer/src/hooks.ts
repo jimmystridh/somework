@@ -143,7 +143,7 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 				const pullRequest = await options.reader!.read(followUp.pullRequest);
 				const skip = pullRequest.state !== "open" ? `the pull request is ${pullRequest.state}` : pullRequest.feedback.length === 0 ? "the pull request has no new review feedback since its newest commit" : undefined;
 				tasks.set(taskId, { input: parsed, summary, followUp: { input: followUp, pullRequest }, ...(skip ? { skip } : {}), files: [] });
-				log("info", "fixer_followup_prepared", { taskId, issue: summary.groupId, round: followUp.round, state: pullRequest.state, feedback: pullRequest.feedback.length, skipped: skip !== undefined });
+				log("info", "fixer_followup_prepared", { taskId, issue: summary.groupId, round: followUp.round, state: pullRequest.state, feedback: pullRequest.feedback.length, ciVisible: pullRequest.ci.visible, ciPending: pullRequest.ci.pending, skipped: skip !== undefined });
 				return { ...input, agentKey: `aikido-followup:${summary.groupId}`, repository: { ...input.repository, ref: followUp.branch } };
 			}
 			const verdict = eligibility(summary, settings, parsed.issue.repository);
@@ -276,14 +276,16 @@ const tokensOf = (usage: unknown): number | undefined => {
 const PULL_REQUEST_NUMBER = /\/pull\/([0-9]+)$/;
 
 /** When the pull request should be looked at next, given how this task ended: after a pull request was opened, and after each look while it is open and rounds are left. */
-export function nextCheck(settings: Pick<FixerSettings, "followUpMinutes">, state: TaskState, result: Record<string, unknown>): TaskState["nextCheck"] {
+export function nextCheck(settings: Pick<FixerSettings, "followUpMinutes" | "ciWatchMinutes">, state: TaskState, result: Record<string, unknown>): TaskState["nextCheck"] {
 	const minutes = settings.followUpMinutes;
 	if (state.followUp) {
 		const { round } = state.followUp.input;
 		const open = state.followUp.pullRequest.state === "open";
 		const settled = result.outcome === "followup_pushed" || result.outcome === "no_followup_needed" || (result.outcome === "skipped" && open);
 		if (!open || !settled || round >= minutes.length) return undefined;
-		return { round: round + 1, minutes: minutes[round]!, pullRequest: state.followUp.input.pullRequest, branch: state.followUp.input.branch };
+		// a pushed commit starts the repository's CI: look again soon, then back to the table
+		const soon = result.outcome === "followup_pushed" ? Math.min(minutes[round]!, settings.ciWatchMinutes) : minutes[round]!;
+		return { round: round + 1, minutes: soon, pullRequest: state.followUp.input.pullRequest, branch: state.followUp.input.branch };
 	}
 	if (result.outcome !== "pr_opened" || typeof result.prUrl !== "string" || typeof result.branch !== "string" || minutes.length === 0) return undefined;
 	return PULL_REQUEST_NUMBER.test(result.prUrl) ? { round: 1, minutes: minutes[0]!, pullRequest: result.prUrl, branch: result.branch } : undefined;

@@ -37,7 +37,12 @@ EXPOSE 8081
 CMD ["node", "src/main.ts"]
 
 # The sandbox: where the model's tools run. No credentials, no route out except the egress proxy.
+# bun, pinned like the CI image, so a role can build and test the many repositories that use it (the egress proxy decides what it may download)
+FROM oven/bun@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS bun
+
 FROM app AS sandbox
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+RUN ln -s bun /usr/local/bin/bunx
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git bash curl ca-certificates ripgrep jq make \
  && rm -rf /var/lib/apt/lists/* \
