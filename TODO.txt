@@ -1,4 +1,4 @@
-TODO / KNOWN GAPS                                                        last updated 2026-10-06
+TODO / KNOWN GAPS                                                        last updated 2026-10-07
 =====================================================================================
 Everything below is known, not yet done. Kept generic on purpose (no hosts, addresses, ticket
 keys or secrets). [DECISION] marks items that wait for a person, not for work.
@@ -8,6 +8,17 @@ keys or secrets). [DECISION] marks items that wait for a person, not for work.
 --------------------------------------------------------------------------------------
 "pilot-N" is the tag of the images built by hand on the agents VM; "rolling" is pointing an agent's .env at the new tag and restarting it
 (the old compose.yaml and .env stay next to it as *.before-pilot-N). Full test suite green on 2026-10-06 (TypeScript workspaces and cargo).
+
+STATUS BY AGENT (2026-10-07; everything below is deployed through CI unless noted)
+- developer (agent/pi-agent), reviewer, Aikido fixer, Datadog triage: live on the agents VM, chat with open tier, observe tools, token budget raise by the manager.
+- Aikido fixer: opens pull requests and follows them up (timers from the hub at 10-360 minutes, 10 after a push), reads CI through GitHub Actions,
+  verifies web changes with a frozen install and the production build before pushing. Proven live on PR 5229 (feedback fix, then a lockfile fix, CI green).
+- Datadog triage: live, 250k budget; the noisy monitor's cost is an owner decision (DD_COOLDOWN_MINUTES).
+- Windows developer (VM 111) and QA (VM 112): live on the current kit, synced by hand (not deployed through CI). Windows developer has only done tooling checks,
+  no real build of the product yet. QA has never finished a real verification: SAD-1728 failed on a Git LFS clone (fixed), its second approval expired.
+- Manager: live (rolled by rsync, not CI): /ask, /do, tools for controls and budget raises.
+- Not done by design or waiting for the owner: GitHub Apps for the bots (passkey), the 9 Synthetics monitors (Datadog UI), bun for the agents (on hold),
+  Slack/Telegram gateway design, on-demand Windows machines, off-host backups, hypervisor default-deny.
 
 A. ROLLOUTS
 - Done 2026-10-06 (all rolled with deploy/agents/roll-agent.sh or by hand, each with its *.before-* backups on the host): developer, reviewer and Aikido
