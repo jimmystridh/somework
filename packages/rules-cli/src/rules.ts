@@ -19,7 +19,7 @@ export interface Finding {
 	message: string;
 }
 
-export const LIMITS = { maxDepth: 5, maxFiringsPerHour: 120, maxTokens: 2_000_000, maxMinutes: 240 } as const;
+export const LIMITS = { maxDepth: 5, maxFiringsPerHour: 120, maxTokens: 5_000_000, maxMinutes: 240 } as const;
 
 /** The first token of every pointer a rule may read: the fields of the event payload as the domain stores them. */
 export const EVENT_FIELDS = new Set(["data", "topic", "source", "key", "classification", "verified", "depth", "causedByTask", "publishedBy"]);
