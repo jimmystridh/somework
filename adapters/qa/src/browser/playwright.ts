@@ -16,7 +16,7 @@ export interface PlaywrightOptions {
 }
 
 const MAX_ERRORS = 30;
-const NAVIGATION_TIMEOUT = 30_000;
+const NAVIGATION_TIMEOUT = 90_000;
 
 /**
  * Playwright (`playwright-core`, no bundled browsers) driving the installed Edge headlessly. One context and one page at a time. The

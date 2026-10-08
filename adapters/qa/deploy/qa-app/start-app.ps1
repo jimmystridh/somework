@@ -70,4 +70,10 @@ if (-not $healthy) {
     Write-Host ($diag[0] + ' (details: C:\somework\qa-app\control\last-start-failure.txt)')
     exit 1
 }
+# the first page load of a cold dev server takes minutes here and an agent that meets a blank page gives up: load the initial module graph now
+$warm = 'C:\somework\agent\adapters\qa\deploy\qa-app\warm-web.mjs'
+if (Test-Path $warm) {
+    $warmOutput = & node $warm $WebPort 180 2>&1 | Select-Object -Last 1
+    Write-Host "warm-up: $warmOutput"
+}
 Write-Host "UP backend=http://127.0.0.1:8080 web=http://127.0.0.1:$WebPort tenantMode=$TenantMode"

@@ -7,7 +7,7 @@
         "http://127.0.0.1:4499/"
       ],
       "stop": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/stop-app.ps1",
-      "startupTimeoutSeconds": 600
+      "startupTimeoutSeconds": 840
     },
     "default": {
       "start": "W=\"$(pwd -W)/Source/admin.web\"; C:/tools/bun/bun.exe install --frozen-lockfile --cwd \"$W\" && C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/start-app.ps1 -WebRoot \"$W\" -WebPort 4499 -TenantMode multi -TimeoutSeconds 420",
@@ -16,7 +16,7 @@
         "http://127.0.0.1:4499/"
       ],
       "stop": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/stop-app.ps1",
-      "startupTimeoutSeconds": 600
+      "startupTimeoutSeconds": 840
     }
   }
 }

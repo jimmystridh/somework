@@ -14,8 +14,14 @@ STATUS BY AGENT (2026-10-07; everything below is deployed through CI unless note
 - Aikido fixer: opens pull requests and follows them up (timers from the hub at 10-360 minutes, 10 after a push), reads CI through GitHub Actions,
   verifies web changes with a frozen install and the production build before pushing. Proven live on PR 5229 (feedback fix, then a lockfile fix, CI green).
 - Datadog triage: live, 250k budget; the noisy monitor's cost is an owner decision (DD_COOLDOWN_MINUTES).
-- Windows developer (VM 111) and QA (VM 112): live on the current kit, synced by hand (not deployed through CI). Windows developer has only done tooling checks,
-  no real build of the product yet. QA has never finished a real verification: SAD-1728 failed on a Git LFS clone (fixed), its second approval expired.
+- Windows developer (VM 111) and QA (VM 112): deployed by CI since 2026-10-07 (.woodpecker/deploy-windows.yaml, docs/CI.md); only the wrapper deploy/windows/
+  deploy-from-ci.ps1 is installed by hand, once per change of the wrapper. Windows developer: instruction -> change, build profile sdk-install and test profile
+  sdk-unit pass in 55 s; the push to jimmystridh/somework is denied (403) until its token gets Contents + Pull requests write on that repository (owner action).
+  QA (2026-10-07): the whole chain runs (instruction -> checkout -> app stack -> company SmokeTestSteg1 -> browser -> verdict -> Jira comment); a real
+  `verified` verdict with comment and label was produced once, but its video was 0 bytes (page crash while recording on the 2-processor machine) and the harness
+  downgraded it; since then the ticket tools refuse an empty video and a verified comment before the video. Still open: a run that ends verified with a valid
+  video on a real ticket. Known environment limits: dev server hangs silently at start on ~4 of 10 starts (start-app.ps1 restarts it after 40 s), clicks take
+  seconds, recording takes up to a minute to start and stop. A bigger machine (4+ processors) is the real fix.
 - Manager: live (rolled by rsync, not CI): /ask, /do, tools for controls and budget raises.
 - Not done by design or waiting for the owner: GitHub Apps for the bots (passkey), the 9 Synthetics monitors (Datadog UI), bun for the agents (on hold),
   Slack/Telegram gateway design, on-demand Windows machines, off-host backups, hypervisor default-deny.
@@ -155,7 +161,7 @@ Still open (needs a decision or access I do not have):
 - The two failed tasks in the 24 h window are history from deployment debugging; they will age out.
 
 --------------------------------------------------------------------------------------
-2. QA AGENT (qa.verify)                                   status: LIVE (2026-10-06), no real ticket verified yet
+2. QA AGENT (qa.verify)                                   status: LIVE (2026-10-06), verdict path proven 2026-10-07 except a valid video
 --------------------------------------------------------------------------------------
 - (done) Deployed on the QA machine: account svc-qa, task SomeWorkQa (started through a SYSTEM helper), smoke 6/6 as the service account including real
   Edge with a WebM video, firewall allow-list (names plus CIDR blocks for GitHub and the model hosts), own model login, Jira client certificate + the
