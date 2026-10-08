@@ -45,6 +45,7 @@ export function buildBrief(input: any, taskId: string, context: BriefContext): s
 	const evidence = evidenceDirFor(context.root, taskId);
 	return [
 		`Verify ticket ${ticket.trim()} against ${input.repository?.url} at ${input.repository?.ref}. The revision is checked out in your working directory (run \`git rev-parse HEAD\` for the full commit).`,
+		...(input.testedPullRequest ? [`The ticket names pull request #${input.testedPullRequest} as its fix, which may not be merged: that pull request's head is the revision under test, and the default branch is not.`] : []),
 		"",
 		`The application under test is running and healthy at: ${profile.health.join(", ")}. It runs in local mode from this checkout.`,
 		`The browser: run \`${wrapperFor(context.root, taskId)} <command>\` with open <url>, snapshot, click <ref>, click-text <visible text>, fill <ref> <text>, press <key>, wait [--ms N] [--text T] [--selector S], screenshot [name], errors, video-start, video-stop, status. Videos land in ${evidence}/videos and screenshots in ${evidence}/screenshots; give jira_attach the path relative to ${evidence} (for example videos/qa-video-1.webm).`,

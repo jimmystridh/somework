@@ -154,3 +154,7 @@ is changed by the install except the account, its user-rights entries, the firew
 ## Budgets and the machine
 
 One browser step re-reads the whole conversation (30k to 45k tokens), so a verification of about 90 steps takes 4M tokens: the chat budget and the `qa-on-ticket` rule both say 4M tokens and 60 minutes, `managed.env` sets the cap to 5M and the day's limit to 20M. The machine has two processors and 8 GB shared by SQL Server, the back end, the web dev server and the browser, which is why a click may take seconds, why a recording of fewer than 2 KB is refused as evidence, and why `start-app.ps1` starts a silent dev server again after 40 s (it hangs at its config step on about four starts in ten; a second start works). A failed start writes its diagnosis to `C:\somework\qa-app\control\last-start-failure.txt`.
+
+## Companies that open
+
+The master database lists 238 test companies but only the 29 with a shard number can be opened; the back end answers 428 for the rest, and an agent that chose one by the ticket's area reported `blocked`. `qa-app/hide-unusable-companies.ps1` (run once as SYSTEM, idempotent, `-Restore` undoes it) sets the status of the others to 0, which the back end filters out of the company picker, and keeps their old status in `dbo.QA_TENANT_STATUS_BACKUP`. Run it again after the databases are restored from backups.

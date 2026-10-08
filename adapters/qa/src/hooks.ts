@@ -9,6 +9,7 @@ import type { BrowserBackend } from "./browser/backend.ts";
 import { BrowserDaemon } from "./browser/daemon.ts";
 import { buildBrief, evidenceDirFor, wrapperFor } from "./prompt.ts";
 import { QaRuntime } from "./qa-runtime.ts";
+import { pullRequestInText, saysNotMerged } from "./revision.ts";
 import type { QaReport } from "./result.ts";
 import type { QaSession } from "./session.ts";
 
@@ -28,6 +29,8 @@ export interface QaHooksOptions {
 	/** Extra tools (the ticket system's). */
 	extensions?: Extension<any>[];
 	hasTicketSystem: boolean;
+	/** The ticket's description and comments, oldest first, to find the pull request that holds the fix. */
+	ticketText?: (ticket: string) => Promise<string>;
 	verifiedLabel: string;
 	client: Pick<SomeWorkClient, "uploadArtifact">;
 	log?: Log;
@@ -43,6 +46,7 @@ const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 const MAX_RAW_ARTIFACT = 256 * 1024;
 const GATE_KEY = "__qaGate";
+const UNTESTABLE_KEY = "__qaUntestable";
 
 interface Active {
 	taskId: string;
@@ -92,22 +96,45 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 		options.session.end();
 	}
 
+	/** Moves the checkout to the pull request the ticket names; a ticket that says its fix is unmerged and names none cannot be judged on the default branch. */
+	async function pickRevision(input: any): Promise<any> {
+		if (!options.ticketText || typeof input?.ticket !== "string") return input;
+		const ref = input.repository?.ref;
+		if (ref && ref !== "HEAD") return input;
+		let text: string;
+		try {
+			text = await options.ticketText(input.ticket.trim());
+		} catch (error) {
+			log("warn", "ticket_text_failed", { ticket: input.ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
+			return input;
+		}
+		const pullRequest = pullRequestInText(text);
+		if (pullRequest) {
+			log("info", "revision_from_ticket", { ticket: input.ticket, pullRequest });
+			return { ...input, repository: { ...input.repository, ref: `refs/pull/${pullRequest}/head` }, testedPullRequest: pullRequest };
+		}
+		if (saysNotMerged(text)) return { ...input, [UNTESTABLE_KEY]: `the ticket says its fix is not merged and names no pull request, so there is no revision to verify (the default branch does not have the change)` };
+		return input;
+	}
+
 	return {
 		extensions: options.extensions,
 
-		prepareInput(input) {
+		async prepareInput(input) {
 			// a ticket this agent is not configured for is `skipped`: the job completes without the model and without a call to the ticket system
 			if (typeof input?.ticket === "string" && !options.ticketPattern.test(input.ticket.trim())) return { ...input, [GATE_KEY]: `the ticket key ${input.ticket.trim().slice(0, 40)} does not match the keys this agent handles` };
-			return input;
+			return await pickRevision(input);
 		},
 
 		instruction(input, { taskId }) {
 			if (input?.[GATE_KEY]) return "skipped";
+			if (input?.[UNTESTABLE_KEY]) return "not testable";
 			return buildBrief(input, taskId, { root: options.root, profiles: options.profiles, ticketPattern: options.ticketPattern, hasTicketSystem: options.hasTicketSystem, verifiedLabel: options.verifiedLabel });
 		},
 
 		async beforeRun(context) {
 			if (context.input?.[GATE_KEY]) return { blocked: { reason: String(context.input[GATE_KEY]), details: { skipped: true } } };
+			if (context.input?.[UNTESTABLE_KEY]) return { blocked: { reason: String(context.input[UNTESTABLE_KEY]) } };
 			const input = context.input;
 			const profile = options.profiles[input.app === undefined ? "default" : String(input.app)];
 			if (!profile) throw new InvalidInput(`no application profile "${input.app ?? "default"}" is configured on this agent`);

@@ -33,6 +33,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 		cliPath,
 		extensions: tools ? [tools.extension] : undefined,
 		hasTicketSystem: Boolean(tools),
+		...(jiraClient ? { ticketText: async (ticket: string) => [(await jiraClient.getIssue(ticket)).fields.description ?? "", ...(await jiraClient.comments(ticket)).map((comment) => comment.body)].join("\n\n") } : {}),
 		verifiedLabel: settings.jira?.verifiedLabel ?? "AgentTested",
 		client: context.client,
 		log: context.log,
