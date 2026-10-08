@@ -1,0 +1,1021 @@
+{
+ "uid": "llm-usage",
+ "title": "LLM usage and cost",
+ "tags": [
+  "somework",
+  "cost",
+  "tokens"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": false,
+ "refresh": "5m",
+ "time": {
+  "from": "now-7d",
+  "to": "now"
+ },
+ "description": "Tokens by kind and cost in US dollars per agent, provider and model (somework_llm_* metrics from the kit agents), and the health of the fleet's hosts.",
+ "templating": {
+  "list": [
+   {
+    "name": "agent",
+    "label": "Agent",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "cluster-prometheus"
+    },
+    "query": {
+     "query": "label_values(somework_llm_cost_usd_total,agent)",
+     "refId": "v"
+    },
+    "definition": "label_values(somework_llm_cost_usd_total,agent)",
+    "refresh": 2,
+    "includeAll": true,
+    "allValue": ".*",
+    "multi": true,
+    "current": {
+     "selected": true,
+     "text": "All",
+     "value": "$__all"
+    },
+    "sort": 1
+   },
+   {
+    "name": "provider",
+    "label": "Provider",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "cluster-prometheus"
+    },
+    "query": {
+     "query": "label_values(somework_llm_cost_usd_total{agent=~\"$agent\"},provider)",
+     "refId": "v"
+    },
+    "definition": "label_values(somework_llm_cost_usd_total{agent=~\"$agent\"},provider)",
+    "refresh": 2,
+    "includeAll": true,
+    "allValue": ".*",
+    "multi": true,
+    "current": {
+     "selected": true,
+     "text": "All",
+     "value": "$__all"
+    },
+    "sort": 1
+   },
+   {
+    "name": "model",
+    "label": "Model",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "cluster-prometheus"
+    },
+    "query": {
+     "query": "label_values(somework_llm_cost_usd_total{agent=~\"$agent\",provider=~\"$provider\"},model)",
+     "refId": "v"
+    },
+    "definition": "label_values(somework_llm_cost_usd_total{agent=~\"$agent\",provider=~\"$provider\"},model)",
+    "refresh": 2,
+    "includeAll": true,
+    "allValue": ".*",
+    "multi": true,
+    "current": {
+     "selected": true,
+     "text": "All",
+     "value": "$__all"
+    },
+    "sort": 1
+   }
+  ]
+ },
+ "panels": [
+  {
+   "id": 100,
+   "type": "row",
+   "title": "Spend in the selected period",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 1,
+   "type": "stat",
+   "title": "Cost",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum(increase(somework_llm_cost_usd_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\"}[$__range]))",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "decimals": 2
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "auto"
+   },
+   "description": "Cost of the tokens spent in the selected time range"
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Input tokens",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 4,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"input\"}[$__range]))",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Output tokens",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 8,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"output\"}[$__range]))",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "Cache read tokens",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"cache_read\"}[$__range]))",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "Cache write tokens",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 16,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"cache_write\"}[$__range]))",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "decimals": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "auto"
+   }
+  },
+  {
+   "id": 6,
+   "type": "stat",
+   "title": "Cost, last 24 hours (all agents)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 20,
+    "y": 1,
+    "w": 4,
+    "h": 4
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum(increase(somework_llm_cost_usd_total[24h]))",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "decimals": 2
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "none",
+    "graphMode": "none",
+    "textMode": "auto"
+   },
+   "description": "Ignores the selectors above"
+  },
+  {
+   "id": 7,
+   "type": "timeseries",
+   "title": "Cost per agent",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 5,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent)(increase(somework_llm_cost_usd_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\"}[$__interval]))",
+     "refId": "A",
+     "editorMode": "code",
+     "legendFormat": "{{agent}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "sum"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 8,
+   "type": "timeseries",
+   "title": "Cost per provider and model",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 5,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (provider,model)(increase(somework_llm_cost_usd_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\"}[$__interval]))",
+     "refId": "A",
+     "editorMode": "code",
+     "legendFormat": "{{provider}} / {{model}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "currencyUSD",
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "sum"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 9,
+   "type": "timeseries",
+   "title": "Tokens by kind",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 13,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (kind)(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\"}[$__interval]))",
+     "refId": "A",
+     "editorMode": "code",
+     "legendFormat": "{{kind}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "sum"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 10,
+   "type": "timeseries",
+   "title": "Tokens per agent (input + output)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 13,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent)(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=~\"input|output\"}[$__interval]))",
+     "refId": "A",
+     "editorMode": "code",
+     "legendFormat": "{{agent}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "bars",
+      "fillOpacity": 60,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "lineWidth": 1
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "sum"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 11,
+   "type": "table",
+   "title": "Per agent, provider and model over the selected period",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 21,
+    "w": 24,
+    "h": 9
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent,provider,model)(increase(somework_llm_cost_usd_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\"}[$__range]))",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent,provider,model)(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"input\"}[$__range]))",
+     "refId": "B",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent,provider,model)(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"output\"}[$__range]))",
+     "refId": "C",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent,provider,model)(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"cache_read\"}[$__range]))",
+     "refId": "D",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent,provider,model)(increase(somework_llm_tokens_total{agent=~\"$agent\",provider=~\"$provider\",model=~\"$model\",kind=\"cache_write\"}[$__range]))",
+     "refId": "E",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {},
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "Cost"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "currencyUSD"
+       },
+       {
+        "id": "decimals",
+        "value": 3
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "Input|Output|Cache read|Cache write"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "short"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "showHeader": true,
+    "sortBy": [
+     {
+      "displayName": "Cost",
+      "desc": true
+     }
+    ]
+   },
+   "description": "Counters reset when an agent restarts; increase() accounts for that. A series that has not spent anything in the period is not listed.",
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "Value #A": "Cost",
+       "Value #B": "Input",
+       "Value #C": "Output",
+       "Value #D": "Cache read",
+       "Value #E": "Cache write",
+       "agent": "Agent",
+       "provider": "Provider",
+       "model": "Model"
+      },
+      "indexByName": {
+       "agent": 0,
+       "provider": 1,
+       "model": 2,
+       "Value #A": 3,
+       "Value #B": 4,
+       "Value #C": 5,
+       "Value #D": 6,
+       "Value #E": 7
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": 101,
+   "type": "row",
+   "title": "Fleet health from the metrics",
+   "gridPos": {
+    "x": 0,
+    "y": 30,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false,
+   "panels": []
+  },
+  {
+   "id": 12,
+   "type": "table",
+   "title": "Agents and hosts reporting",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 31,
+    "w": 10,
+    "h": 9
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "up{job=~\"somework-agent|node|integrations/.*\"}",
+     "refId": "A",
+     "editorMode": "code",
+     "instant": true,
+     "range": false,
+     "format": "table"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "down",
+         "color": "red"
+        },
+        "1": {
+         "text": "up",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "custom": {
+      "cellOptions": {
+       "type": "color-text"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "job": true
+      },
+      "renameByName": {
+       "host": "Host",
+       "stack": "Agent stack",
+       "Value": "Up"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "id": 13,
+   "type": "timeseries",
+   "title": "Active jobs per agent",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 10,
+    "y": 31,
+    "w": 14,
+    "h": 9
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "sum by (agent)(somework_pi_active_jobs)",
+     "refId": "A",
+     "editorMode": "code",
+     "legendFormat": "{{agent}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    }
+   }
+  },
+  {
+   "id": 14,
+   "type": "timeseries",
+   "title": "Host memory in use",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 40,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)",
+     "refId": "A",
+     "editorMode": "code",
+     "legendFormat": "{{host}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "100 * (1 - windows_memory_physical_free_bytes / windows_memory_physical_total_bytes)",
+     "refId": "B",
+     "editorMode": "code",
+     "legendFormat": "{{host}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "max": 100,
+     "min": 0,
+     "custom": {
+      "drawStyle": "line"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  },
+  {
+   "id": 15,
+   "type": "timeseries",
+   "title": "Host CPU in use",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "cluster-prometheus"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 40,
+    "w": 12,
+    "h": 8
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "100 * (1 - avg by (host)(rate(node_cpu_seconds_total{mode=\"idle\"}[$__rate_interval])))",
+     "refId": "A",
+     "editorMode": "code",
+     "legendFormat": "{{host}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "cluster-prometheus"
+     },
+     "expr": "100 * (1 - avg by (host)(rate(windows_cpu_time_total{mode=\"idle\"}[$__rate_interval])))",
+     "refId": "B",
+     "editorMode": "code",
+     "legendFormat": "{{host}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "max": 100,
+     "min": 0,
+     "custom": {
+      "drawStyle": "line"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "right",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    }
+   }
+  }
+ ],
+ "annotations": {
+  "list": []
+ },
+ "links": []
+}

@@ -1,0 +1,78 @@
+services:
+  loki:
+    image: grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193
+    command: ["-config.file=/etc/loki/config.yaml"]
+    restart: unless-stopped
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 3g
+    cpus: 1.5
+    volumes:
+      - ./loki.yaml:/etc/loki/config.yaml:ro
+      - /srv/observability/loki:/loki
+    ports: ["127.0.0.1:3100:3100"]
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+  prometheus:
+    image: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=365d
+      - --storage.tsdb.retention.size=40GB
+      - --web.enable-remote-write-receiver
+      - --web.listen-address=:9090
+    restart: unless-stopped
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    cpus: 0.5
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /srv/observability/prometheus:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+  grafana:
+    image: grafana/grafana:13.2.3@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
+    restart: unless-stopped
+    user: "472:472"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    cpus: 0.5
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/admin-password
+      GF_SECURITY_SECRET_KEY__FILE: /run/secrets/secret-key
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-WEBAUTH-USER
+      GF_AUTH_PROXY_HEADER_PROPERTY: username
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_PROXY_WHITELIST: 172.30.104.1
+      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Admin
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_LOG_LEVEL: warn
+      GF_SERVER_ROOT_URL: https://admin-cloud-observability.tail371505.ts.net/
+      GF_SECURITY_COOKIE_SECURE: "true"
+    volumes:
+      - /var/lib/agent-cluster-observability/grafana:/var/lib/grafana
+      - /etc/agent-cluster-observability/grafana-admin-password:/run/secrets/admin-password:ro
+      - /etc/agent-cluster-observability/grafana-secret-key:/run/secrets/secret-key:ro
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.104.0/24
+          gateway: 172.30.104.1
