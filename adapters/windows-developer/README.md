@@ -128,3 +128,7 @@ build tooling.
 ## Budgets for an instruction in chat
 
 An instruction in chat (`instruct:`) is the same kind of job as a task: a code change with builds and tests, and every step re-reads the whole conversation (30k tokens or more). It therefore gets 600k tokens and 30 minutes (hard cap 800k) from a chat pool of half the day's limit; `managed.env` sets the day's limit to 4M tokens. The kit's default (150k, 10 % of the day) ended such a job after a few steps with `budget_exceeded`.
+
+## Builds that keep their object files
+
+A build profile may say `"persistentWorkspace": true`. A job that selects it works in one workspace per repository and profile (`<repository>#build-<profile>`) instead of a new one, so the object files of the last build stay and the next build only compiles what changed: a full build of the product (`adm-debug`) takes hours on four cores, an incremental one minutes. Jobs share the workspace one after the other (the agent runs one job at a time); a job that fails leaves its changes in it, so look at `git status` there before trusting the next result. The job-wide limit of the machine (`BUDGET_MAX_MINUTES_CAP`) is 300 minutes in `managed.env` for this reason.

@@ -17,6 +17,11 @@ export interface CommandProfile {
 	env: Record<string, string>;
 	/** Default true: if this fails, nothing is pushed and the task result says why. */
 	blockPushOnFailure: boolean;
+	/**
+	 * A job that selects this profile works in one workspace per repository and profile instead of a new one: the build's object files stay, so the next build
+	 * is incremental (a full build of the product takes hours). Jobs share it one after the other (the agent runs one job at a time).
+	 */
+	persistentWorkspace: boolean;
 }
 
 export interface Profiles {
@@ -47,7 +52,7 @@ function parseCommand(name: string, raw: unknown, where: string): CommandProfile
 	if (!NAME.test(name)) fail(where, `"${name}" is not a valid profile name (lower-case letters, digits, . _ -)`);
 	const entry = object(raw, `${where}.${name}`);
 	const at = `${where}.${name}`;
-	noUnknown(entry, ["command", "cwd", "timeoutMinutes", "env", "blockPushOnFailure"], at);
+	noUnknown(entry, ["command", "cwd", "timeoutMinutes", "env", "blockPushOnFailure", "persistentWorkspace"], at);
 	if (typeof entry.command !== "string" || entry.command.trim() === "" || entry.command.length > 4000 || entry.command.includes("\u0000")) fail(at, "command must be a non-empty string");
 	const timeoutMinutes = entry.timeoutMinutes ?? 60;
 	if (typeof timeoutMinutes !== "number" || !Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 240) fail(at, "timeoutMinutes must be an integer from 1 to 240");
@@ -64,7 +69,8 @@ function parseCommand(name: string, raw: unknown, where: string): CommandProfile
 		env[key] = value as string;
 	}
 	if (entry.blockPushOnFailure !== undefined && typeof entry.blockPushOnFailure !== "boolean") fail(at, "blockPushOnFailure must be true or false");
-	return { command: entry.command as string, ...(cwd ? { cwd } : {}), timeoutMinutes, env, blockPushOnFailure: entry.blockPushOnFailure !== false };
+	if (entry.persistentWorkspace !== undefined && typeof entry.persistentWorkspace !== "boolean") fail(at, "persistentWorkspace must be true or false");
+	return { command: entry.command as string, ...(cwd ? { cwd } : {}), timeoutMinutes, env, blockPushOnFailure: entry.blockPushOnFailure !== false, persistentWorkspace: entry.persistentWorkspace === true };
 }
 
 /** Validates the profiles file (typos are errors, not silently ignored settings). */

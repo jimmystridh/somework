@@ -15,8 +15,9 @@
     "adm-debug": {
       "command": "C:/somework/agent/adapters/windows-developer/deploy/build-adm.cmd",
       "cwd": ".",
-      "timeoutMinutes": 90,
-      "blockPushOnFailure": true
+      "timeoutMinutes": 240,
+      "blockPushOnFailure": true,
+      "persistentWorkspace": true
     }
   },
   "test": {

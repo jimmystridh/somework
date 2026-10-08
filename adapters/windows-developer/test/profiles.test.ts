@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { InvalidInput } from "@somework/agent-kit";
 import { loadProfiles, parseProfiles, ProfilesError, selectProfiles } from "../src/profiles.ts";
+import { createRole } from "../src/role.ts";
 
 const example = new URL("../deploy/profiles.example.json", import.meta.url).pathname;
 const valid = () => parseProfiles({ build: { release: { command: "make" }, "debug.x64": { command: "make debug", timeoutMinutes: 5, blockPushOnFailure: false } }, test: { unit: { command: "make test" }, smoke: { command: "make smoke" } } });
@@ -20,7 +21,7 @@ describe("profiles file", () => {
 
 	it("defaults: block on failure, one hour, no extra environment", () => {
 		const profile = valid().build.release!;
-		assert.deepEqual(profile, { command: "make", timeoutMinutes: 60, env: {}, blockPushOnFailure: true });
+		assert.deepEqual(profile, { command: "make", timeoutMinutes: 60, env: {}, blockPushOnFailure: true, persistentWorkspace: false });
 		assert.equal(valid().build["debug.x64"]!.blockPushOnFailure, false);
 	});
 
@@ -79,3 +80,23 @@ describe("selecting profiles for a job", () => {
 		assert.throws(() => selectProfiles({ build: { name: "x" } }, parseProfiles({})), /configured: none/);
 	});
 });
+
+describe("a build that keeps its object files", () => {
+	const profiles = parseProfiles({ build: { big: { command: "build.cmd", persistentWorkspace: true, timeoutMinutes: 240 }, small: { command: "make" } }, test: {} });
+
+	it("is declared per profile and must be a boolean", () => {
+		assert.equal(profiles.build.big!.persistentWorkspace, true);
+		assert.equal(profiles.build.small!.persistentWorkspace, false);
+		assert.throws(() => parseProfiles({ build: { x: { command: "make", persistentWorkspace: "yes" } }, test: {} }), /persistentWorkspace must be true or false/);
+	});
+
+	it("makes a job that selects it use one workspace per repository and profile", () => {
+		const hooks = createRole({ profiles }).hooks;
+		const job = (build: string) => ({ repository: { url: "https://example.test/r.git", ref: "HEAD" }, instruction: "x", build: { name: build } });
+		assert.equal(hooks.prepareInput!(job("big"), { taskId: "t1", log: () => {} }).agentKey, "https://example.test/r.git#build-big");
+		assert.equal(hooks.prepareInput!(job("big"), { taskId: "t2", log: () => {} }).agentKey, "https://example.test/r.git#build-big");
+		assert.equal(hooks.prepareInput!(job("small"), { taskId: "t3", log: () => {} }).agentKey, undefined);
+		assert.equal(hooks.prepareInput!(job("nope"), { taskId: "t4", log: () => {} }).agentKey, undefined, "a wrong selection is refused later with its reason");
+	});
+});
+

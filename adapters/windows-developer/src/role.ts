@@ -46,6 +46,17 @@ export function createRole(deps: RoleDeps) {
 	const checked = new Map<string, ChecksResult>();
 
 	const hooks: RoleHooks = {
+		prepareInput(input) {
+			// a build profile that keeps its object files gets the same workspace every time, so the next build only compiles what changed
+			try {
+				const build = selectProfiles(input, deps.profiles).build;
+				if (build && deps.profiles.build[build]?.persistentWorkspace && typeof input.repository?.url === "string") return { ...input, agentKey: `${input.repository.url}#build-${build}` };
+			} catch {
+				// a wrong selection is refused by `instruction` with its reason
+			}
+			return input;
+		},
+
 		instruction(input, { taskId }) {
 			const selection = selectProfiles(input, deps.profiles);
 			if (typeof input.instruction !== "string") throw new InvalidInput("instruction is required");
