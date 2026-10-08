@@ -267,6 +267,8 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 				return wrap(async () => {
 					const { current, issue } = await writable(true);
 					if (current.verdict !== "not_fixed") throw new Refusal("the hand-back is only for a recorded verdict of not_fixed");
+					const failureShots = listDir(join(current.evidenceDir, "screenshots")).filter((name) => /\.png$/i.test(name));
+					if (failureShots.length === 0) throw new Refusal("a hand-back needs a screenshot of the failure in the running application (`qa screenshot <name>`). Tests you ran yourself are not a basis: they can fail in this environment for reasons of their own and the repository's CI covers them. If the acceptance criteria cannot be observed in the browser, the result is blocked (not verifiable here), not not_fixed");
 					const before = previousAssignee(issue.changelog?.histories);
 					const steps: string[] = [];
 					const attached = await attachHandBackEvidence(current);

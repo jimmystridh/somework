@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
@@ -189,6 +189,20 @@ describe("the hand-back of a ticket that is not fixed", () => {
 		assert.equal(issue.assignee?.name, "dana");
 		assert.equal(issue.comments.length, 1);
 		assert.equal(session.job!.jira.transitioned, true);
+	});
+
+	it("refuses a hand-back without a screenshot of the failure from the browser", async () => {
+		const shots = join(evidence, "screenshots");
+		const kept = readdirSync(shots);
+		for (const name of kept) renameSync(join(shots, name), join(shots, `${name}.moved`));
+		try {
+			await run("qa_record_verdict", { verdict: "not_fixed" });
+			assert.match((await handBack()).text, /needs a screenshot of the failure/);
+			assert.equal(jira.issues.get("QA-1")!.comments.length, 0);
+			assert.equal(jira.issues.get("QA-1")!.status.name, "Test");
+		} finally {
+			for (const name of kept) renameSync(join(shots, `${name}.moved`), join(shots, name));
+		}
 	});
 
 	it("attaches the screenshots and the finished video before it comments", async () => {

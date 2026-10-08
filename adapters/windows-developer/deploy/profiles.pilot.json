@@ -11,6 +11,12 @@
       "cwd": "sdk/typescript",
       "timeoutMinutes": 20,
       "blockPushOnFailure": true
+    },
+    "adm-debug": {
+      "command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:/somework/agent/adapters/windows-developer/deploy/build-adm.ps1",
+      "cwd": ".",
+      "timeoutMinutes": 90,
+      "blockPushOnFailure": true
     }
   },
   "test": {
