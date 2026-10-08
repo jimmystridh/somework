@@ -85,7 +85,7 @@ Woodpecker's server runs next to the domain and its runner on a separate VM with
 
 ## 7. Observability
 
-Alloy ships logs from every VM and from the Windows machines to Loki (one write account per client). Grafana holds the **SomeWork Agents** dashboard and log-derived alert rules, provisioned by `deploy/grafana/provision.py`; alerts also post to the hub, so they become events that can wake the manager. The fleet dashboard shows agents, work, approvals, domain health, bus lag and now rules, hub sources, the clock, handlers and token pools. It reads metadata only.
+Alloy ships logs from every VM and from the Windows machines to Loki (one write account per client) and, since 2026-10-08, host metrics and the kit agents' `/metrics` to a Prometheus on the same VM (`deploy/observability/`; model usage is counted per agent, provider and model, in tokens by kind and dollars, and shown on the *LLM usage and cost* dashboard). Grafana holds the **SomeWork Agents** dashboard and log-derived alert rules, provisioned by `deploy/grafana/provision.py`; alerts also post to the hub, so they become events that can wake the manager. The fleet dashboard shows agents, work, approvals, domain health, bus lag and now rules, hub sources, the clock, handlers and token pools. It reads metadata only.
 
 ## 8. Security model
 

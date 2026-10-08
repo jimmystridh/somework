@@ -394,6 +394,13 @@ tasks; none has a message handler. The manager polled the inbox several times an
   `observe/`) are built and OFF everywhere: enabling needs a Viewer service account (deploy/grafana/provision-reader.py, not yet
   run) and OBSERVE_ENABLED=1 per role. Limits: Loki only (no Prometheus, no traces), history reaches as far as Loki retention,
   the manager does not have them yet (its tools are not built from the kit's service wiring), nobody has used them live.
+  (2026-10-08, update) the reader was provisioned and observe is ON (own scope) for pi-agent, reviewer and aikido-fixer. Prometheus
+  now exists on VM104 (deploy/observability/): every host's Alloy pushes host metrics and the kit agents' /metrics, and the kit
+  counts model usage per agent, role, provider, model and kind (somework_llm_tokens_total, somework_llm_cost_usd_total). New observe
+  tools metrics_catalog, metrics_query and llm_usage read it through the same read-only Grafana endpoint. The kit change is merged
+  but NOT deployed to the agents (the fleet is suspended); until it is, there are no somework_llm_* series and the agent targets show
+  up=0. Open: alert rules over the metrics (Grafana-managed, cluster-prometheus), Alloy on VM113 and the hypervisor, observe tools on
+  the Windows agents and the manager, and a cost threshold the owner wants alerted on.
 - (resolved 2026-10-05) A "SomeWork Agents" dashboard and seven log-derived alert rules are loaded into the
   central Grafana by deploy/grafana/provision.py (idempotent; re-run after changes). There is still no
   notification target: alert state is only visible in Grafana. The metrics-based variants are unused.

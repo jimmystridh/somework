@@ -175,12 +175,12 @@ The Aikido fixer uses it to follow up on its own pull requests: after it opens o
 
 ## Observe tools
 
-Any pi-based role can be given read-only access to the central Grafana (Loki logs, alert state, dashboard search) to read its own history or, for
-roles with fleet scope, the rest of the fleet: `logs_query`, `my_history`, `logs_labels`, `alerts_status`, `dashboards_search`. They are off by
+Any pi-based role can be given read-only access to the central Grafana (Loki logs, Prometheus metrics, alert state, dashboard search) to read its own history or, for
+roles with fleet scope, the rest of the fleet: `logs_query`, `my_history`, `logs_labels`, `alerts_status`, `dashboards_search`, `metrics_catalog`, `metrics_query`, `llm_usage`. They are off by
 default (`OBSERVE_ENABLED=1`, `GRAFANA_URL`, `GRAFANA_TOKEN_FILE`); the token belongs to a Viewer service account created by
 `deploy/grafana/provision-reader.py` and never enters the sandbox. A role with own scope has its matchers added to every query. Queries are parsed and
 rebuilt (no aggregations, sub-queries or `offset`), answers are redacted, size-capped and framed as untrusted data. Allowed in ASK and INSTRUCT
-chat. Limits: Loki logs only (no Prometheus, no traces), history reaches as far as Loki retention, at most 168 hours per query. Settings: `packages/agent-kit/README.md`.
+chat. Limits: Loki logs and Prometheus metrics (no traces), log history reaches as far as Loki retention and at most 168 hours per query, metrics at most 720 hours (Prometheus keeps a year). `llm_usage` and the *LLM usage and cost* dashboard answer "who spent how many tokens and dollars on which model"; own scope shows only the asking agent. Settings: `packages/agent-kit/README.md`.
 
 ## Identity on the code host, and how an agent shows its setup
 

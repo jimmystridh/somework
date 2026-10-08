@@ -71,15 +71,15 @@ call finished (now exits at once after committing state); `docker compose run` s
 
 ## 6. Observability
 Logs are JSON with identifiers and counts only (prompts, commands, file contents, tokens and long strings are redacted by field name)
-and reach the central Loki through the host's Alloy (container logs, `event` and `level` become labels). No Prometheus is needed:
-the dashboard and alerts are derived from the log events `job_finished` (status, token counts, cost, duration), `job_failed`,
+and reach the central Loki through the host's Alloy (container logs, `event` and `level` become labels). Metrics (`/metrics` on the health port) are
+scraped by the same Alloy and pushed to the central Prometheus (`deploy/observability/`); the dashboard and alerts below are derived from the log events `job_finished` (status, token counts, cost, duration), `job_failed`,
 `job_refused` and `approval_requested`.
 
 * `loki/grafana-dashboard.json`: import into Grafana (pick the Loki data source). Tokens and cost count when a job finishes.
 * `loki/alerts.yaml`: Loki ruler rules (failures, token burn, budget refusals, approval floods, long jobs). Not loaded yet: load them
   into the ruler of the central Loki. The agent logs only on activity, so liveness is the container health check (`/ready`).
-* `prometheus/`: optional, only if a Prometheus appears later (`/metrics` on `127.0.0.1:8081`, `somework_pi_*`; scrape config,
-  alert rules, dashboard).
+* `prometheus/alerts.yaml`: rules over the metrics (`somework_pi_*`, `up`); not loaded. The scrape config, the central Prometheus and the *LLM usage and cost*
+  dashboard are in `deploy/observability/`.
 
 ## 7. Scaling by shards (when one service is the bottleneck)
 Fixed 64 logical shards: `shardOf(agentKey)`. Give each agent id explicit ranges in a table (`SHARD_TABLE_FILE`,
