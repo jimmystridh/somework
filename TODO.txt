@@ -13,13 +13,20 @@ STATUS BY AGENT (2026-10-07; everything below is deployed through CI unless note
 - developer (agent/pi-agent), reviewer, Aikido fixer, Datadog triage: live on the agents VM, chat with open tier, observe tools, token budget raise by the manager.
 - Aikido fixer: opens pull requests and follows them up (timers from the hub at 10-360 minutes, 10 after a push), reads CI through GitHub Actions,
   verifies web changes with a frozen install and the production build before pushing. Proven live on PR 5229 (feedback fix, then a lockfile fix, CI green).
+  2026-10-08: threshold lowered to the lowest (AIKIDO_MIN_SEVERITY=low; was high, so the nightly batches of medium issues were dropped by the handler: 7 on 2026-10-07, 1 on
+  2026-10-06), daily cap 5 -> 10 and daily token limit 2M -> 4M in the fixer's .env (backup .env.before-lowseverity), handler reseeded (version 8). The eight dropped issues were
+  sent to the fixer as `instruct: fix issue <id>` and are processed one at a time; Aikido sends its batch around 23:30 UTC each night, so the next normal run is then.
 - Datadog triage: live, 250k budget; the noisy monitor's cost is an owner decision (DD_COOLDOWN_MINUTES).
 - Windows developer (VM 111) and QA (VM 112): deployed by CI since 2026-10-07 (.woodpecker/deploy-windows.yaml, docs/CI.md); only the wrapper deploy/windows/
   deploy-from-ci.ps1 is installed by hand, once per change of the wrapper. Windows developer: instruction -> change, build profile sdk-install and test profile
   sdk-unit pass in 55 s. Proven 2026-10-08: the agent pushed branch agent/chat-msg_01M4DESNYN10KZ8BDY2C5K7NXK and opened draft PR jimmystridh/somework#1 (one new test, sleep.test.ts; PR body: build and tests passed). The kit now takes a token per repository owner (GIT_TOKEN_OWNERS=owner=file;...): the fine-grained token of the Visma org cannot cover a personal repo, so C:\somework\secrets\git-token-jimmystridh (owner jimmystridh, only somework, expires 2027-01-06) serves jimmystridh/*. Close PR #1 when done looking.
   QA (2026-10-08): proven end to end on real tickets. SAD-1728 -> `not_fixed` (Stiltyper grid empty, console error, screenshot; the hand-back to a developer
   waited for the owner's approval as designed and was denied by timeout). SAD-507 -> `verified`: video attached, comment posted, label AgentTested added, all
-  without asking. Fixes found on the way: company list (only 29 of 238 companies open), budgets (4M tokens per run), 0-byte and unfinished videos are refused,
+  without asking. 2026-10-08 later: SAD-2294 verified; SAD-2512 was handed back TWICE wrongly (first: tested the default branch while its fix was an unmerged
+  pull request; second: judged from unit tests the agent ran by hand without bun while the pull request's own CI was green). Fixed: the revision comes from the
+  pull request the ticket names; a hand-back needs a failure screenshot from the browser and the overlay forbids deciding from tests; the 209 companies that cannot
+  open are hidden from the picker (qa-app/hide-unusable-companies.ps1); deploys wait until the agent has no active job (wrapper, up to 25 minutes) because a
+  deploy restart killed a running verification (SAD-2289). Fixes found on the way: company list (only 29 of 238 companies open), budgets (4M tokens per run), 0-byte and unfinished videos are refused,
   warm-up of the web app, restart of a silent dev server, click-text for plain-text controls. Still weak: video-stop can take many minutes on the 2-processor
   machine (the job then finishes late); the first SAD-507 video attached to Jira is the partial file written until the agent gave up waiting. Known environment limits: dev server hangs silently at start on ~4 of 10 starts (start-app.ps1 restarts it after 40 s), clicks take
   seconds, recording takes up to a minute to start and stop. Resized 2026-10-08: QA machine (VM 112) now 6 cores / 16 GB, Windows developer (VM 111) 4 cores / 12 GB (Proxmox config, clean shutdown and start); not yet re-measured. The QA agent's hand-back of a not-fixed ticket no longer waits for approval (QA_JIRA_APPROVE=none in managed.env).
@@ -217,8 +224,13 @@ Still open (needs a decision or access I do not have):
 - (done 2026-10-06) Its own model login is installed and the agent runs under the service account (boot trigger, supervisor restarts). A real
   job ran end to end on it: clone of a public repository, the tooling-check build profile (ok), model call (about 23k tokens), no changes, no
   stray processes afterwards. Its status endpoint is on the machine's private address (WINDOWS_HEALTH_BIND) and reachable only from the services VM.
-- Only a tooling-check build profile exists. The real product build needs a package-restore
-  credential that the service account can read. [DECISION] where that credential lives.
+- (2026-10-08) A real product build profile exists: adm-debug (adapters/windows-developer/deploy/build-adm.cmd -> build-adm.ps1) restores the repository's
+  private NuGet packages from a READ-ONLY COPY of the build station's package folder (C:\somework\nuget-cache, 4.1 GB, 19 private packages; read-only ACL) and
+  builds Source\BFS\BFS.sln DebugAdm|x64 into Adm.exe. Decision taken: the package-feed credential (a DPAPI-encrypted personal token, LocalMachine scope, on the
+  build station only) is NOT copied to the agent machine, so nothing the model's shell can read opens that feed. Cost: the copy must be refreshed from the build
+  station (tar, copy, extract, ACL) whenever the repository moves to other private package versions; a restore that needs a new version fails with a clear error.
+  First real build: nuget restore from the copy passed and the native compile (cl.exe under MSBuild) ran on the Windows developer in a read-only job on the
+  company repository (no file changed, nothing pushed); the result is recorded below once it finished. Watch: Git LFS files stay pointers in a workspace.
 - The sandbox is a local unprivileged account plus firewall rules: a weaker boundary than the
   container sandbox. [DECISION] throwaway VM or container if the code on that machine must not
   reach its other data.
@@ -230,6 +242,27 @@ Still open (needs a decision or access I do not have):
   task re-resolves every 30 min.
 - Never tested against a real full build or a real push (the live smoke job used a read-only request on a public repository).
 - (resolved 2026-10-06) The Windows developer is in the dashboard's agents-health.json (handlers, pools and setup are shown).
+
+--------------------------------------------------------------------------------------
+3b. DEVELOPER -> REVIEWER -> QA: HOW A CHANGE TRAVELS (2026-10-08)
+--------------------------------------------------------------------------------------
+What exists today, link by link:
+- Start: a person's instruction through the manager (/do or `instruct:`) to the developer or the Windows developer (code.windows): an `agent/...` branch and a
+  DRAFT pull request (a token for the repository's owner is needed, see section 13). The Aikido fixer starts itself from events.
+- Review: the rules pr-review-opened and pr-review-ready start code.review when a pull request is opened ready or marked ready, for repositories whose GitHub
+  webhook reaches the hub. A draft pull request opened by an agent is reviewed once a person marks it ready.
+- QA: the rule qa-on-ticket starts qa.verify when a ticket enters Test (the owner approves each firing in Telegram). The harness takes the pull request the
+  ticket names (preview address, link or PR number in its comments) as the revision, because the fix is often not merged yet; a ticket that says "not merged"
+  without naming one is blocked. A hand-back (not_fixed) needs a failure screenshot from the browser.
+Missing, in the order they matter:
+- Nothing starts the Windows developer from a ticket. It needs a trigger the hub can map (today a Jira update event carries the NAMES of changed fields, not
+  label or status values), a rule per trigger and the owner's approval per firing; [DECISION] which tickets (label? status?) and whether each needs approval.
+- The pull request of an agent does not name the ticket: put the ticket key in the branch and the pull request title (RoleHooks.pullRequest/branchName) so a
+  reviewer and QA can find the change from the ticket and the ticket from the change.
+- The reviewer has no C++ build or test result to read: have the Windows developer's pull request body carry its build and test profile results (it already does)
+  and let the reviewer cite them.
+- After a merge nothing tells QA which build to test: QA verifies the pull request head in the web app against a locally started back end (Adm.exe built where?).
+  [DECISION] whether QA should test with an Adm.exe the Windows developer built from the same commit (artifact handoff) instead of the machine's old one.
 
 --------------------------------------------------------------------------------------
 4. REVIEWER AGENT (code.review v3)                        status: live
@@ -372,6 +405,14 @@ tasks; none has a message handler. The manager polled the inbox several times an
   Rebuilding it from scratch is not scripted: the installed image is the recipe (the product
   installer needs the documented manual workaround).
 - Windows images are evaluation builds; all copies expire on the same date. Accepted for now.
+- (2026-10-08) The hypervisor is the limit: 8 cores and 94 GB for 9 VMs (101 dev 32 GB, 102 agents 16, 103 build station 16, 104 observability 6, 105 services 4,
+  106 external 8, 111 Windows developer 12, 112 QA 12, 113 CI runner 4), about 89 GB resident, load average ~6 on 8 cores. The CI server (105) and runner (113) were
+  ballooned down to 2 GB of their 4 GB (guest saw 1.8 GB, `check` once took 10 minutes); ballooning is now off for both and the QA VM went from 16 to 12 GB to keep the
+  host flat. More CI speed needs more host (cores and RAM) or fewer idle VMs, not more allocation. Candidate to trim: VM 103 (build station, 16 GB, rarely used).
+  CI builds only this repository (tests ~2 min, Linux agent images 4-8 min); the Visma product builds on the Windows machines. The agent stacks keep one
+  `*.before-ci-<sha>` backup of compose.yaml per deployment (40+ per stack): prune them (keep the last 5) in roll-agent.sh.
+- (2026-10-08) A CI deployment of a Windows agent waits for the agent's active-job gauge to be 0 (up to 25 minutes) so it does not kill a running job; the Linux
+  agents are still restarted by deploy-agents without that wait (a fix or a review in progress is lost; the task is retried by its lease).
 - Every new Windows clone needs by hand: a Tailscale auth key, its own agent identity and its own
   model login. A script for the identity part would remove most of the manual work.
 - Clone creation of the full VM (not from a template) needs the source powered off for the whole
@@ -646,6 +687,9 @@ A. WHAT WE HAVE TODAY (inventory to be confirmed, completed and then kept in a f
 - Infrastructure: the hypervisor API token for the fleet (no expiry, plaintext file on the owner's workstation plus a password-manager copy), root ssh to the
   hypervisor, the mesh VPN, the Windows machines' local service accounts (their task passwords), ssh keys to every machine, the Windows build's package-restore
   credential (not decided where it lives).
+- Package feed (2026-10-08): the build station holds a personal access token for the private GitHub NuGet feed as a DPAPI-encrypted file (LocalMachine scope,
+  readable by that machine's administrators only). The agent machines hold no feed credential: they restore from a read-only copy of the restored packages
+  (section 3). Decide whether the build station should get its own service token for the feed instead of a personal one.
 - Copies: some tokens exist as plaintext files on the owner's workstation (on request) and some in the password manager; nothing keeps the two lists in step.
 
 B. RISKS AND GAPS ALREADY VISIBLE
