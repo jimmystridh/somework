@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { before, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { branchFor, finalizeWorkspace, GitError, prepareWorkspace, workspaceFor, type GitSession } from "../src/git.ts";
+import { branchFor, finalizeWorkspace, GitError, prepareWorkspace, tokenForCommand, workspaceFor, type GitSession } from "../src/git.ts";
 import type { GitHost } from "../src/githost.ts";
 
 const sh = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
@@ -118,5 +118,26 @@ describe("git workflow", () => {
 			() => prepareWorkspace(failing, { repoUrl: "https://ghs_rotating_secret@127.0.0.1:1/nope.git", ref: "main", taskId: "task_H", workspace: workspaceFor(join(root, "ws"), "repo#7") }),
 			(error: unknown) => error instanceof GitError && !error.message.includes("ghs_rotating_secret"),
 		);
+	});
+});
+
+describe("a token per repository owner", () => {
+	const envWith = (originUrl: string | undefined) =>
+		({ exec: async (command: string, options: { onOutput?: (text: string) => void }) => {
+			if (command === "git remote get-url origin" && originUrl) options.onOutput?.(`${originUrl}\n`);
+			return { ok: true, value: { exitCode: command === "git remote get-url origin" && !originUrl ? 2 : 0 } };
+		} }) as unknown as GitSession["env"];
+	const sessionFor = (originUrl?: string): GitSession => ({ env: envWith(originUrl), token: "default-token", ownerTokens: { jimmystridh: "personal-token" }, identity: { name: "t", email: "t@t" } });
+
+	it("uses the owner's token for a clone of that owner's repository, whatever the case of the name", async () => {
+		assert.equal(await tokenForCommand(sessionFor(), "/ws", ["clone", "https://github.com/JimmyStridh/somework.git", "."]), "personal-token");
+	});
+	it("finds the owner from the checkout's origin for fetch and push", async () => {
+		assert.equal(await tokenForCommand(sessionFor("https://github.com/jimmystridh/somework.git"), "/ws", ["push", "origin", "HEAD:refs/heads/agent/x"]), "personal-token");
+		assert.equal(await tokenForCommand(sessionFor("https://github.com/Visma-Administration/visma.administration.git"), "/ws", ["fetch", "origin"]), "default-token");
+	});
+	it("falls back to the session's token when the origin is unknown, and works without any owner token", async () => {
+		assert.equal(await tokenForCommand(sessionFor(undefined), "/ws", ["fetch", "origin"]), "default-token");
+		assert.equal(await tokenForCommand({ ...sessionFor(), ownerTokens: undefined }, "/ws", ["clone", "https://github.com/jimmystridh/somework.git"]), "default-token");
 	});
 });

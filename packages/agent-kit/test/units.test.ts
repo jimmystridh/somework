@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { FileCredentialStore } from "../src/credentials.ts";
+import { ownerTokenFilesFrom } from "../src/config.ts";
 import { GitHubHost, isGitHubRepo, parseGitHubRepo } from "../src/githost.ts";
 import { CREDENTIAL_HELPER_SCRIPT } from "../src/git.ts";
 import { spawnSync } from "node:child_process";
@@ -205,5 +206,31 @@ describe("GitHub host", () => {
 		assert.equal(isGitHubRepo("git@github.com:o/r.git"), true);
 		assert.equal(await host.findPullRequest({ repoUrl: "/workspace/remotes/demo.git", head: "agent/t" }), undefined);
 		assert.equal(await host.createPullRequest({ repoUrl: "https://git.example.org/o/r.git", head: "agent/t", base: "main", title: "t", body: "b" }), undefined);
+	});
+});
+
+describe("GitHubHost with a token per owner", () => {
+	it("sends the owner's token for that owner's repositories and the default one otherwise", async () => {
+		const seen: string[] = [];
+		const fetchStub = (async (_url: string, init: { headers: Record<string, string> }) => {
+			seen.push(init.headers.authorization!);
+			return { ok: true, json: async () => [] };
+		}) as unknown as typeof fetch;
+		const host = new GitHubHost({ token: "default", ownerTokens: { jimmystridh: "personal" }, fetch: fetchStub });
+		await host.findPullRequest({ repoUrl: "https://github.com/jimmystridh/somework.git", head: "agent/x" });
+		await host.findPullRequest({ repoUrl: "https://github.com/Visma-Administration/visma.administration.git", head: "agent/x" });
+		assert.deepEqual(seen, ["Bearer personal", "Bearer default"]);
+	});
+	it("refuses an owner without a token when there is no default", async () => {
+		const host = new GitHubHost({ ownerTokens: { jimmystridh: "personal" }, fetch: (() => assert.fail("no call")) as unknown as typeof fetch });
+		await assert.rejects(() => host.findPullRequest({ repoUrl: "https://github.com/other/repo.git", head: "h" }), /no token for other/);
+	});
+});
+
+describe("GIT_TOKEN_OWNERS", () => {
+	it("maps lower-cased owners to files, with Windows paths", () => {
+		assert.deepEqual(ownerTokenFilesFrom({ GIT_TOKEN_OWNERS: "JimmyStridh=C:\\somework\\secrets\\a; acme=/run/secrets/b" }), { jimmystridh: "C:\\somework\\secrets\\a", acme: "/run/secrets/b" });
+		assert.deepEqual(ownerTokenFilesFrom({}), {});
+		assert.throws(() => ownerTokenFilesFrom({ GIT_TOKEN_OWNERS: "nofile" }), /owner=path/);
 	});
 });

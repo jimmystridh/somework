@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import type { GitHost } from "./githost.ts";
+import { isGitHubRepo, parseGitHubRepo, type GitHost } from "./githost.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const MAX_PATCH_BYTES = 1024 * 1024;
@@ -17,6 +17,8 @@ export interface GitSession {
 	token?: string;
 	/** Supplies a live token before every authenticated command (a GitHub App's installation tokens last an hour). It also refreshes `token`. */
 	tokenSource?: () => Promise<string>;
+	/** Tokens of repositories of other owners, keyed by the lower-case owner name; `token` serves every owner not listed. */
+	ownerTokens?: Record<string, string>;
 	/** Hosts the token may be sent to (the credential helper refuses every other host, including redirect targets). */
 	tokenHosts?: string[];
 	identity: GitIdentity;
@@ -64,20 +66,41 @@ async function git(session: GitSession, cwd: string, args: string[], options: { 
 		GIT_COMMITTER_EMAIL: session.identity.email,
 	};
 	if (options.auth && session.tokenSource) session.token = await session.tokenSource();
-	if (options.auth && session.token) {
-		env.GIT_TOKEN = session.token;
+	const token = options.auth ? await tokenForCommand(session, cwd, args) : undefined;
+	if (token) {
+		env.GIT_TOKEN = token;
 		env.GIT_TOKEN_HOSTS = (session.tokenHosts ?? DEFAULT_TOKEN_HOSTS).join(" ");
 	}
-	const prefix = options.auth && session.token ? `-c ${CREDENTIAL_HELPER} ` : "";
+	const prefix = token ? `-c ${CREDENTIAL_HELPER} ` : "";
 	let output = "";
 	const result = await session.env.exec(`git ${prefix}${args.map(quote).join(" ")}`, { cwd, env, timeout: 900, onOutput: (text) => (output += text) }, ctx);
 	if (!result.ok) throw new GitError(`git ${args[0]} could not run: ${result.error.message}`, -1);
 	const code = result.value.exitCode;
-	if (code !== 0 && !(options.allow ?? []).includes(code)) throw new GitError(`git ${args[0]} failed (${code}): ${scrub(output, session.token).slice(-400)}`, code);
-	return { code, output: scrub(output, session.token) };
+	if (code !== 0 && !(options.allow ?? []).includes(code)) throw new GitError(`git ${args[0]} failed (${code}): ${scrubAll(output, session).slice(-400)}`, code);
+	return { code, output: scrubAll(output, session) };
 }
 
 const scrub = (text: string, token?: string): string => (token ? text.replaceAll(token, "***") : text);
+const scrubAll = (text: string, session: GitSession): string => Object.values(session.ownerTokens ?? {}).reduce((out, token) => scrub(out, token), scrub(text, session.token));
+
+/** The token for one authenticated command: the owner's own when the repository belongs to an owner with a token, the session's otherwise. */
+export async function tokenForCommand(session: GitSession, cwd: string, args: string[]): Promise<string | undefined> {
+	const owners = session.ownerTokens;
+	if (owners && Object.keys(owners).length > 0) {
+		const url = args.find((arg) => isGitHubRepo(arg)) ?? (await remoteOutput(session, cwd));
+		if (url && isGitHubRepo(url)) {
+			const own = owners[parseGitHubRepo(url).owner.toLowerCase()];
+			if (own) return own;
+		}
+	}
+	return session.token;
+}
+
+async function remoteOutput(session: GitSession, cwd: string): Promise<string | undefined> {
+	let text = "";
+	const result = await session.env.exec("git remote get-url origin", { cwd, timeout: 30, onOutput: (chunk) => (text += chunk) }, ctx);
+	return result.ok && result.value.exitCode === 0 ? text.trim() : undefined;
+}
 
 /** The ref could not be resolved to a commit (unknown name, unreachable commit, malformed ref). Retrying will not help. */
 export class RefNotFoundError extends GitError {

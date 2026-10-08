@@ -138,6 +138,8 @@ export interface ServiceContext {
 	client: SomeWorkClient;
 	/** The git token, when the service has one (it never goes to a host outside `GIT_TOKEN_HOSTS`). */
 	gitToken?: string;
+	/** Tokens of repositories of other owners (lower-case owner name), so a role can keep them out of its logs. */
+	ownerTokens?: Record<string, string>;
 	/** With a GitHub App the token above is only the first one and expires after an hour: call this for a live one before every use. */
 	gitTokenSource?: () => Promise<string>;
 	/** Asks the event hub to wake this agent later; present only when `TIMERS_URL` is set. */

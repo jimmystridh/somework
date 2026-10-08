@@ -12,7 +12,7 @@ import { loadWindowsSettings, type WindowsSettings } from "./settings.ts";
  */
 export function windowsHooksFor(settings: WindowsSettings, context: ServiceContext): RoleHooks {
 	const profiles = loadProfiles(settings.profilesFile);
-	const role = createRole({ profiles, secrets: context.gitToken ? [context.gitToken] : [], log: context.log });
+	const role = createRole({ profiles, secrets: [context.gitToken, ...Object.values(context.ownerTokens ?? {})].filter((value): value is string => Boolean(value)), log: context.log });
 	context.log("info", "windows_profiles_loaded", { root: settings.root, build: Object.keys(profiles.build), test: Object.keys(profiles.test) });
 	return {
 		...role.hooks,

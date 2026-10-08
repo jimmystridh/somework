@@ -36,7 +36,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 		verifiedLabel: settings.jira?.verifiedLabel ?? "AgentTested",
 		client: context.client,
 		log: context.log,
-		secrets: [context.gitToken, jiraSecrets?.token, jiraSecrets?.passphrase].filter((value): value is string => Boolean(value)),
+		secrets: [context.gitToken, ...Object.values(context.ownerTokens ?? {}), jiraSecrets?.token, jiraSecrets?.passphrase].filter((value): value is string => Boolean(value)),
 	});
 	return {
 		...hooks,

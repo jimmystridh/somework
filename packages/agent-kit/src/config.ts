@@ -17,6 +17,8 @@ export interface Config {
 		/** True when `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL` were not set: with an app the commit author is then the app's bot account. */
 		authorFromApp: boolean;
 		tokenHosts: string[];
+		/** A token file per repository owner (`GIT_TOKEN_OWNERS=owner=file;owner2=file2`): a fine-grained token belongs to one owner, so repositories of another owner need their own. */
+		ownerTokenFiles: Record<string, string>;
 		authorName: string;
 		authorEmail: string;
 		githubApi?: string;
@@ -48,6 +50,16 @@ const integer = (env: NodeJS.ProcessEnv, name: string, fallback: number): number
 const mirrorFrom = (env: NodeJS.ProcessEnv): Config["git"]["mirror"] =>
 	env.GIT_MIRROR_DIR ? { dir: env.GIT_MIRROR_DIR, repositories: (env.GIT_MIRROR_REPOS ?? "").split(/[\s,]+/).filter(Boolean), refreshMinutes: integer(env, "GIT_MIRROR_REFRESH_MINUTES", 30) } : undefined;
 
+export const ownerTokenFilesFrom = (env: NodeJS.ProcessEnv): Record<string, string> => {
+	const files: Record<string, string> = {};
+	for (const entry of (env.GIT_TOKEN_OWNERS ?? "").split(";").map((item) => item.trim()).filter(Boolean)) {
+		const at = entry.indexOf("=");
+		if (at <= 0 || at === entry.length - 1) throw new Error("GIT_TOKEN_OWNERS entries look like owner=path, separated by semicolons");
+		files[entry.slice(0, at).trim().toLowerCase()] = entry.slice(at + 1).trim();
+	}
+	return files;
+};
+
 const appFrom = (env: NodeJS.ProcessEnv): Config["git"]["app"] => {
 	if (!env.GITHUB_APP_ID && !env.GITHUB_APP_KEY_FILE) return undefined;
 	if (!env.GITHUB_APP_ID || !env.GITHUB_APP_KEY_FILE) throw new Error("GITHUB_APP_ID and GITHUB_APP_KEY_FILE go together");
@@ -66,7 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		model,
 		allowedModels: allowlist(model, parseModelList(env.PI_ALLOWED_MODELS)),
 		sandbox: { url: required(env, "SANDBOX_URL"), tokenFile: env.SANDBOX_TOKEN_FILE ?? "/run/secrets/sandbox-token", workspaceRoot: env.SANDBOX_WORKSPACES ?? "/workspace", caFile: env.SANDBOX_CA_FILE },
-		git: { tokenFile: env.GIT_TOKEN_FILE, app: appFrom(env), authorFromApp: !env.GIT_AUTHOR_NAME && !env.GIT_AUTHOR_EMAIL, tokenHosts: (env.GIT_TOKEN_HOSTS ?? "github.com").split(/[\s,]+/).filter(Boolean), authorName: env.GIT_AUTHOR_NAME ?? "SomeWork Pi", authorEmail: env.GIT_AUTHOR_EMAIL ?? "pi@somework.invalid", githubApi: env.GITHUB_API || undefined, draftPullRequests: env.GIT_PR_DRAFT === "1", mirror: mirrorFrom(env) },
+		git: { tokenFile: env.GIT_TOKEN_FILE, ownerTokenFiles: ownerTokenFilesFrom(env), app: appFrom(env), authorFromApp: !env.GIT_AUTHOR_NAME && !env.GIT_AUTHOR_EMAIL, tokenHosts: (env.GIT_TOKEN_HOSTS ?? "github.com").split(/[\s,]+/).filter(Boolean), authorName: env.GIT_AUTHOR_NAME ?? "SomeWork Pi", authorEmail: env.GIT_AUTHOR_EMAIL ?? "pi@somework.invalid", githubApi: env.GITHUB_API || undefined, draftPullRequests: env.GIT_PR_DRAFT === "1", mirror: mirrorFrom(env) },
 		limits: { maxTokensCap: integer(env, "BUDGET_MAX_TOKENS_CAP", 2_000_000), maxMinutesCap: integer(env, "BUDGET_MAX_MINUTES_CAP", 60), dailyTokenLimit: integer(env, "DAILY_TOKEN_LIMIT", 10_000_000),
 			budgetRaiseCeiling: integer(env, "BUDGET_RAISE_CEILING", integer(env, "DAILY_TOKEN_LIMIT", 10_000_000)),
 			...(env.BUDGET_CONTROLLERS ? { budgetControllers: env.BUDGET_CONTROLLERS.split(/[\s,]+/).filter(Boolean) } : {}) },

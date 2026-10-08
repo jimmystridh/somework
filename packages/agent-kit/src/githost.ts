@@ -25,20 +25,24 @@ export const isGitHubRepo = (repoUrl: string): boolean => /github\.com[/:][^/]+\
 
 /** GitHub REST. Not exercised against the real API in this repository's tests (needs a token); unit-tested against a stand-in server. */
 export class GitHubHost implements GitHost {
-	readonly #token: string | (() => Promise<string>);
+	readonly #token: string | (() => Promise<string>) | undefined;
+	readonly #ownerTokens: Record<string, string>;
 	readonly #apiBase: string;
 	readonly #fetch: typeof fetch;
 	readonly #draft: boolean;
 
-	constructor(options: { token: string | (() => Promise<string>); apiBase?: string; draft?: boolean; fetch?: typeof fetch }) {
+	constructor(options: { token?: string | (() => Promise<string>); ownerTokens?: Record<string, string>; apiBase?: string; draft?: boolean; fetch?: typeof fetch }) {
 		this.#token = options.token;
+		this.#ownerTokens = options.ownerTokens ?? {};
 		this.#draft = options.draft ?? false;
 		this.#apiBase = (options.apiBase || "https://api.github.com").replace(/\/$/, "");
 		this.#fetch = options.fetch ?? fetch;
 	}
 
-	async #call(method: string, path: string, body?: unknown): Promise<any> {
-		const token = typeof this.#token === "function" ? await this.#token() : this.#token;
+	async #call(owner: string, method: string, path: string, body?: unknown): Promise<any> {
+		const own = this.#ownerTokens[owner.toLowerCase()];
+		const token = own ?? (typeof this.#token === "function" ? await this.#token() : this.#token);
+		if (!token) throw new Error(`no token for ${owner}`);
 		const response = await this.#fetch(`${this.#apiBase}${path}`, {
 			method,
 			headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28", ...(body ? { "content-type": "application/json" } : {}) },
@@ -51,14 +55,14 @@ export class GitHubHost implements GitHost {
 	async findPullRequest(query: { repoUrl: string; head: string }): Promise<PullRequestRef | undefined> {
 		if (!isGitHubRepo(query.repoUrl)) return undefined;
 		const { owner, repo } = parseGitHubRepo(query.repoUrl);
-		const open = await this.#call("GET", `/repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${query.head}`)}`);
+		const open = await this.#call(owner, "GET", `/repos/${owner}/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${query.head}`)}`);
 		return open[0] ? { url: open[0].html_url } : undefined;
 	}
 
 	async createPullRequest(request: { repoUrl: string; head: string; base: string; title: string; body: string }): Promise<PullRequestRef | undefined> {
 		if (!isGitHubRepo(request.repoUrl)) return undefined;
 		const { owner, repo } = parseGitHubRepo(request.repoUrl);
-		const created = await this.#call("POST", `/repos/${owner}/${repo}/pulls`, { head: request.head, base: request.base, title: request.title, body: request.body, draft: this.#draft });
+		const created = await this.#call(owner, "POST", `/repos/${owner}/${repo}/pulls`, { head: request.head, base: request.base, title: request.title, body: request.body, draft: this.#draft });
 		return { url: created.html_url };
 	}
 }

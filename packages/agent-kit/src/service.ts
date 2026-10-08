@@ -84,6 +84,8 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const gitTokenSource = gitApp ? () => gitApp.token() : undefined;
 			// minted once at start so a wrong key or installation stops the service here and not in the middle of a task
 			const gitToken = gitApp ? await gitApp.token() : config.git.tokenFile ? read(config.git.tokenFile) : undefined;
+			const ownerTokens = Object.fromEntries(Object.entries(config.git.ownerTokenFiles).map(([owner, file]) => [owner, read(file)]));
+			const hasOwnerTokens = Object.keys(ownerTokens).length > 0;
 			let gitIdentity = { name: config.git.authorName, email: config.git.authorEmail };
 			if (gitApp && config.git.authorFromApp) {
 				try {
@@ -97,7 +99,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const chatArtifacts = chatSettings ? new ChatArtifacts({ dir: join(config.state.dir, "chat-artifacts"), log }) : undefined;
 			const taskClient = chatArtifacts ? chatArtifacts.wrap(client) : client;
 			const timers = createTimers({ env, agentId: identity.agentId, log });
-			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, gitTokenSource, ...(timers ? { timers: timers.client } : {}) }) : (options.hooks ?? {});
+			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}) }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
@@ -160,6 +162,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const session: GitSession = {
 				env: envFor(config.sandbox.workspaceRoot),
 				token: gitToken,
+				...(hasOwnerTokens ? { ownerTokens } : {}),
 				...(gitTokenSource ? { tokenSource: gitTokenSource } : {}),
 				tokenHosts: config.git.tokenHosts,
 				identity: gitIdentity,
@@ -170,7 +173,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				runtime: taskRuntime,
 				envFor,
 				session,
-				host: gitToken ? new GitHubHost({ token: gitTokenSource ?? gitToken, apiBase: config.git.githubApi, draft: config.git.draftPullRequests }) : noPullRequests,
+				host: gitToken || hasOwnerTokens ? new GitHubHost({ ...(gitToken ? { token: gitTokenSource ?? gitToken } : {}), ownerTokens, apiBase: config.git.githubApi, draft: config.git.draftPullRequests }) : noPullRequests,
 				workspaceRoot: config.sandbox.workspaceRoot,
 				client: taskClient,
 				limits: config.limits,
