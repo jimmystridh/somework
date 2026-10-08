@@ -1,4 +1,5 @@
-import { readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { silent, type AgentProfile, type Log } from "@somework/agent-kit";
@@ -19,6 +20,7 @@ export interface JiraToolsOptions {
 	/** For tests. */
 	readFile?: (path: string) => Buffer;
 	fileSize?: (path: string) => number;
+	listDir?: (path: string) => string[];
 }
 
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
@@ -47,6 +49,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 	const log = options.log ?? silent;
 	const readFile = options.readFile ?? ((path: string) => readFileSync(path));
 	const fileSize = options.fileSize ?? ((path: string) => statSync(path).size);
+	const listDir = options.listDir ?? ((path: string) => { try { return readdirSync(path); } catch { return []; } });
 
 	const job = (): QaJob => {
 		const current = options.session.job;
@@ -91,6 +94,29 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 			comments.length ? `recent comments:\n${comments.join("\n")}` : "comments: (none)",
 		].join("\n");
 	};
+
+	/** The developer who gets the ticket back needs to see what the agent saw: up to three screenshots and the finished video of this job go to the ticket first. */
+	async function attachHandBackEvidence(current: QaJob): Promise<string[]> {
+		const attached: string[] = [];
+		const candidates = [
+			...listDir(join(current.evidenceDir, "screenshots")).filter((name) => /\.png$/i.test(name)).sort().slice(0, 3).map((name) => `screenshots/${name}`),
+			...listDir(join(current.evidenceDir, "videos")).filter((name) => /^qa-video-[0-9]+\.webm$/.test(name)).sort().slice(0, 1).map((name) => `videos/${name}`),
+		];
+		for (const file of candidates) {
+			try {
+				const absolute = resolveInside(current.evidenceDir, file, { flavour: nativeFlavour() });
+				const size = fileSize(absolute);
+				if (size === 0 || size > MAX_ATTACHMENT_BYTES || (file.endsWith(".webm") && size < MIN_VIDEO_BYTES)) continue;
+				const name = `${current.ticket}-${file.split("/").pop()}`;
+				await options.jira.attach(current.ticket, name, readFile(absolute), CONTENT_TYPES[file.endsWith(".webm") ? ".webm" : ".png"]!);
+				if (file.endsWith(".webm")) current.jira.attachedVideo = true;
+				attached.push(name);
+			} catch (error) {
+				log("warn", "hand_back_evidence_failed", { taskId: current.taskId, file, error: error instanceof Error ? error.message : String(error) });
+			}
+		}
+		return attached;
+	}
 
 	const tools = [
 		defineTool({
@@ -235,7 +261,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_transition_to_in_progress_and_reassign",
-			description: `The hand-back for a ticket that is NOT fixed (recorded verdict \`not_fixed\`): posts your comment, removes a stale ${options.verifiedLabel} label, moves the ticket to "${options.inProgressStatus}" and gives it back to whoever was assigned before it became unassigned (from its history). If no previous assignee can be found it only comments and leaves the ticket where it is. It can never move a ticket to a done status. May wait for the requester's approval.`,
+			description: `The hand-back for a ticket that is NOT fixed (recorded verdict \`not_fixed\`): attaches your screenshots and finished video to the ticket, posts your comment, removes a stale ${options.verifiedLabel} label, moves the ticket to "${options.inProgressStatus}" and gives it back to whoever was assigned before it became unassigned (from its history). If no previous assignee can be found it only comments and leaves the ticket where it is. It can never move a ticket to a done status. May wait for the requester's approval.`,
 			parameters: Type.Object({ comment: Type.String({ minLength: 1, maxLength: 8000 }) }),
 			async execute(args: { comment: string }) {
 				return wrap(async () => {
@@ -243,9 +269,11 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 					if (current.verdict !== "not_fixed") throw new Refusal("the hand-back is only for a recorded verdict of not_fixed");
 					const before = previousAssignee(issue.changelog?.histories);
 					const steps: string[] = [];
-					const posted = await options.jira.addComment(current.ticket, args.comment);
+					const attached = await attachHandBackEvidence(current);
+					const comment = attached.length > 0 ? `${args.comment}\n\nEvidence attached to this ticket: ${attached.join(", ")}.` : args.comment;
+					const posted = await options.jira.addComment(current.ticket, comment);
 					current.jira.commented = true;
-					steps.push(`commented (${posted.id})`);
+					steps.push(attached.length > 0 ? `attached ${attached.join(", ")}` : "no evidence files to attach", `commented (${posted.id})`);
 					if ((issue.fields.labels ?? []).includes(options.verifiedLabel)) {
 						await options.jira.removeLabel(current.ticket, options.verifiedLabel);
 						steps.push(`removed ${options.verifiedLabel}`);

@@ -191,6 +191,15 @@ describe("the hand-back of a ticket that is not fixed", () => {
 		assert.equal(session.job!.jira.transitioned, true);
 	});
 
+	it("attaches the screenshots and the finished video before it comments", async () => {
+		await run("qa_record_verdict", { verdict: "not_fixed" });
+		const result = await handBack();
+		assert.match(result.text, /attached QA-1-failure\.png, QA-1-qa-video-1\.webm; commented/);
+		const issue = jira.issues.get("QA-1")!;
+		assert.deepEqual(issue.attachments.map((a: { filename: string }) => a.filename).sort(), ["QA-1-failure.png", "QA-1-qa-video-1.webm"]);
+		assert.match(issue.comments[0]!.body, /Evidence attached to this ticket: QA-1-failure\.png, QA-1-qa-video-1\.webm\./);
+	});
+
 	it("removes a stale verified label", async () => {
 		jira.issues.get("QA-1")!.labels = ["Frontend", "AgentTested"];
 		await run("qa_record_verdict", { verdict: "not_fixed" });
