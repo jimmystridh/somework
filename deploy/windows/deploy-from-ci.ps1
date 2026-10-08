@@ -172,6 +172,22 @@ trap {
     try { Start-ScheduledTask -TaskName $task } catch { }
     exit 1
 }
+# a deployment restarts the agent, which kills the job it is running (a verification or a build takes 10 to 60 minutes): wait until it has none
+function Wait-AgentIdle([int]$seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    $announced = $false
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $metrics = (Invoke-WebRequest -UseBasicParsing -Uri "http://${bind}:$port/metrics" -TimeoutSec 5).Content
+            $active = [regex]::Match($metrics, '(?m)^somework_pi_active_jobs\s+([0-9.]+)')
+            if (-not $active.Success -or [double]$active.Groups[1].Value -eq 0) { return }
+            if (-not $announced) { Write-Host 'the agent is running a job: waiting for it to finish before it is replaced'; $announced = $true }
+        } catch { return }
+        Start-Sleep -Seconds 15
+    }
+    Fail "the $role agent has been busy for $([int]($seconds / 60)) minutes: it is not replaced in the middle of a job; run the deployment again when it is idle"
+}
+Wait-AgentIdle 1500
 Backup-QaApp
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
