@@ -1,4 +1,4 @@
-TODO / KNOWN GAPS                                                        last updated 2026-10-07
+TODO / KNOWN GAPS                                                        last updated 2026-10-08
 =====================================================================================
 Everything below is known, not yet done. Kept generic on purpose (no hosts, addresses, ticket
 keys or secrets). [DECISION] marks items that wait for a person, not for work.
@@ -24,6 +24,7 @@ STATUS BY AGENT (2026-10-07; everything below is deployed through CI unless note
   machine (the job then finishes late); the first SAD-507 video attached to Jira is the partial file written until the agent gave up waiting. Known environment limits: dev server hangs silently at start on ~4 of 10 starts (start-app.ps1 restarts it after 40 s), clicks take
   seconds, recording takes up to a minute to start and stop. Resized 2026-10-08: QA machine (VM 112) now 6 cores / 16 GB, Windows developer (VM 111) 4 cores / 12 GB (Proxmox config, clean shutdown and start); not yet re-measured. The QA agent's hand-back of a not-fixed ticket no longer waits for approval (QA_JIRA_APPROVE=none in managed.env).
 - Manager: live (rolled by rsync, not CI): /ask, /do, tools for controls and budget raises.
+- To investigate: secrets and token management (section 13): inventory, expiry watcher, GitHub and Jira identity, where secrets live, rotation runbook.
 - Not done by design or waiting for the owner: GitHub Apps for the bots (passkey), the 9 Synthetics monitors (Datadog UI), bun for the agents (on hold),
   Slack/Telegram gateway design, on-demand Windows machines, off-host backups, hypervisor default-deny.
 
@@ -603,6 +604,7 @@ D. TELEGRAM AND SLACK AS EVENT SOURCES, AND HOW A BOT RESPONDS OR STARTS A CONVE
 12. DECISIONS WAITING FOR THE OWNER (summary)
 --------------------------------------------------------------------------------------
 - Service account vs personal account and certificate for the QA agent's Jira access.
+- Secrets and token management as a whole: owner, source of truth, token lifetime, GitHub identity model (section 13).
 - Where the package-restore credential for the Windows build lives.
 - Container/VM isolation for the Windows developer agent.
 - Whether to enable the operator console (and how it logs in).
@@ -613,3 +615,73 @@ D. TELEGRAM AND SLACK AS EVENT SOURCES, AND HOW A BOT RESPONDS OR STARTS A CONVE
 - Slack: which workspace, who approves the app install, and what the bot may post (section 10).
 - Event hub: where it lives, how external webhooks reach it without exposing the private network, and
   which rules may run without a human approving them (section 11).
+
+--------------------------------------------------------------------------------------
+13. TO INVESTIGATE: SECRETS AND TOKEN MANAGEMENT (raised 2026-10-08)
+--------------------------------------------------------------------------------------
+Why now: the first push of the Windows developer to a personal repository failed because a fine-grained GitHub token has exactly ONE resource owner (the
+organisation's token cannot also cover a personal repository), and the classic token that does cover both is far too broad. We worked around it with a second
+token and a token-per-repository-owner setting in the kit (GIT_TOKEN_OWNERS), which solves that one case only. The same question applies to every secret the
+fleet uses: who owns it, where it lives, when it expires, how it is rotated, what can read it, and what happens when it leaks. Nothing below holds a value.
+
+A. WHAT WE HAVE TODAY (inventory to be confirmed, completed and then kept in a file in the repository, without values)
+- GitHub, organisation-owned fine-grained tokens, one repository each, created in the owner's browser after a passkey check, used as the owner's own identity:
+  developer (expires early November 2026), Aikido fixer (90 days from 2026-10-06; it has no Checks permission, CI is read through the Actions API), reviewer
+  (read-only, 2027-01-03), Windows developer (2027-01-03), QA (read-only contents, 90 days from 2026-10-06). Nothing automates their rotation.
+- GitHub, personally owned fine-grained token for one personal repository on the Windows developer (expires 2027-01-06). Only that agent has such a file; the
+  kit picks the file by the repository's owner, every other agent has no way to work on a repository of another owner.
+- GitHub Apps for the bots (one installation token of one hour per task, per-repository permissions, own identity): designed, kit support exists, blocked on the
+  owner's passkey (section 11b). An installation is also per account, so the multi-owner question returns there (one installation per owner).
+- Model logins: every agent holds its OWN OAuth login for the code model provider (device-code login approved in the owner's browser, refresh token in a file on
+  the agent's host, rotated on use, so a copy elsewhere breaks it; an agent idle for a long time can lose it). All of them hang on one person's subscription.
+  Two further providers are wired but not credentialed (one token expired, one API key never copied).
+- Ticket system: a personal access token (90 days, expires early January 2027) and a client certificate with its passphrase file, both belonging to a person's
+  account, so every action of the QA agent appears as that person [DECISION: a service account, section 2].
+- Platform: the CA key (only on the owner's workstation), per-agent identity key files, the domain's admin key (inside the domain's data volume), the broker's wake
+  logins (new agents need a manual reload of the broker), the hub's per-source webhook tokens (a webhook URL is a secret), per-agent timer tokens, the manager's
+  gateway token, the chat bot token(s), the webhook signing secrets in the receiver and hub, the observability tokens and logging CA.
+- Third parties: Datadog API and application keys (EU, read scopes), Aikido OAuth client credentials, Cloudflare origin certificate and authenticated origin pulls.
+- CI: the Woodpecker secrets (deploy keys for the agents VM and for both Windows machines; each key's entry on the target is a forced command), inserted into the
+  server's database directly; the pull request comment token the owner still has to create; the runner's registration secret.
+- Infrastructure: the hypervisor API token for the fleet (no expiry, plaintext file on the owner's workstation plus a password-manager copy), root ssh to the
+  hypervisor, the mesh VPN, the Windows machines' local service accounts (their task passwords), ssh keys to every machine, the Windows build's package-restore
+  credential (not decided where it lives).
+- Copies: some tokens exist as plaintext files on the owner's workstation (on request) and some in the password manager; nothing keeps the two lists in step.
+
+B. RISKS AND GAPS ALREADY VISIBLE
+- One-owner tokens: a token per repository per owner per agent multiplies files, expiries and passkey checks; least privilege (one repository) and low effort
+  pull in opposite directions. The kit now maps owner to file, but not several tokens for several repositories of ONE owner.
+- Expiry has no calendar and no alarm: early November 2026 (developer), 2027-01-03 to 2027-01-06 (reviewer, Windows developer, fixer, QA, personal token, Jira),
+  none at all (hypervisor token). The kit already shows a token's expiry in an agent's status (GIT_TOKEN_EXPIRES) but it is set by hand and covers git only.
+- Identity: pushes, pull requests and tickets are made as a person. That blurs the audit trail, breaks when the person leaves or rotates, and shares one rate
+  limit. Section 11b weighs a GitHub App, a machine user and a distinct commit author; the Jira equivalent is a service account with its own certificate.
+- Who can read them: the Windows agents run the model's shell as the SAME service account that has read access to the secrets folder (no container sandbox
+  there). The command policy screens commands but is not a proof (section 5); check whether a model-run shell can read the token files, and move them behind
+  something the model's tools cannot reach (a separate account that only the git step uses, or a credential helper that never exposes the file).
+- Leaks do happen: a webhook token and an internal alert path were once printed in command output. Log and chat redaction only covers the secrets the process
+  knows about (today the git tokens, now the owner tokens, the Jira token and certificate passphrase for QA); extend it to every secret a role can load, and add a
+  canary test.
+- Rotation is manual and unrehearsed: passkey-gated for GitHub, device-code for model logins, by hand for CI keys and the hypervisor token. There is no
+  "rotate everything" runbook and nobody has tried one; the wrapper on the Windows machines and the deploy keys are the roots of trust and are changed by hand.
+- Storage is a mix: files with 0600 or ACLs per host, values inside the CI server's database, plaintext copies on a workstation, a password manager that is
+  not complete. No check that file permissions have not drifted (the Windows secrets folder ACL is copied from an existing file by hand).
+- Scope in time: a repository token is valid for the whole repository for 90 days, for every task. Per-task installation tokens (GitHub App) would shrink that.
+
+C. WHAT TO INVESTIGATE (in this order)
+1. Make the inventory real: one file in the repository (name, kind, owner, host and path, scope, expiry, how to rotate, who is told), no values, and a test or
+   script that compares it with what the hosts actually hold (file exists, permissions, expiry read from the token where the API says so).
+2. An expiry watcher: read every known expiry (GitHub reports a token's expiry in a response header, the Jira token and certificates have dates) and alert
+   the owner in the chat 30 and 7 days before; show it on the fleet dashboard.
+3. Decide the GitHub identity model: App per bot (one installation per owner), machine user, or personal tokens per owner with a convention for several
+   repositories. Decide for one agent first (the Aikido fixer or the Windows developer), measure the effort, then copy.
+4. Decide the Jira identity: a service account with its own token and certificate, and move the QA agent to it.
+5. Decide where secrets live: files per host (today), a secret manager with short-lived leases (the password manager's service accounts, or a vault), or
+   encrypted files in the repository (age or SOPS) decrypted by the deploy. The deploy pipelines already reach every host and could place secrets, which would
+   also give rotation a single path. Include the CI server's own secrets in this.
+6. Model logins: health check per agent (a cheap model call or a token-expiry read) with an alert; decide whether several agents may share one login now
+   that the rotation problem is understood, or whether each keeps its own; document the device-code procedure and who may approve it.
+7. Keep secrets away from the model on the Windows machines (see B) and prove it with a test that tries to read them through the agent's own tools.
+8. Redaction and canaries for all secrets; a scan of agent logs and chat transcripts for secret shapes (the log pipeline already exists).
+9. Write and rehearse the "rotate everything" runbook once, on the pilot: every secret in the inventory, in order, with the time it took and what broke.
+10. Remove or document the plaintext copies on the owner's workstation; decide how the two lists (workstation, password manager) are kept in step.
+- [DECISION] who owns secrets for the fleet (a person, a role mailbox, a team), which store is the source of truth, and how long a token may live.
