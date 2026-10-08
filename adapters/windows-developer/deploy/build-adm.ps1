@@ -14,7 +14,7 @@ if (-not (Test-Path $cache)) { throw "the package copy $cache is missing" }
 $packages = "$repo\Source\BFS\packages"
 if (-not (Test-Path $packages)) {
     Write-Output "seeding $packages from $cache"
-    & robocopy.exe $cache $packages /E /NFL /NDL /NJH /NJS /NP /MT:8 | Out-Null
+    & "$env:SystemRoot\System32\robocopy.exe" $cache $packages /E /NFL /NDL /NJH /NJS /NP /MT:8 | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit $LASTEXITCODE" }
 }
 
@@ -37,7 +37,7 @@ try {
     $sdk = Get-ChildItem (Join-Path $dotnet 'sdk') -Directory | Where-Object { $_.Name -like '6.0.*' } | Sort-Object Name -Descending | Select-Object -First 1
     if (-not $sdk) { throw 'no .NET 6 SDK found' }
     $env:MSBuildSDKsPath = Join-Path $sdk.FullName 'Sdks'
-    $env:Path = "C:\AgentTools;$dotnet;$env:Path"
+    $env:Path = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;C:\AgentTools;$dotnet;$env:Path"
     & C:\AgentTools\nuget.exe restore "$repo\Source\BFS\BFS.sln" -ConfigFile $config -MSBuildPath 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin' -NonInteractive
     if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed with exit $LASTEXITCODE" }
 } finally {
