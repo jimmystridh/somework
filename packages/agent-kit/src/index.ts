@@ -18,6 +18,7 @@ export * from "./metrics.ts";
 export * from "./observe/index.ts";
 export * from "./timers/index.ts";
 export * from "./pi-runtime.ts";
+export * from "./usage-metrics.ts";
 export * from "./policy.ts";
 export * from "./profile.ts";
 export * from "./providers/allowlist.ts";

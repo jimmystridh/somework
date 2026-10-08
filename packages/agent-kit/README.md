@@ -199,12 +199,16 @@ By default a role pushes and opens pull requests with a fine-grained personal ac
 
 The service signs a ten-minute JWT with the key, exchanges it for an installation token (one hour, limited to the installation's repositories and permissions), keeps it, and mints a new one five minutes before it expires; every git command and pull request call asks for a live one, so a long task never meets an expired token. The first token is minted at start, so a wrong key or installation stops the service there. Unless `GIT_AUTHOR_NAME` or `GIT_AUTHOR_EMAIL` is set, the commit author becomes the app's bot account with its noreply address (GitHub then shows the bot as the author). The token still only goes to `GIT_TOKEN_HOSTS`, through the credential helper, and is scrubbed from git output. Roles that hand the token to their own code (the reviewer's pull request context) receive `ServiceContext.gitTokenSource`. One app per role keeps the permissions separate: developer, fixer and Windows developer need Contents and Pull requests write plus Metadata read; the reviewer needs the same as read only.
 
-## Observe tools: read-only logs and alerts
+## Observe tools: read-only logs, metrics and alerts
 
-`createObserve` (`@somework/agent-kit/observe`) gives a role five read-only tools over the central Grafana: `logs_query` (a stream selector
+`createObserve` (`@somework/agent-kit/observe`) gives a role eight read-only tools over the central Grafana: `logs_query` (a stream selector
 with line filters, `| json` and simple label filters, optionally `count_over_time`/`rate`; the text is parsed and rebuilt, never forwarded),
 `my_history` (the role's own recent jobs, one line per task), `logs_labels` (what can be filtered on), `alerts_status` (the alert rules
-of one Grafana folder) and `dashboards_search`. Results are redacted, capped in bytes and framed between random markers as untrusted data.
+of one Grafana folder), `dashboards_search`, and three over the central Prometheus: `metrics_catalog` (which metrics exist, and one metric's type, labels and
+values), `metrics_query` (one metric, label matchers, a function such as `last`, `rate`, `increase` or `quantile`, an optional aggregation and grouping, a value
+now or a series; the PromQL is built from the validated parts and never taken from the model) and `llm_usage` (input, output and cache tokens and cost in US
+dollars per agent, role, provider and model over a period of up to the metrics look-back). A role with own scope gets `agent="<its agent id>"` added to
+every metrics query. Results are redacted, capped in bytes and framed between random markers as untrusted data.
 Off unless `OBSERVE_ENABLED=1` (or the profile's `observe.enabled`).
 
 | Variable | Default | Meaning |
@@ -214,12 +218,20 @@ Off unless `OBSERVE_ENABLED=1` (or the profile's `observe.enabled`).
 | `OBSERVE_MAX_RANGE_HOURS` | 24 | furthest look-back, at most 168 |
 | `OBSERVE_HOURLY_CALLS` | 60 | calls per hour over all observe tools |
 | `OBSERVE_MAX_BYTES` | 12288 | bytes of one answer |
+| `OBSERVE_METRICS_MAX_RANGE_HOURS` | 720 | furthest look-back of the metrics tools, at most 2160 (costs are read over weeks) |
 | `OBSERVE_METRIC_FUNCTIONS` | off | allows `count_over_time` and `rate` over one stream |
 | `GRAFANA_URL`, `GRAFANA_TOKEN_FILE`, `GRAFANA_CA_FILE` | none | the Grafana origin, a Viewer service account token file (`deploy/grafana/provision-reader.py`) and an optional CA |
-| `GRAFANA_LOKI_UID`, `GRAFANA_ALERT_FOLDER` | `cluster-loki`, `Agent Cluster` | the Loki data source and the alert folder |
+| `GRAFANA_LOKI_UID`, `GRAFANA_PROM_UID`, `GRAFANA_ALERT_FOLDER` | `cluster-loki`, `cluster-prometheus`, `Agent Cluster` | the Loki and Prometheus data sources and the alert folder |
 
 The tools only read: GET requests to the one Grafana origin, no redirects, 15 s and size limits, the token stays in the service. They are allowed in
 both chat tiers. Logs of a role's own sandbox commands, tickets and pull requests can hold hostile text, hence the framing. Status shows `observe` with the call count.
+
+Every kit service exposes `/metrics` (Prometheus text) and every series carries `agent` (the agent id). Model usage is counted per run, while it runs, by
+`somework_llm_tokens_total{agent,role,provider,model,kind}` (`kind` is `input`, `output`, `cache_read` or `cache_write`) and
+`somework_llm_cost_usd_total{agent,role,provider,model}`, from the SDK's per-model usage record, so a job that picks another model is counted under that model.
+The configured model's series start at zero because Prometheus does not count the first sample of a new series; a model that is used for the first time
+only by one job request may miss its first scrape interval of increase. The host's Alloy scrapes the endpoint and pushes it to the central Prometheus
+(`deploy/observability/`).
 
 ## Skills: the repository is the source of truth
 

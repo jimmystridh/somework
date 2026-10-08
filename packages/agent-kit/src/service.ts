@@ -31,6 +31,7 @@ import { registerProviders } from "./providers/index.ts";
 import { RemoteExecutionEnv } from "./sandbox/remote-env.ts";
 import { skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
+import { llmUsageCounters } from "./usage-metrics.ts";
 import { createTimers } from "./timers/index.ts";
 
 const read = (path: string): string => readFileSync(path, "utf8").trim();
@@ -76,6 +77,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const log = jsonLogger();
 			const metrics = new Metrics();
 			const identity = Identity.fromFile(config.somework.keyFile);
+			metrics.constantLabels({ agent: identity.agentId });
 			const client = new SomeWorkClient({ baseUrl: config.somework.url, identity, caFile: config.somework.caFile, requireTls: config.somework.requireTls });
 
 			const gitApp = config.git.app
@@ -132,7 +134,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const chatState = (): Promise<string> =>
 				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
 			const chatTools = chatSettings ? createStatusTool(chatState) : undefined;
-			const observe = createObserve({ profile: profile.observe, env, log, metrics });
+			const observe = createObserve({ profile: profile.observe, env, log, metrics, agentId: identity.agentId });
 			const extensions = [
 				...(hooks.extensions ?? []),
 				...(events ? [events.extension] : []),
@@ -144,6 +146,8 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			];
 			// the chat's own tools are registered with the runtime but offered only to chat sessions: a role that lists no tools gets the coding tools spelled out
 			const normalTools = profile.allowedTools ? [...profile.allowedTools, ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])] : chatTools ? ["read", "write", "edit", "bash", ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])] : undefined;
+			const llmUsage = llmUsageCounters(metrics, { agent: identity.agentId, role: profile.id });
+			llmUsage.start(model);
 			const runtime = new PiDurableRuntime({
 				storagePath: join(config.state.dir, "pi.sqlite"),
 				models,
@@ -155,6 +159,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				extensions,
 				log,
 				metrics,
+				onUsage: llmUsage.record,
 			});
 			runtimeRef = runtime;
 			await runtime.start();

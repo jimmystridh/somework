@@ -33,7 +33,22 @@ export interface PiRuntimeOptions {
 	allowedTools?: readonly string[];
 	log?: Log;
 	metrics?: Metrics;
+	/** Called with what a run spent on one model since the last call (tokens by kind and cost), while the run goes and once more when it ends. */
+	onUsage?: (spent: ModelSpend) => void;
 }
+
+/** What one model consumed in a stretch of a run; `provider` and `modelId` are the key the SDK keeps usage under, split at its first slash. */
+export interface ModelSpend {
+	provider: string;
+	modelId: string;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	costUsd: number;
+}
+
+type ModelTotals = Record<string, Omit<ModelSpend, "provider" | "modelId">>;
 
 interface Active {
 	hooks: RunHooks;
@@ -143,6 +158,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		this.#active.set(conversationId, { hooks });
 		if (request.tools) this.#conversationTools.set(conversationId, new Set(request.tools));
 		const baseline = await this.#usageOf(conversation);
+		const reported = { totals: await this.#usageByModel(conversation) };
 		const started = Date.now();
 		const log = (event: string, fields: Record<string, unknown> = {}) => this.#log("info", event, { requestId: request.requestId, agentKey: request.agentKey, ...fields });
 
@@ -161,6 +177,7 @@ export class PiDurableRuntime implements AgentRuntime {
 				if (update) hooks.onProgress(update);
 				if (event.type === "tool_execution_start") hooks.onTool?.(event.toolName ?? event.name ?? event.tool?.name ?? "?");
 				if (event.type === "usage_changed") {
+					await this.#reportUsage(conversation, reported);
 					const spent = diff(await this.#usageOf(conversation), baseline).totalTokens;
 					if (spent > request.budget.maxTokens) requestStop("budget_exceeded");
 				}
@@ -190,6 +207,7 @@ export class PiDurableRuntime implements AgentRuntime {
 			clearTimeout(deadline);
 			hooks.signal.removeEventListener("abort", onSignal);
 			await events.stop?.().catch?.(() => {});
+			await this.#reportUsage(conversation, reported).catch(() => {});
 			this.#active.delete(conversationId);
 			this.#conversationTools.delete(conversationId);
 			log("run_finished", { ms: Date.now() - started });
@@ -218,6 +236,42 @@ export class PiDurableRuntime implements AgentRuntime {
 			.filter((block: any) => block.type === "text")
 			.map((block: any) => block.text)
 			.join("");
+	}
+
+	async #usageByModel(conversation: Conversation): Promise<ModelTotals> {
+		const view = await conversation.viewState(ctx);
+		const models = (view as any).value?.docs?.["pi.usage"]?.models ?? {};
+		return Object.fromEntries(
+			Object.entries<any>(models).map(([key, usage]) => [
+				key,
+				{ inputTokens: usage.input ?? 0, outputTokens: usage.output ?? 0, cacheReadTokens: usage.cacheRead ?? 0, cacheWriteTokens: usage.cacheWrite ?? 0, costUsd: usage.cost?.total ?? 0 },
+			]),
+		);
+	}
+
+	/** Hands the callback what each model spent since the previous report; a failing callback never disturbs the run. */
+	async #reportUsage(conversation: Conversation, reported: { totals: ModelTotals }): Promise<void> {
+		const onUsage = this.#options.onUsage;
+		if (!onUsage) return;
+		const now = await this.#usageByModel(conversation);
+		for (const [key, total] of Object.entries(now)) {
+			const before = reported.totals[key];
+			const spent = {
+				inputTokens: total.inputTokens - (before?.inputTokens ?? 0),
+				outputTokens: total.outputTokens - (before?.outputTokens ?? 0),
+				cacheReadTokens: total.cacheReadTokens - (before?.cacheReadTokens ?? 0),
+				cacheWriteTokens: total.cacheWriteTokens - (before?.cacheWriteTokens ?? 0),
+				costUsd: total.costUsd - (before?.costUsd ?? 0),
+			};
+			if (Object.values(spent).every((value) => value <= 0)) continue;
+			const slash = key.indexOf("/");
+			try {
+				onUsage({ provider: slash < 0 ? "unknown" : key.slice(0, slash), modelId: slash < 0 ? key : key.slice(slash + 1), ...spent });
+			} catch (error) {
+				this.#log("warn", "usage_report_failed", { error: error instanceof Error ? error.message : String(error) });
+			}
+		}
+		reported.totals = now;
 	}
 
 	async #usageOf(conversation: Conversation): Promise<Usage> {

@@ -6,8 +6,10 @@ import { afterEach, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { fauxAssistantMessage, fauxProvider, fauxText } from "@earendil-works/pi-ai";
 import { sleep } from "@somework/sdk";
-import { PiDurableRuntime, type ApprovalPolicy } from "../src/pi-runtime.ts";
+import { PiDurableRuntime, type ApprovalPolicy, type PiRuntimeOptions } from "../src/pi-runtime.ts";
 import type { AgentRequest, RunHooks } from "../src/runtime.ts";
+import { Metrics } from "../src/metrics.ts";
+import { llmUsageCounters } from "../src/usage-metrics.ts";
 import { scriptedModels } from "../src/providers/faux.ts";
 
 const open: PiDurableRuntime[] = [];
@@ -15,10 +17,10 @@ afterEach(async () => {
 	for (const runtime of open.splice(0)) await runtime.close();
 });
 
-async function runtimeFor(plan: string[], policy?: ApprovalPolicy) {
+async function runtimeFor(plan: string[], policy?: ApprovalPolicy, onUsage?: PiRuntimeOptions["onUsage"]) {
 	const dir = mkdtempSync(join(tmpdir(), "pi-runtime-"));
 	const fake = scriptedModels(plan);
-	const runtime = new PiDurableRuntime({ storagePath: join(dir, "state.sqlite"), models: fake.models, model: fake.model, env: (cwd) => new NodeExecutionEnv({ cwd: cwd ?? dir }), policy });
+	const runtime = new PiDurableRuntime({ storagePath: join(dir, "state.sqlite"), models: fake.models, model: fake.model, env: (cwd) => new NodeExecutionEnv({ cwd: cwd ?? dir }), policy, onUsage });
 	await runtime.start();
 	open.push(runtime);
 	const workspace = (name: string) => {
@@ -61,6 +63,41 @@ describe("PiDurableRuntime", () => {
 		assert.equal(readFileSync(join(ws, "out.txt"), "utf8"), "hello");
 		assert.ok(outcome.status === "done" && outcome.usage.totalTokens > 0);
 		assert.ok(progress.includes("tool: write") && progress.includes("tool: bash"), `progress: ${progress}`);
+	});
+
+	it("reports what each model spent, adding up to the usage of the run", async () => {
+		const spent: Parameters<NonNullable<PiRuntimeOptions["onUsage"]>>[0][] = [];
+		const { runtime, workspace } = await runtimeFor(["bash:echo hi", "final:done"], undefined, (entry) => spent.push(entry));
+		const outcome = await runtime.execute(request(workspace("w1")), hooks().hooks);
+		assert.equal(outcome.status, "done");
+		assert.ok(spent.length > 0, "usage was reported");
+		const input = spent.reduce((sum, entry) => sum + entry.inputTokens, 0);
+		const output = spent.reduce((sum, entry) => sum + entry.outputTokens, 0);
+		assert.equal(input, outcome.status === "done" ? outcome.usage.inputTokens : -1);
+		assert.equal(output, outcome.status === "done" ? outcome.usage.outputTokens : -1);
+		assert.ok(spent.every((entry) => entry.provider !== "" && entry.modelId !== ""));
+	});
+
+	it("feeds the usage counters per provider and model, starting the configured model at zero", async () => {
+		const metrics = new Metrics();
+		const counters = llmUsageCounters(metrics, { agent: "agent/test", role: "tester" });
+		const { runtime, workspace, fake } = await runtimeFor(["bash:echo hi", "final:done"], undefined, counters.record);
+		counters.start(fake.model);
+		const before = metrics.render();
+		assert.match(before, new RegExp(`somework_llm_tokens_total\\{agent="agent/test",kind="input",model="${fake.model.modelId}",provider="${fake.model.provider}",role="tester"\\} 0`));
+		const outcome = await runtime.execute(request(workspace("w1")), hooks().hooks);
+		assert.equal(outcome.status, "done");
+		const tokens = (kind: string) => Number(new RegExp(`^somework_llm_tokens_total\\{[^}]*kind="${kind}"[^}]*\\} (\\S+)$`, "m").exec(metrics.render())?.[1]);
+		assert.equal(tokens("input"), outcome.status === "done" ? outcome.usage.inputTokens : -1);
+		assert.equal(tokens("output"), outcome.status === "done" ? outcome.usage.outputTokens : -1);
+	});
+
+	it("a failing usage callback does not fail the run", async () => {
+		const { runtime, workspace } = await runtimeFor(["final:done"], undefined, () => {
+			throw new Error("boom");
+		});
+		const outcome = await runtime.execute(request(workspace("w1")), hooks().hooks);
+		assert.equal(outcome.status, "done");
 	});
 
 	it("a repeated requestId returns the original run instead of running again", async () => {

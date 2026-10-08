@@ -21,6 +21,8 @@ export interface GrafanaClientOptions {
 	token: () => string;
 	caPem?: string;
 	lokiUid: string;
+	/** The Prometheus data source (default "cluster-prometheus"). */
+	promUid?: string;
 	timeoutMs?: number;
 	maxResponseBytes?: number;
 }
@@ -33,6 +35,12 @@ export interface LogEntry {
 }
 
 export type RangeResult = { kind: "streams"; entries: LogEntry[] } | { kind: "series"; series: { labels: Record<string, string>; total: number }[] };
+
+export interface PromSeries {
+	labels: Record<string, string>;
+	/** Unix seconds and value, oldest first; an instant query has one point. */
+	points: [number, number][];
+}
 
 export interface AlertRule {
 	name: string;
@@ -116,7 +124,7 @@ export class GrafanaClient {
 		if (response.status === 401) throw new GrafanaError("unauthorized", "Grafana refused the token", 401);
 		if (response.status === 403) throw new GrafanaError("forbidden", "Grafana says the token may not read this", 403);
 		if (response.status === 404) throw new GrafanaError("not_found", "Grafana has no such thing", 404);
-		if (response.status >= 400 && response.status < 500) throw new GrafanaError("bad_request", `Loki refused the query: ${response.body.replace(/\s+/g, " ").slice(0, 200)}`, response.status);
+		if (response.status >= 400 && response.status < 500) throw new GrafanaError("bad_request", `the data source refused the query: ${response.body.replace(/\s+/g, " ").slice(0, 200)}`, response.status);
 		if (response.status >= 500) throw new GrafanaError("server", `Grafana failed (${response.status})`, response.status);
 		try {
 			return JSON.parse(response.body);
@@ -127,6 +135,47 @@ export class GrafanaClient {
 
 	#loki(path: string): string {
 		return `/api/datasources/proxy/uid/${encodeURIComponent(this.#options.lokiUid)}/loki/api/v1/${path}`;
+	}
+
+	#prom(path: string): string {
+		return `/api/datasources/proxy/uid/${encodeURIComponent(this.#options.promUid ?? "cluster-prometheus")}/api/v1/${path}`;
+	}
+
+	#promSeries(body: unknown): PromSeries[] {
+		const data = (body as { data?: { resultType?: string; result?: any[] } })?.data;
+		if (!data || !Array.isArray(data.result)) throw new GrafanaError("bad_response", "Prometheus answered in a shape this tool does not know");
+		const number = (value: unknown) => Number(value);
+		if (data.resultType === "vector") return data.result.map((item) => ({ labels: item.metric ?? {}, points: [[number(item.value?.[0]), number(item.value?.[1])]] }));
+		if (data.resultType === "matrix") return data.result.map((item) => ({ labels: item.metric ?? {}, points: (item.values ?? []).map((point: [number, string]) => [number(point[0]), number(point[1])]) }));
+		throw new GrafanaError("bad_response", `Prometheus answered with a ${String(data.resultType)}, which this tool does not read`);
+	}
+
+	/** An instant PromQL query at `atMs`; the text is built by the service from validated parts, never taken from the model. */
+	async promQuery(query: string, atMs: number): Promise<PromSeries[]> {
+		return this.#promSeries(await this.#get(this.#prom("query"), { query, time: Math.floor(atMs / 1000) }));
+	}
+
+	async promRange(request: { query: string; startMs: number; endMs: number; stepSeconds: number }): Promise<PromSeries[]> {
+		return this.#promSeries(await this.#get(this.#prom("query_range"), { query: request.query, start: Math.floor(request.startMs / 1000), end: Math.floor(request.endMs / 1000), step: request.stepSeconds }));
+	}
+
+	/** Metric names (no `label`) or the values of one label, optionally limited to the series matching `match`. */
+	async promLabelValues(label: string, startMs: number, endMs: number, match?: string): Promise<string[]> {
+		const body = (await this.#get(this.#prom(`label/${encodeURIComponent(label)}/values`), { start: Math.floor(startMs / 1000), end: Math.floor(endMs / 1000), "match[]": match })) as { data?: string[] };
+		return Array.isArray(body?.data) ? body.data.map(String) : [];
+	}
+
+	/** The label sets of the series matching `match`. */
+	async promSeriesOf(match: string, startMs: number, endMs: number): Promise<Record<string, string>[]> {
+		const body = (await this.#get(this.#prom("series"), { "match[]": match, start: Math.floor(startMs / 1000), end: Math.floor(endMs / 1000) })) as { data?: Record<string, string>[] };
+		return Array.isArray(body?.data) ? body.data : [];
+	}
+
+	/** The type and help text of a metric, as its exporter declared them. */
+	async promMetadata(metric: string): Promise<{ type: string; help: string } | undefined> {
+		const body = (await this.#get(this.#prom("metadata"), { metric, limit: 1 })) as { data?: Record<string, { type?: string; help?: string }[]> };
+		const first = body?.data?.[metric]?.[0];
+		return first ? { type: String(first.type ?? "unknown"), help: String(first.help ?? "") } : undefined;
 	}
 
 	async queryRange(request: { query: string; startMs: number; endMs: number; limit: number; direction: "backward" | "forward" }): Promise<RangeResult> {

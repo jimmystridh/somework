@@ -6,6 +6,12 @@ export class Metrics {
 	readonly #help = new Map<string, { type: string; help: string }>();
 	readonly #values = new Map<string, Map<string, number>>();
 	readonly #histograms = new Map<string, { buckets: number[]; series: Map<string, { counts: number[]; sum: number; count: number }> }>();
+	#constant: Labels = {};
+
+	/** Labels every rendered series carries unless it sets the label itself (the agent's id, so that one agent's series can be told from another's). */
+	constantLabels(labels: Labels): void {
+		this.#constant = { ...labels };
+	}
 
 	counter(name: string, help: string): (labels?: Labels, by?: number) => void {
 		this.#help.set(name, { type: "counter", help });
@@ -47,7 +53,11 @@ export class Metrics {
 
 	render(): string {
 		const lines: string[] = [];
-		const wrap = (k: string, extra = "") => (k || extra ? `{${[k, extra].filter(Boolean).join(",")}}` : "");
+		const missing = (k: string) => key(Object.fromEntries(Object.entries(this.#constant).filter(([name]) => !new RegExp(`(^|,)${name}=`).test(k))));
+		const wrap = (k: string, extra = "") => {
+			const own = [missing(k), k, extra].filter(Boolean).join(",");
+			return own ? `{${own}}` : "";
+		};
 		for (const [name, { type, help }] of this.#help) {
 			lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`);
 			if (type === "histogram") {

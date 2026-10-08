@@ -22,6 +22,8 @@ export interface ObserveProfile {
 	metricFunctions?: boolean;
 	/** The Grafana folder `alerts_status` reads (default "Agent Cluster"). */
 	alertFolder?: string;
+	/** The furthest back a metrics query may reach, in hours (default 720, at most 2160): costs are read over weeks. */
+	metricsMaxRangeHours?: number;
 }
 
 export interface ResolvedObserve {
@@ -30,6 +32,8 @@ export interface ResolvedObserve {
 	tokenFile?: string;
 	caFile?: string;
 	lokiUid: string;
+	promUid: string;
+	metricsMaxRangeMs: number;
 	fleet: boolean;
 	own: Matcher[];
 	maxRangeMs: number;
@@ -45,6 +49,7 @@ export interface ResolvedObserve {
 
 const HOUR = 3_600_000;
 export const MAX_RANGE_HOURS = 168;
+export const MAX_METRICS_RANGE_HOURS = 2160;
 
 const flag = (value: string | undefined): boolean | undefined => (value === undefined || value === "" ? undefined : value === "1" || value.toLowerCase() === "true");
 
@@ -71,6 +76,8 @@ export function resolveObserve(profile: ObserveProfile | undefined, env: NodeJS.
 		tokenFile: env.GRAFANA_TOKEN_FILE || undefined,
 		caFile: env.GRAFANA_CA_FILE || undefined,
 		lokiUid: env.GRAFANA_LOKI_UID || "cluster-loki",
+		promUid: env.GRAFANA_PROM_UID || "cluster-prometheus",
+		metricsMaxRangeMs: whole(env, "OBSERVE_METRICS_MAX_RANGE_HOURS", profile?.metricsMaxRangeHours ?? 720, 1, MAX_METRICS_RANGE_HOURS) * HOUR,
 		fleet,
 		own,
 		maxRangeMs: maxRangeHours * HOUR,
