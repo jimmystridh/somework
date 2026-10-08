@@ -157,7 +157,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_attach",
-			description: "Attach a file you produced with qa-browser (a .webm video or a .png screenshot, given as the path relative to the evidence folder, for example videos/qa-video-1.webm) to the ticket under verification. Waits for the requester's approval.",
+			description: "Attach a file you produced with qa-browser (a .webm video or a .png screenshot, given as the path relative to the evidence folder, for example videos/qa-video-1.webm) to the ticket under verification. May wait for the requester's approval.",
 			parameters: Type.Object({ file: Type.String({ minLength: 1, maxLength: 200 }) }),
 			async execute(args: { file: string }) {
 				return wrap(async () => {
@@ -185,7 +185,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_comment",
-			description: "Post a comment on the ticket under verification (what you verified, the revision, the fixtures with their keys, the video's file name). Waits for the requester's approval.",
+			description: "Post a comment on the ticket under verification (what you verified, the revision, the fixtures with their keys, the video's file name). May wait for the requester's approval.",
 			parameters: Type.Object({ body: Type.String({ minLength: 1, maxLength: 8000 }) }),
 			async execute(args: { body: string }) {
 				return wrap(async () => {
@@ -200,7 +200,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_add_label",
-			description: `Add the label ${options.verifiedLabel} to the ticket under verification (the only label this tool adds), keeping its other labels. Allowed only for a recorded verdict \`verified\`, after you attached the video and posted the comment in this verification. Waits for the requester's approval.`,
+			description: `Add the label ${options.verifiedLabel} to the ticket under verification (the only label this tool adds), keeping its other labels. Allowed only for a recorded verdict \`verified\`, after you attached the video and posted the comment in this verification. May wait for the requester's approval.`,
 			parameters: Type.Object({ label: Type.String({ maxLength: 64 }) }),
 			async execute(args: { label: string }) {
 				return wrap(async () => {
@@ -219,7 +219,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_remove_label",
-			description: `Remove a stale ${options.verifiedLabel} label from the ticket under verification when you found it NOT fixed (verdict \`not_fixed\`). Waits for the requester's approval.`,
+			description: `Remove a stale ${options.verifiedLabel} label from the ticket under verification when you found it NOT fixed (verdict \`not_fixed\`). May wait for the requester's approval.`,
 			parameters: Type.Object({ label: Type.String({ maxLength: 64 }) }),
 			async execute(args: { label: string }) {
 				return wrap(async () => {
@@ -235,7 +235,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_transition_to_in_progress_and_reassign",
-			description: `The hand-back for a ticket that is NOT fixed (recorded verdict \`not_fixed\`): posts your comment, removes a stale ${options.verifiedLabel} label, moves the ticket to "${options.inProgressStatus}" and gives it back to whoever was assigned before it became unassigned (from its history). If no previous assignee can be found it only comments and leaves the ticket where it is. It can never move a ticket to a done status. Waits for the requester's approval.`,
+			description: `The hand-back for a ticket that is NOT fixed (recorded verdict \`not_fixed\`): posts your comment, removes a stale ${options.verifiedLabel} label, moves the ticket to "${options.inProgressStatus}" and gives it back to whoever was assigned before it became unassigned (from its history). If no previous assignee can be found it only comments and leaves the ticket where it is. It can never move a ticket to a done status. May wait for the requester's approval.`,
 			parameters: Type.Object({ comment: Type.String({ minLength: 1, maxLength: 8000 }) }),
 			async execute(args: { comment: string }) {
 				return wrap(async () => {
