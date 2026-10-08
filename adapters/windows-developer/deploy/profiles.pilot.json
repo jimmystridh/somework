@@ -13,7 +13,7 @@
       "blockPushOnFailure": true
     },
     "adm-debug": {
-      "command": "powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File C:/somework/agent/adapters/windows-developer/deploy/build-adm.ps1",
+      "command": "C:/somework/agent/adapters/windows-developer/deploy/build-adm.cmd",
       "cwd": ".",
       "timeoutMinutes": 90,
       "blockPushOnFailure": true
