@@ -269,6 +269,100 @@ export class Controls {
 		return `Asked ${agent} to add ${tokens} tokens to its ${pool} pool for today. It confirms by message and the raise ends tomorrow; the pools are in somework_handlers.`;
 	}
 
+	// ---- everything at once ----------------------------------------------------------------------------------------
+	isSuspended(): boolean {
+		return this.#deps.state.suspended !== undefined;
+	}
+
+	/**
+	 * Stops the work the platform itself starts: every active rule is paused, every event source of the hub is paused, every agent that runs handlers is
+	 * told to switch all of them off. What was changed is recorded first, so `resumeAll` restores only that (a rule or source the owner had paused
+	 * before stays paused). Each step reports its own failure; the others still run.
+	 */
+	async suspendAll(reason?: string): Promise<string> {
+		const state = this.#deps.state;
+		const record = state.suspended ?? { at: new Date().toISOString(), rules: [], sources: [], agents: [] };
+		if (reason) record.reason = clip(defang(reason), 200);
+		state.suspended = record;
+		await this.#deps.save(state);
+		const why = record.reason ?? "suspended by the owner from Telegram";
+		const lines: string[] = [];
+		const failed = (what: string, error: unknown) => lines.push(`${what}: FAILED (${clip(defang(error instanceof Error ? error.message : "error"), 120)})`);
+
+		try {
+			const active = (await this.rules()).filter((rule) => rule.status === "active");
+			for (const rule of active) {
+				await this.#deps.domain.pauseRule(rule.name);
+				if (!record.rules.includes(rule.name)) record.rules.push(rule.name);
+			}
+			lines.push(`Rules paused: ${active.length}${active.length ? ` (${active.map((rule) => rule.name).join(", ")})` : ""}`);
+		} catch (error) {
+			failed("Rules", error);
+		}
+		if (this.#deps.config.hubUrl) {
+			try {
+				const sources = (await this.sources()).sources.map((s) => s.source).filter((name) => !(state.sourcesPaused ?? {})[name]);
+				for (const source of sources) {
+					await this.setSourcePaused(source, true);
+					if (!record.sources.includes(source)) record.sources.push(source);
+				}
+				lines.push(`Event sources paused: ${sources.length}${sources.length ? ` (${sources.join(", ")})` : ""}`);
+			} catch (error) {
+				failed("Event sources", error);
+			}
+		}
+		for (const agent of Object.keys(this.#deps.config.agentHealth)) {
+			try {
+				await this.setHandler(agent, "all", true, why);
+				if (!record.agents.includes(agent)) record.agents.push(agent);
+			} catch (error) {
+				failed(`Handlers of ${agent}`, error);
+			}
+		}
+		if (record.agents.length > 0) lines.push(`Handlers switched off on: ${record.agents.join(", ")}`);
+		await this.#deps.save(state);
+		return lines.join("\n");
+	}
+
+	/** Puts back what `suspendAll` changed. A step that fails stays in the record, so running it again retries only that. */
+	async resumeAll(): Promise<string> {
+		const state = this.#deps.state;
+		const record = state.suspended;
+		if (!record) return "Nothing is suspended.";
+		const lines: string[] = [];
+		const remaining: { rules: string[]; sources: string[]; agents: string[] } = { rules: [], sources: [], agents: [] };
+		for (const rule of record.rules) {
+			try {
+				await this.#deps.domain.resumeRule(rule);
+			} catch {
+				remaining.rules.push(rule);
+			}
+		}
+		for (const source of record.sources) {
+			try {
+				await this.setSourcePaused(source, false);
+			} catch {
+				remaining.sources.push(source);
+			}
+		}
+		for (const agent of record.agents) {
+			try {
+				await this.setHandler(agent, "all", false);
+			} catch {
+				remaining.agents.push(agent);
+			}
+		}
+		lines.push(`Resumed: ${record.rules.length - remaining.rules.length} rules, ${record.sources.length - remaining.sources.length} sources, handlers of ${record.agents.length - remaining.agents.length} agents.`);
+		if (remaining.rules.length + remaining.sources.length + remaining.agents.length > 0) {
+			state.suspended = { ...record, ...remaining };
+			lines.push(`Still suspended because they could not be reached: ${[...remaining.rules, ...remaining.sources, ...remaining.agents].join(", ")}. Send /unsuspend again.`);
+		} else {
+			delete state.suspended;
+		}
+		await this.#deps.save(state);
+		return lines.join("\n");
+	}
+
 	// ---- one entry point for commands and confirmed requests --------------------------------------------------------
 	async run(action: ControlAction): Promise<string> {
 		switch (action.action) {

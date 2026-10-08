@@ -228,3 +228,41 @@ test("the manager has no call that creates, replaces or deletes a rule", async (
 	assert.ok(!/putRule|deleteRule|["`]\/v1\/rules["`/]/.test(source.replace(/`\/v1\/rules\/\$\{segment\(name\)\}\/firings\?limit=\$\{limit\}`/, "")), "only listRules, pauseRule, resumeRule and the firings read are used");
 	assert.ok(!source.includes("rules.manage"));
 });
+
+test("/suspend pauses every active rule and source and switches off every agent's handlers; /unsuspend puts back only that", async () => {
+	const b = build({ controls: config, http: hub });
+	b.domain.rules = [rule("pr-review-opened"), rule("qa-on-ticket"), rule("nightly-digest", { status: "paused" })];
+	await say(b, "/suspend something is wrong");
+	assert.deepEqual(b.domain.rulesPaused.sort(), ["pr-review-opened", "qa-on-ticket"], "a rule that was paused already is left alone");
+	assert.deepEqual(b.httpCalls.filter((c) => c.method === "POST").map((c) => c.url.split("/admin/sources/")[1]).sort(), ["github/pause", "jira/pause"]);
+	assert.deepEqual(b.domain.sentMessages.map((m) => [m.to, m.labels?.eventControl]), [["agent/reviewer", "disable-all"]]);
+	assert.equal(b.state.suspended?.reason, "something is wrong");
+	assert.deepEqual(b.state.suspended?.rules.sort(), ["pr-review-opened", "qa-on-ticket"]);
+	assert.ok(b.telegram.texts().at(-1)!.startsWith("SUSPENDED."));
+	assert.ok(b.rpcCalls.some((c) => JSON.stringify(c).includes("abort")), "the Manager's own run is stopped");
+
+	await say(b, "/status");
+	assert.ok(b.telegram.texts().at(-1)!.startsWith("SUSPENDED since"));
+	await say(b, "/approve c12345678");
+	assert.match(b.telegram.texts().at(-1)!, /suspended: send \/unsuspend/);
+
+	await say(b, "/unsuspend");
+	assert.deepEqual(b.domain.rulesResumed.sort(), ["pr-review-opened", "qa-on-ticket"], "the rule that was paused before stays paused");
+	assert.deepEqual(b.httpCalls.filter((c) => c.method === "POST").map((c) => c.url.split("/admin/sources/")[1]).sort(), ["github/pause", "github/resume", "jira/pause", "jira/resume"]);
+	assert.equal(b.domain.sentMessages.at(-1)!.labels?.eventControl, "enable-all");
+	assert.equal(b.state.suspended, undefined);
+	await say(b, "/unsuspend");
+	assert.match(b.telegram.texts().at(-1)!, /Nothing is suspended/);
+});
+
+test("a source that cannot be paused stays in the suspend record so /unsuspend retries only that", async () => {
+	let failing = true;
+	const b = build({ controls: config, http: (url, method) => (failing && url.includes("/admin/sources/jira/pause") ? { status: 500, text: "" } : hub(url, method)) });
+	b.domain.rules = [];
+	await say(b, "/suspend");
+	assert.match(b.telegram.texts().at(-1)!, /Event sources: FAILED/);
+	assert.ok(b.state.suspended, "it is still suspended");
+	failing = false;
+	await say(b, "/unsuspend");
+	assert.equal(b.state.suspended, undefined);
+});

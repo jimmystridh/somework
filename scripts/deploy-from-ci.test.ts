@@ -32,7 +32,7 @@ function rig(options: { failRoll?: string; busy?: boolean } = {}) {
 	const run = (command: string, input = readFileSync(archive)) =>
 		spawnSync("sh", [SCRIPT], { encoding: "utf8", input, env: { PATH: `${bin}:${process.env.PATH}`, PILOT_DIR: pilot, SSH_ORIGINAL_COMMAND: command } });
 	const calls = () => (existsSync(join(root, "calls.log")) ? readFileSync(join(root, "calls.log"), "utf8").trim().split("\n") : []);
-	return { run, calls };
+	return { run, calls, pilot };
 }
 
 describe("deploy-from-ci.sh", () => {
@@ -51,6 +51,15 @@ describe("deploy-from-ci.sh", () => {
 		);
 		assert.match(calls.find((call) => call.startsWith("roll reviewer")) ?? "", /http:\/\/10\.10\.10\.11:8082\/ready/);
 		assert.match(calls.find((call) => call.startsWith("roll events-hub")) ?? "", /http:\/\/10\.10\.10\.11:8090\/healthz/);
+	});
+
+	it("deploys nothing while the fleet is suspended", () => {
+		const r = rig();
+		writeFileSync(join(r.pilot, "SUSPENDED"), "2026-10-08T14:00:00Z\n");
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 4);
+		assert.match(out.stderr, /the fleet is suspended/);
+		assert.deepEqual(r.calls(), [], "no image was built and no stack rolled");
 	});
 
 	it("stops at the first stack that does not become ready", () => {

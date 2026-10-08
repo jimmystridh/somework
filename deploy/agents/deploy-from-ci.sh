@@ -18,6 +18,9 @@ case "$sha" in *[!0-9a-f]*|"") echo "the commit must be lower-case hex" >&2; exi
 [ "${#sha}" -eq 40 ] || { echo "the commit must be the full 40 characters" >&2; exit 2; }
 tag=ci-$(echo "$sha" | cut -c1-7)
 
+# the owner's kill switch (scripts/fleet-suspend.sh) leaves this file: a deployment rolls with `docker compose up -d`, which would start the stopped agents again
+if [ -e "$pilot/SUSPENDED" ]; then echo "the fleet is suspended ($pilot/SUSPENDED exists): nothing was deployed; run scripts/fleet-suspend.sh --resume and deploy again" >&2; exit 4; fi
+
 mkdir -p "$pilot/ci"
 exec 9> "$pilot/ci/lock"
 flock -n 9 || { echo "another deployment is running" >&2; exit 3; }

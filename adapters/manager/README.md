@@ -80,3 +80,9 @@ decides *when* to look; `TaskTracker` and `InboxReader` decide *what* changed, s
 ```bash
 npm ci && npm test -w @somework/manager      # from the repository root (npm workspace)
 ```
+
+## Suspending everything
+
+`/suspend [reason]` is the owner's kill switch from Telegram. It pauses every active rule and every event source of the hub, tells every agent that runs handlers to switch all of them off, cancels the tasks in flight and stops the Manager's own model run; `/approve` and the approval buttons then refuse until `/unsuspend`. What it changed is recorded in the Manager's state (`suspended`), and `/unsuspend` puts back exactly that: a rule the owner had paused before stays paused, and a step that could not be reached stays recorded so a second `/unsuspend` retries only it. `/status` shows `SUSPENDED since ...`.
+
+It works through the platform, so it cannot reach a process an agent already runs on a machine (a build, a browser run) beyond cancelling its task. `scripts/fleet-suspend.sh` stops the machines themselves (the agent stacks and the hub on the agents VM, the Windows agents with their tasks disabled so a deployment cannot start them) and `--resume` starts them again.

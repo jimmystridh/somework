@@ -37,6 +37,16 @@ export interface ManagerState {
 	chatApprovals?: Record<string, ChatApprovalRecord>;
 	/** Sources the owner paused from here (the hub does not report it). */
 	sourcesPaused?: Record<string, boolean>;
+	/** Set while the owner has suspended everything: what /suspend changed, so /unsuspend puts back exactly that and nothing else. */
+	suspended?: SuspendRecord;
+}
+
+export interface SuspendRecord {
+	at: string;
+	reason?: string;
+	rules: string[];
+	sources: string[];
+	agents: string[];
 }
 
 export interface ChatApprovalRecord {
