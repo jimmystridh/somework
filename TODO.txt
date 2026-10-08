@@ -16,7 +16,7 @@ STATUS BY AGENT (2026-10-07; everything below is deployed through CI unless note
 - Datadog triage: live, 250k budget; the noisy monitor's cost is an owner decision (DD_COOLDOWN_MINUTES).
 - Windows developer (VM 111) and QA (VM 112): deployed by CI since 2026-10-07 (.woodpecker/deploy-windows.yaml, docs/CI.md); only the wrapper deploy/windows/
   deploy-from-ci.ps1 is installed by hand, once per change of the wrapper. Windows developer: instruction -> change, build profile sdk-install and test profile
-  sdk-unit pass in 55 s; the push to jimmystridh/somework is denied (403) until its token gets Contents + Pull requests write on that repository (owner action).
+  sdk-unit pass in 55 s. Proven 2026-10-08: the agent pushed branch agent/chat-msg_01M4DESNYN10KZ8BDY2C5K7NXK and opened draft PR jimmystridh/somework#1 (one new test, sleep.test.ts; PR body: build and tests passed). The kit now takes a token per repository owner (GIT_TOKEN_OWNERS=owner=file;...): the fine-grained token of the Visma org cannot cover a personal repo, so C:\somework\secrets\git-token-jimmystridh (owner jimmystridh, only somework, expires 2027-01-06) serves jimmystridh/*. Close PR #1 when done looking.
   QA (2026-10-08): proven end to end on real tickets. SAD-1728 -> `not_fixed` (Stiltyper grid empty, console error, screenshot; the hand-back to a developer
   waited for the owner's approval as designed and was denied by timeout). SAD-507 -> `verified`: video attached, comment posted, label AgentTested added, all
   without asking. Fixes found on the way: company list (only 29 of 238 companies open), budgets (4M tokens per run), 0-byte and unfinished videos are refused,
