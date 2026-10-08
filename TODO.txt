@@ -230,7 +230,11 @@ Still open (needs a decision or access I do not have):
   build station only) is NOT copied to the agent machine, so nothing the model's shell can read opens that feed. Cost: the copy must be refreshed from the build
   station (tar, copy, extract, ACL) whenever the repository moves to other private package versions; a restore that needs a new version fails with a clear error.
   First real build: nuget restore from the copy passed and the native compile (cl.exe under MSBuild) ran on the Windows developer in a read-only job on the
-  company repository (no file changed, nothing pushed); the result is recorded below once it finished. Watch: Git LFS files stay pointers in a workspace.
+  company repository (no file changed, nothing pushed). A full compile is long: the first attempts (model-run command; service profile in a fresh workspace) were
+  stopped by the 30-minute chat limit and the 60-minute job cap before it finished. Therefore adm-debug is a persistentWorkspace profile (one workspace per
+  repository and profile, so object files stay and later builds are incremental), timeoutMinutes 240, the machine's job cap 300 (managed.env). The first full
+  build was started 2026-10-08 13:51 UTC through `instruct: ... build: adm-debug`; its result (build ok/failed, log artifact, Adm.exe) is the proof still to read.
+  Watch: Git LFS files stay pointers in a workspace; a failed job leaves its changes in the shared workspace.
 - The sandbox is a local unprivileged account plus firewall rules: a weaker boundary than the
   container sandbox. [DECISION] throwaway VM or container if the code on that machine must not
   reach its other data.
