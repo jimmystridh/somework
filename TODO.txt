@@ -662,6 +662,18 @@ D. TELEGRAM AND SLACK AS EVENT SOURCES, AND HOW A BOT RESPONDS OR STARTS A CONVE
   which rules may run without a human approving them (section 11).
 
 --------------------------------------------------------------------------------------
+12b. THE KILL SWITCH (2026-10-08)
+--------------------------------------------------------------------------------------
+- Telegram /suspend [reason] and /unsuspend (adapters/manager/README.md, "Suspending everything"): pauses every rule and event source, switches off every agent's
+  handlers, cancels tasks in flight, stops the Manager's own run, then stops the agent stacks and the hub on the agents VM and the Windows agents over ssh
+  (MANAGER_HOST_CONTROL); /unsuspend starts hub, agents and Windows agents and puts back exactly what /suspend changed. Approvals are refused while suspended. The flag
+  file ~/somework-pilot/SUSPENDED makes the CI deploy wrappers refuse (exit 4) and a disabled Windows agent task makes the Windows wrapper refuse.
+- Not covered: the receiver keeps queuing webhooks for 24 hours only (an event older than that is lost); the QA machine's SQL Server and the CI server keep running;
+  the Manager's own brain (the pi-demo container) is never stopped; a resume does not replay the work that was cancelled.
+- New credential: a manager-only ssh key (fleet-control-key on the agents VM) authorised on both Windows machines for the forced command fleet-control.ps1 (suspend
+  or resume); add it to the secrets inventory (section 13). Hand-installed files: fleet-control.ps1 and the deploy wrappers on the machines.
+
+--------------------------------------------------------------------------------------
 13. TO INVESTIGATE: SECRETS AND TOKEN MANAGEMENT (raised 2026-10-08)
 --------------------------------------------------------------------------------------
 Why now: the first push of the Windows developer to a personal repository failed because a fine-grained GitHub token has exactly ONE resource owner (the

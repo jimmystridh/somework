@@ -4,6 +4,7 @@ import type { DomainApi, RuleSummary } from "./domain.ts";
 import { call, type CallOptions, type CallResult } from "./http.ts";
 import { PolicyError } from "./policy.ts";
 import { clip, defang } from "./redact.ts";
+import type { HostControls } from "./host.ts";
 import type { ManagerState, SaveState, TrackedTask } from "./state.ts";
 
 export interface ControlsConfig {
@@ -151,6 +152,10 @@ export interface ControlsDeps {
 	domainPendingApprovals?: () => Promise<number>;
 	http?: (url: string, options?: CallOptions) => Promise<CallResult>;
 	readToken?: (path: string) => Promise<string>;
+	/** The processes: the agent stacks on this machine and the Windows agents. Without it /suspend only reaches what the platform controls. */
+	host?: HostControls;
+	/** For tests: how long to wait for the hub to answer after it was started. */
+	hubWaitMs?: number;
 }
 
 /** Everything the owner can look at and switch off: rules in the domain, event sources in the hub, handlers in the agents. Creating a rule is deliberately not here. */
@@ -271,7 +276,7 @@ export class Controls {
 
 	// ---- everything at once ----------------------------------------------------------------------------------------
 	isSuspended(): boolean {
-		return this.#deps.state.suspended !== undefined;
+		return this.#deps.state.suspended !== undefined || (this.#deps.host?.isSuspended() ?? false);
 	}
 
 	/**
@@ -321,15 +326,44 @@ export class Controls {
 		}
 		if (record.agents.length > 0) lines.push(`Handlers switched off on: ${record.agents.join(", ")}`);
 		await this.#deps.save(state);
+		if (this.#deps.host) {
+			try {
+				lines.push("Processes:", ...(await this.#deps.host.suspend()).map((line) => `  ${line}`));
+			} catch (error) {
+				failed("Processes", error);
+			}
+		}
 		return lines.join("\n");
+	}
+
+	async #waitForHub(): Promise<void> {
+		if (!this.#deps.config.hubUrl) return;
+		const until = Date.now() + (this.#deps.hubWaitMs ?? 90_000);
+		while (Date.now() < until) {
+			try {
+				await this.sources();
+				return;
+			} catch {
+				await new Promise((resolve) => setTimeout(resolve, Math.min(3000, Math.max(50, until - Date.now()))));
+			}
+		}
 	}
 
 	/** Puts back what `suspendAll` changed. A step that fails stays in the record, so running it again retries only that. */
 	async resumeAll(): Promise<string> {
 		const state = this.#deps.state;
 		const record = state.suspended;
-		if (!record) return "Nothing is suspended.";
 		const lines: string[] = [];
+		// the processes first: the hub has to be up for its sources to be resumed and the agents for the handlers to be switched on
+		if (this.#deps.host?.isSuspended()) {
+			try {
+				lines.push("Processes:", ...(await this.#deps.host.resume()).map((line) => `  ${line}`));
+			} catch (error) {
+				lines.push(`Processes: FAILED (${clip(defang(error instanceof Error ? error.message : "error"), 120)})`);
+			}
+			if (record && record.sources.length > 0) await this.#waitForHub();
+		}
+		if (!record) return lines.length > 0 ? lines.join("\n") : "Nothing is suspended.";
 		const remaining: { rules: string[]; sources: string[]; agents: string[] } = { rules: [], sources: [], agents: [] };
 		for (const rule of record.rules) {
 			try {

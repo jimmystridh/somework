@@ -16,14 +16,14 @@ STACKS=${STACKS:-"pi-agent reviewer aikido-fixer datadog-triage"}
 here=$(cd "$(dirname "$0")" && pwd)
 
 if [ "${1:-}" = "--resume" ]; then
-  action=up; flag=-Resume
+  action=up; word=resume
   ssh "$AGENTS_HOST" "rm -f ~/somework-pilot/SUSPENDED; cd ~/somework-pilot && for d in $STACKS_FIRST $STACKS; do [ -f \$d/compose.yaml ] && (cd \$d && echo \"== start \$d\" && docker compose up -d 2>&1 | tail -2); done"
 else
-  action=stop; flag=
+  action=stop; word=suspend
   ssh "$AGENTS_HOST" "date -u +%FT%TZ > ~/somework-pilot/SUSPENDED; cd ~/somework-pilot && for d in $STACKS $STACKS_FIRST; do [ -f \$d/compose.yaml ] && (cd \$d && echo \"== stop \$d\" && docker compose stop 2>&1 | tail -2); done; docker ps --format '{{.Names}} {{.Status}}'"
 fi
 for host in $WINDOWS_HOSTS; do
   echo "### $host"
-  scp -q "$here/fleet-suspend.ps1" "$host:C:/somework/fleet-suspend.ps1" && ssh "$host" "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\somework\\fleet-suspend.ps1 $flag"
+  scp -q "$here/../deploy/windows/fleet-control.ps1" "$host:C:/somework/bin/fleet-control.ps1" && ssh "$host" "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\somework\\bin\\fleet-control.ps1 $word"
 done
 echo "done: $action"

@@ -19,6 +19,8 @@ export interface Config {
 	approvals: { pollMs: number };
 	events: EventIntakeConfig & { pollMs: number };
 	controls: ControlsConfig;
+	/** Path of the JSON file that names the stacks and the Windows machines /suspend and /unsuspend stop and start (MANAGER_HOST_CONTROL). */
+	hostControl?: string;
 }
 
 const need = (env: NodeJS.ProcessEnv, name: string): string => {
@@ -89,6 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			timeZone: env.MANAGER_QUIET_TZ ?? defaultEventIntake.timeZone,
 			...(env.MANAGER_QUIET_HOURS ? { quietHours: env.MANAGER_QUIET_HOURS } : {}),
 		},
+		...(env.MANAGER_HOST_CONTROL ? { hostControl: env.MANAGER_HOST_CONTROL } : {}),
 		controls: {
 			hubUrl: env.MANAGER_HUB_URL,
 			hubTokenFile: env.MANAGER_HUB_TOKEN_FILE,

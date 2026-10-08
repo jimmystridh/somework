@@ -208,7 +208,7 @@ export class TelegramBridge implements Owner {
 		const [, kind, choice, id] = match as unknown as [string, string, string, string];
 		const valid = kind === "ap" ? DOMAIN_APPROVAL_ID.test(id) : CONTROL_REQUEST_ID.test(id);
 		if (!valid) return void (await answer("That button does not work any more."));
-		if (choice === "y" && this.state.suspended) return void (await answer("Everything is suspended: /unsuspend first."));
+		if (choice === "y" && this.isSuspended()) return void (await answer("Everything is suspended: /unsuspend first."));
 		try {
 			const result = choice === "y" ? await this.service.approve(id) : await this.service.denyAny(id);
 			await answer(result.ok ? "Done." : "Not done.");
@@ -236,7 +236,7 @@ export class TelegramBridge implements Owner {
 				const status = await this.rpc.command("get_state");
 				const waiting = this.service?.pending().length ?? 0;
 				const open = this.tracker?.activeIds().length ?? 0;
-				return say(`${this.state.suspended ? `SUSPENDED since ${this.state.suspended.at.slice(0, 16)}Z${this.state.suspended.reason ? ` (${this.state.suspended.reason})` : ""}\n` : ""}Manager ${status.isStreaming ? "working" : "idle"}\nModel: ${status.model?.provider}/${status.model?.id}\nThinking: ${status.thinkingLevel}\nWorkspace: /workspace\nTasks in flight: ${open}, approvals waiting: ${waiting}`);
+				return say(`${this.state.suspended ? `SUSPENDED since ${this.state.suspended.at.slice(0, 16)}Z${this.state.suspended.reason ? ` (${this.state.suspended.reason})` : ""}\n` : this.isSuspended() ? "SUSPENDED (the processes are stopped; /unsuspend starts them)\n" : ""}Manager ${status.isStreaming ? "working" : "idle"}\nModel: ${status.model?.provider}/${status.model?.id}\nThinking: ${status.thinkingLevel}\nWorkspace: /workspace\nTasks in flight: ${open}, approvals waiting: ${waiting}`);
 			}
 			case "/suspend":
 				return this.suspendEverything(say, argument);
@@ -270,7 +270,7 @@ export class TelegramBridge implements Owner {
 				});
 			case "/approve":
 				return this.needService(say, async (service) => {
-					if (this.state.suspended) return say("Everything is suspended: send /unsuspend before approving anything.");
+					if (this.isSuspended()) return say("Everything is suspended: send /unsuspend before approving anything.");
 					if (!argument) return say("Usage: /approve <id>");
 					try {
 						return say((await service.approve(argument)).message);
@@ -305,7 +305,7 @@ export class TelegramBridge implements Owner {
 				return this.needService(say, async (service) => {
 					if (!argument || !service.chats) return say("Usage: /chatapprove <id> or /chatdeny <id>, with the id from the question.");
 					const approved = name.toLowerCase() === "/chatapprove";
-					if (approved && this.state.suspended) return say("Everything is suspended: send /unsuspend before approving anything.");
+					if (approved && this.isSuspended()) return say("Everything is suspended: send /unsuspend before approving anything.");
 					try {
 						const { agent } = await service.chats.decide(argument, approved);
 						await say(`${approved ? "Approved" : "Denied"} for ${defang(agent)}.`);
@@ -369,6 +369,11 @@ export class TelegramBridge implements Owner {
 		await this.rpc.command("abort", {}, 60_000).catch(() => {});
 		lines.push("The Manager's own work is stopped. Agents that are running a job outside the platform's reach (a build, a browser run) stop when their task is canceled; to stop the machines themselves use scripts/fleet-suspend.sh.");
 		return say(["SUSPENDED.", ...lines, "Send /unsuspend to put everything back."].join("\n"));
+	}
+
+	/** The recorded suspension, or the flag file of the machines (also left by scripts/fleet-suspend.sh). */
+	isSuspended(): boolean {
+		return this.state.suspended !== undefined || (this.service?.controls?.isSuspended() ?? false);
 	}
 
 	controlsOf(service: ManagerService): Controls {

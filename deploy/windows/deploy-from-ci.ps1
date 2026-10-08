@@ -188,6 +188,8 @@ function Wait-AgentIdle([int]$seconds) {
     Fail "the $role agent has been busy for $([int]($seconds / 60)) minutes: it is not replaced in the middle of a job; run the deployment again when it is idle"
 }
 Wait-AgentIdle 1500
+# the owner's kill switch (fleet-control.ps1 suspend) disables the agent's task: deploying would only start it again or fail half way
+if ((Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue).State -eq 'Disabled') { Fail "the $role agent's task is disabled (the fleet is suspended): nothing was deployed; resume the fleet and deploy again" 4 }
 Backup-QaApp
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3

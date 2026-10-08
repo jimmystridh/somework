@@ -266,3 +266,88 @@ test("a source that cannot be paused stays in the suspend record so /unsuspend r
 	await say(b, "/unsuspend");
 	assert.equal(b.state.suspended, undefined);
 });
+
+import { mkdtempSync, existsSync, writeFileSync as writeText } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
+import { HostControls, parseHostConfig, type Exec } from "../src/host.ts";
+
+const hostRig = (options: { failing?: string } = {}) => {
+	const pilotDir = mkdtempSync(joinPath(tmpdir(), "pilot-"));
+	const calls: string[] = [];
+	const exec: Exec = async (file, args, opts) => {
+		const line = file === "ssh" ? `ssh ${args.at(-2)} ${args.at(-1)}` : `${file} ${args.join(" ")} @${opts.cwd?.split("/").at(-1)}`;
+		calls.push(line);
+		return { code: options.failing && line.includes(options.failing) ? 1 : 0, output: options.failing && line.includes(options.failing) ? "refused" : "" };
+	};
+	const config = parseHostConfig({
+		pilotDir,
+		firstStacks: ["events-hub"],
+		stacks: ["pi-agent", "reviewer"],
+		windows: [{ name: "qa", host: "10.0.0.44" }, { name: "windows-developer", host: "10.0.0.45" }],
+		ssh: { user: "js", keyFile: "/k", knownHostsFile: "/kh" },
+	});
+	return { pilotDir, calls, host: new HostControls(config, exec, () => new Date("2026-10-08T15:00:00Z")) };
+};
+
+test("the host side stops the agents, then the hub, then the Windows agents, and starts them in the opposite order", async () => {
+	const { host, calls, pilotDir } = hostRig();
+	assert.equal(host.isSuspended(), false);
+	const stopped = await host.suspend();
+	assert.deepEqual(calls, ["docker compose stop @pi-agent", "docker compose stop @reviewer", "docker compose stop @events-hub", "ssh js@10.0.0.44 suspend", "ssh js@10.0.0.45 suspend"].sort((a, b) => 0));
+	assert.ok(stopped.every((line) => !line.includes("FAILED")));
+	assert.ok(existsSync(joinPath(pilotDir, "SUSPENDED")), "the deploy wrapper sees the flag");
+	assert.equal(host.isSuspended(), true);
+	calls.length = 0;
+	await host.resume();
+	assert.deepEqual(calls.filter((c) => c.startsWith("docker")), ["docker compose up -d @events-hub", "docker compose up -d @pi-agent", "docker compose up -d @reviewer"]);
+	assert.equal(host.isSuspended(), false);
+});
+
+test("a step that fails keeps the flag, so nothing deploys over a half-started fleet", async () => {
+	const { host, calls } = hostRig({ failing: "10.0.0.45 resume" });
+	await host.suspend();
+	const lines = await host.resume();
+	assert.ok(lines.some((l) => l === "windows-developer: resume FAILED (refused)"));
+	assert.equal(host.isSuspended(), true);
+	assert.ok(calls.length > 0);
+});
+
+test("the host control file is validated", () => {
+	assert.throws(() => parseHostConfig({ pilotDir: "relative" }), /absolute/);
+	assert.throws(() => parseHostConfig({ pilotDir: "/p", stacks: ["../x"] }), /plain names/);
+	assert.throws(() => parseHostConfig({ pilotDir: "/p", windows: [{ name: "qa", host: "10.0.0.1" }] }), /ssh section/);
+});
+
+test("/suspend stops the processes after the platform steps and /unsuspend starts them before resuming rules, sources and handlers", async () => {
+	const rig = hostRig();
+	const b = build({ controls: config, http: hub });
+	// the host is part of the controls: rebuild them with it
+	const { Controls } = await import("../src/controls.ts");
+	const controls = new Controls({ domain: b.domain, state: b.state, save: async () => {}, config, host: rig.host, hubWaitMs: 100, http: async (url, opts) => hub(url, opts?.method), readToken: async () => "t" });
+	b.service.controls = controls;
+	b.domain.rules = [rule("qa-on-ticket")];
+	await say(b, "/suspend");
+	assert.deepEqual(b.domain.rulesPaused, ["qa-on-ticket"]);
+	assert.ok(rig.calls.some((c) => c === "docker compose stop @events-hub"));
+	assert.ok(b.telegram.texts().at(-1)!.includes("Processes:"));
+	assert.equal(rig.host.isSuspended(), true);
+
+	rig.calls.length = 0;
+	await say(b, "/unsuspend");
+	assert.ok(rig.calls.some((c) => c === "docker compose up -d @events-hub"));
+	assert.deepEqual(b.domain.rulesResumed, ["qa-on-ticket"]);
+	assert.equal(rig.host.isSuspended(), false);
+	assert.equal(b.state.suspended, undefined);
+});
+
+test("/unsuspend also starts what was stopped by hand: the flag file alone is enough", async () => {
+	const rig = hostRig();
+	writeText(joinPath(rig.pilotDir, "SUSPENDED"), "by hand\n");
+	const b = build({ controls: config, http: hub });
+	const { Controls } = await import("../src/controls.ts");
+	b.service.controls = new Controls({ domain: b.domain, state: b.state, save: async () => {}, config, host: rig.host, hubWaitMs: 50, http: async (url, opts) => hub(url, opts?.method), readToken: async () => "t" });
+	await say(b, "/unsuspend");
+	assert.ok(rig.calls.some((c) => c === "docker compose up -d @events-hub"));
+	assert.equal(rig.host.isSuspended(), false);
+});

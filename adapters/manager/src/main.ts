@@ -7,6 +7,7 @@ import { TelegramBridge } from "./bridge.ts";
 import { loadConfig } from "./config.ts";
 import { ChatSessions } from "./chat.ts";
 import { Controls } from "./controls.ts";
+import { HostControls, loadHostConfig } from "./host.ts";
 import { RestDomain } from "./domain.ts";
 import { EventIntake } from "./event-intake.ts";
 import { ReactionApprovals } from "./reaction-approvals.ts";
@@ -84,9 +85,11 @@ async function main(): Promise<void> {
 	const rpc = new ChildPiRpc(child);
 	const bridge = new TelegramBridge({ state, api, rpc, save, tracker, notifications });
 	const reactionApprovals = new ReactionApprovals({ domain, owner: bridge, state, save, log });
+	const host = config.hostControl ? new HostControls(loadHostConfig(config.hostControl)) : undefined;
 	const controls = new Controls({
 		domain,
 		config: config.controls,
+		...(host ? { host } : {}),
 		state,
 		save,
 		tasks: () => tracker.tasks,
