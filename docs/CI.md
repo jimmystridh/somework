@@ -60,4 +60,6 @@ What `deploy/windows/deploy-from-ci.ps1` does, under the mutex `Global\somework-
 
 Everything machine-specific therefore lives in the repository: profiles and managed settings (`adapters/<role>/deploy/profiles.pilot.json`, `managed.env`), firewall allow lists, the QA skill overlay (`adapters/qa/deploy/skills-overlay/qa.md`) and the QA stack scripts. The overlay names the companies that open on the QA machine (the sharded back end answers 428 "Tenant not set up" for a company without a shard number); update that list there when the machine's databases change.
 
+The wrapper never re-applies a folder permission that is already there: Windows pushes a grant into every existing file below the folder, and over the QA machine's many checkouts (each with a full `node_modules`) that took half an hour per deploy. A deploy now takes about 20 minutes, most of it `npm ci` and the agent restart.
+
 Bootstrap by hand, once per change of the wrapper itself (a key that could replace the wrapper could run anything): copy `deploy/windows/deploy-from-ci.ps1` to `C:\somework\bin\` on each machine, set the forced command in `C:\ProgramData\ssh\administrators_authorized_keys` for the pipeline's key, allow the runner (10.10.10.15) through the machine's firewall on port 22, and put the private key into the Woodpecker secret.

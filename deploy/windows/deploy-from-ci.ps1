@@ -142,7 +142,11 @@ function Ensure-Access {
     $excluded = @("$root\workspaces")
     if ($role -eq 'qa') { $excluded += @("$root\qa-app", 'C:\tools\bun', 'C:\Users\svc-qa\.bun', 'C:\Users\svc-qa\AppData\Local\Temp') }
     foreach ($path in $excluded) { Add-MpPreference -ExclusionPath $path -ErrorAction SilentlyContinue }
-    if ($role -eq 'qa') { & icacls.exe "$root\workspaces" /grant 'svc-qa-web:(OI)(CI)M' | Out-Null }
+    # a grant is propagated by Windows to every existing file below it: over all the checkouts' node_modules that took half an hour on every deploy, so only grant what is missing
+    if ($role -eq 'qa') {
+        $present = (& icacls.exe "$root\workspaces") -match 'svc-qa-web:\(OI\)\(CI\)\(M\)'
+        if (-not $present) { & icacls.exe "$root\workspaces" /grant 'svc-qa-web:(OI)(CI)M' | Out-Null }
+    }
 }
 Ensure-Access
 
