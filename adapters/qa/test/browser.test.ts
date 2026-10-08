@@ -63,6 +63,8 @@ describe("the browser daemon", () => {
 			assert.match(snapshot, /url: http:\/\/127\.0\.0\.1:3000\//);
 			assert.match(snapshot, /\[e1\] link "New"/);
 			assert.match(await cmd(["click", "e1"]), /clicked e1/);
+			assert.match(await cmd(["click-text", "Mallar"]), /clicked "Mallar"/);
+			assert.ok(backend.calls.includes("clickText Mallar"));
 			assert.match(await cmd(["fill", "e2", "ACME", "AB"]), /filled e2/);
 			assert.match(await cmd(["press", "Enter"]), /pressed/);
 			assert.match(await cmd(["wait", "--text", "Saved"]), /waited/);

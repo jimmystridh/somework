@@ -108,6 +108,14 @@ export class PlaywrightBackend implements BrowserBackend {
 		return this.#info();
 	}
 
+	async clickText(text: string): Promise<PageInfo> {
+		const target = this.#page.getByText(text, { exact: true });
+		if ((await target.count()) === 0) throw new Error(`no element with the text "${text}" on the page (take a new snapshot)`);
+		await target.first().click({ timeout: 30_000 });
+		await this.#page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});
+		return this.#info();
+	}
+
 	async fill(ref: string, text: string): Promise<PageInfo> {
 		const target = this.#target(ref);
 		if ((await target.count()) === 0) throw new Error(`no control ${ref} on the page (take a new snapshot)`);

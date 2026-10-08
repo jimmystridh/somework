@@ -49,6 +49,10 @@ export class FakeBackend implements BrowserBackend {
 		this.#record(`click ${ref}`);
 		return this.#info();
 	}
+	async clickText(text: string) {
+		this.#record(`clickText ${text}`);
+		return this.#info();
+	}
 	async fill(ref: string, text: string) {
 		this.#record(`fill ${ref} ${text}`);
 		return this.#info();

@@ -128,6 +128,8 @@ export class BrowserDaemon {
 			}
 			case "click":
 				return `clicked ${args.ref}; now ${page(await this.#backend.click(ref()))}`;
+			case "click-text":
+				return `clicked "${str("text", 80)}"; now ${page(await this.#backend.clickText(str("text", 80)))}`;
 			case "fill":
 				return `filled ${args.ref}; now ${page(await this.#backend.fill(ref(), str("text", 5000)))}`;
 			case "press":
@@ -169,7 +171,7 @@ export class BrowserDaemon {
 			case "status":
 				return `recording: ${this.#recording}\nfiles: ${JSON.stringify(this.files())}`;
 			default:
-				throw new UsageError(`unknown command "${cmd}" (open, snapshot, click, fill, press, wait, screenshot, errors, video-start, video-stop, status)`);
+				throw new UsageError(`unknown command "${cmd}" (open, snapshot, click, click-text, fill, press, wait, screenshot, errors, video-start, video-stop, status)`);
 		}
 	}
 

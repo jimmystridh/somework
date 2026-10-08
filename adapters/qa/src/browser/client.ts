@@ -10,6 +10,7 @@ const USAGE = `usage: node cli.ts --state <browser.json> <command> [arguments]
   open <url>                        open a page (only the hosts the agent allows)
   snapshot                          text outline of the page; every control has a ref like e12
   click <ref>                       click a control from the last snapshot
+  click-text <text>                 click the element whose visible text is exactly this (a tree node or label that has no ref in the snapshot)
   fill <ref> <text...>              type into a field
   press <key>                       press a key, for example Enter or Control+A
   wait [--ms N] [--text T] [--selector S]
@@ -44,6 +45,10 @@ export function parseCli(argv: readonly string[]): CliCommand {
 		case "click":
 			if (params.length !== 1) throw new CliUsageError("click takes one ref");
 			args.ref = params[0];
+			break;
+		case "click-text":
+			if (params.length < 1) throw new CliUsageError("click-text takes the visible text of the element");
+			args.text = params.join(" ");
 			break;
 		case "fill":
 			if (params.length < 2) throw new CliUsageError("fill takes a ref and a text");
