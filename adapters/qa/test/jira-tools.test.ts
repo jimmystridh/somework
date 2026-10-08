@@ -32,7 +32,8 @@ before(async () => {
 	mkdirSync(join(evidence, "videos"), { recursive: true });
 	mkdirSync(join(evidence, "screenshots"), { recursive: true });
 	writeFileSync(join(evidence, "videos", "qa-video-1.webm"), Buffer.alloc(4096, 1));
-	writeFileSync(join(evidence, "videos", "qa-video-empty.webm"), "");
+	writeFileSync(join(evidence, "videos", "qa-video-2.webm"), "");
+	writeFileSync(join(evidence, "videos", "page@abc123.webm"), Buffer.alloc(4096, 1));
 	writeFileSync(join(evidence, "screenshots", "failure.png"), "png");
 	writeFileSync(join(evidence, "notes.txt"), "not evidence");
 });
@@ -114,7 +115,8 @@ describe("the verified label", () => {
 
 	it("refuses a recording without frames and keeps a verified comment behind the video", async () => {
 		await verify();
-		assert.match((await run("jira_attach", { file: "videos/qa-video-empty.webm" })).text, /no frames/);
+		assert.match((await run("jira_attach", { file: "videos/qa-video-2.webm" })).text, /no frames/);
+		assert.match((await run("jira_attach", { file: "videos/page@abc123.webm" })).text, /not finished/);
 		assert.match((await run("jira_comment", { body: "verified" })).text, /attach the video first/);
 		assert.equal(session.job!.jira.commented, false);
 		assert.equal(session.job!.jira.attachedVideo, false);

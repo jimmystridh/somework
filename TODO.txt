@@ -17,10 +17,11 @@ STATUS BY AGENT (2026-10-07; everything below is deployed through CI unless note
 - Windows developer (VM 111) and QA (VM 112): deployed by CI since 2026-10-07 (.woodpecker/deploy-windows.yaml, docs/CI.md); only the wrapper deploy/windows/
   deploy-from-ci.ps1 is installed by hand, once per change of the wrapper. Windows developer: instruction -> change, build profile sdk-install and test profile
   sdk-unit pass in 55 s; the push to jimmystridh/somework is denied (403) until its token gets Contents + Pull requests write on that repository (owner action).
-  QA (2026-10-07): the whole chain runs (instruction -> checkout -> app stack -> company SmokeTestSteg1 -> browser -> verdict -> Jira comment); a real
-  `verified` verdict with comment and label was produced once, but its video was 0 bytes (page crash while recording on the 2-processor machine) and the harness
-  downgraded it; since then the ticket tools refuse an empty video and a verified comment before the video. Still open: a run that ends verified with a valid
-  video on a real ticket. Known environment limits: dev server hangs silently at start on ~4 of 10 starts (start-app.ps1 restarts it after 40 s), clicks take
+  QA (2026-10-08): proven end to end on real tickets. SAD-1728 -> `not_fixed` (Stiltyper grid empty, console error, screenshot; the hand-back to a developer
+  waited for the owner's approval as designed and was denied by timeout). SAD-507 -> `verified`: video attached, comment posted, label AgentTested added, all
+  without asking. Fixes found on the way: company list (only 29 of 238 companies open), budgets (4M tokens per run), 0-byte and unfinished videos are refused,
+  warm-up of the web app, restart of a silent dev server, click-text for plain-text controls. Still weak: video-stop can take many minutes on the 2-processor
+  machine (the job then finishes late); the first SAD-507 video attached to Jira is the partial file written until the agent gave up waiting. Known environment limits: dev server hangs silently at start on ~4 of 10 starts (start-app.ps1 restarts it after 40 s), clicks take
   seconds, recording takes up to a minute to start and stop. A bigger machine (4+ processors) is the real fix.
 - Manager: live (rolled by rsync, not CI): /ask, /do, tools for controls and budget raises.
 - Not done by design or waiting for the owner: GitHub Apps for the bots (passkey), the 9 Synthetics monitors (Datadog UI), bun for the agents (on hold),

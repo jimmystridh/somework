@@ -164,6 +164,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 					const { current } = await writable();
 					const extension = /\.(webm|png)$/i.exec(args.file)?.[0]?.toLowerCase();
 					if (!extension || !/^(videos|screenshots)\//.test(args.file.replaceAll("\\", "/"))) throw new Refusal("only .webm files under videos/ and .png files under screenshots/ of the evidence folder can be attached");
+					if (extension === ".webm" && !/^videos\/qa-video-[0-9]+\.webm$/.test(args.file.replaceAll("\\", "/"))) throw new Refusal("that recording is not finished (a finished one is named videos/qa-video-N.webm): run `video-stop` again, give it a long timeout, and wait for \"saved videos/qa-video-N.webm\"");
 					const absolute = resolveInside(current.evidenceDir, args.file, { flavour: nativeFlavour() });
 					let size: number;
 					try {

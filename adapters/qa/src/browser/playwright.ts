@@ -15,6 +15,8 @@ export interface PlaywrightOptions {
 	maxSnapshotChars?: number;
 }
 
+/** The encoder shares two processors with the application: a smaller picture keeps `video-stop` from taking minutes. */
+const VIDEO_SIZE = { width: 800, height: 450 };
 const MAX_ERRORS = 30;
 const NAVIGATION_TIMEOUT = 90_000;
 
@@ -56,7 +58,7 @@ export class PlaywrightBackend implements BrowserBackend {
 	async #newContext(recordDir?: string, storageState?: unknown): Promise<void> {
 		const context = await this.#browser.newContext({
 			viewport: this.#size,
-			...(recordDir ? { recordVideo: { dir: recordDir, size: this.#size } } : {}),
+			...(recordDir ? { recordVideo: { dir: recordDir, size: VIDEO_SIZE } } : {}),
 			...(storageState ? { storageState } : {}),
 		});
 		await context.route("**/*", (route: any) => {
