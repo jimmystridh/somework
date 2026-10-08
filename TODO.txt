@@ -22,7 +22,7 @@ STATUS BY AGENT (2026-10-07; everything below is deployed through CI unless note
   without asking. Fixes found on the way: company list (only 29 of 238 companies open), budgets (4M tokens per run), 0-byte and unfinished videos are refused,
   warm-up of the web app, restart of a silent dev server, click-text for plain-text controls. Still weak: video-stop can take many minutes on the 2-processor
   machine (the job then finishes late); the first SAD-507 video attached to Jira is the partial file written until the agent gave up waiting. Known environment limits: dev server hangs silently at start on ~4 of 10 starts (start-app.ps1 restarts it after 40 s), clicks take
-  seconds, recording takes up to a minute to start and stop. A bigger machine (4+ processors) is the real fix.
+  seconds, recording takes up to a minute to start and stop. Resized 2026-10-08: QA machine (VM 112) now 6 cores / 16 GB, Windows developer (VM 111) 4 cores / 12 GB (Proxmox config, clean shutdown and start); not yet re-measured. The QA agent's hand-back of a not-fixed ticket no longer waits for approval (QA_JIRA_APPROVE=none in managed.env).
 - Manager: live (rolled by rsync, not CI): /ask, /do, tools for controls and budget raises.
 - Not done by design or waiting for the owner: GitHub Apps for the bots (passkey), the 9 Synthetics monitors (Datadog UI), bun for the agents (on hold),
   Slack/Telegram gateway design, on-demand Windows machines, off-host backups, hypervisor default-deny.
