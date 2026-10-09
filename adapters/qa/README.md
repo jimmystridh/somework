@@ -137,11 +137,11 @@ machine. Role-specific:
 
 QA answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice). A **question** from the manager or a person
 gets one bounded, read-only turn: tools `read, agent_status`, no commands, no changes, no approvals, an answer built from the service's own records
-(`agent_status`) and, where it has one, a read-only checkout. An **instruction** (`instruct: ...`, from `agent/manager` only) becomes a `qa.verify` task for the ticket key named in the text (`instruct: verify ABC-123`), with optional lines `repo:`, `ref:`, `scenario:`, `app:`. Writes to the ticket system still wait for approval, which is asked of the manager.
+(`agent_status`) and, where it has one, a read-only checkout. An **instruction** (`instruct: ...`, from `agent/manager` only) becomes a `qa.verify` task for the ticket key named in the text (`instruct: verify ABC-123`), with optional lines `repo:`, `ref:`, `scenario:`, `app:`. Several keys (`instruct: verify ABC-123 ABC-124`) or a state (`instruct: verify the tickets in Test`, a line `status: <name>`, or a line `jql: <query>`; needs the ticket system) become a queue: the agent says which tickets it found (those that already carry the verified label are skipped unless the text says "again"), verifies them one at a time and answers after each, at most `QA_CHAT_BATCH_MAX` (default 5, up to 10) per instruction and within the chat budget of the day. Writes to the ticket system still wait for approval, which is asked of the manager.
 It runs as a job of the normal handler, with the role's own tools, guards and approvals, a chat budget of its own (150 000 tokens, 15 minutes by
 default, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES`) and the `chat` share of the daily token limit (`CHAT_TOKEN_SHARE`); a step that needs
 approval is asked of the manager in the conversation. Settings: `CHAT_MODE`, `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS`, `CHAT_REPOSITORY_URL`,
-`CHAT_REPOSITORY_REF`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
+`CHAT_REPOSITORY_REF`, `QA_CHAT_BATCH_MAX`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
 `packages/agent-kit/README.md`).
 
 ## Skills
