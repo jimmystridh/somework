@@ -36,6 +36,47 @@ export const DEFAULT_BATCH_MAX = 5;
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const quoted = (text: string): string => text.replace(/["\\]/g, "");
 
+const VERDICT_WORDS: Record<string, string> = {
+	verified: "VERIFIED",
+	not_fixed: "NOT FIXED",
+	blocked: "BLOCKED: the verification could not be completed",
+	skipped: "SKIPPED",
+};
+const squeeze = (text: unknown, max: number): string => {
+	const flat = String(text ?? "").replace(/\s+/g, " ").trim();
+	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/**
+ * A finished verification in words for the conversation: what it found first (the notes), then every acceptance check with what was seen,
+ * what was created for the test, what was written to the ticket and which files hold the evidence. Chat replies are the manager's view of the
+ * work, so the findings are in them and not only in the ticket.
+ */
+export function describeQaResult(result: unknown): string | undefined {
+	if (!result || typeof result !== "object") return undefined;
+	const r = result as Record<string, any>;
+	if (typeof r.verdict !== "string") return undefined;
+	const lines = [`${r.ticket ? `${r.ticket}: ` : ""}${VERDICT_WORDS[r.verdict] ?? r.verdict}`];
+	const revision = [r.revision?.frontendSha ? `front end ${String(r.revision.frontendSha).slice(0, 12)}` : "", r.revision?.backendRevision ? `back end ${squeeze(r.revision.backendRevision, 40)}` : ""].filter(Boolean);
+	if (revision.length > 0) lines.push(`Revision tested: ${revision.join(" · ")}`);
+	if (typeof r.notes === "string" && r.notes.trim() !== "") lines.push("", `Findings: ${squeeze(r.notes, 1500)}`);
+	const checks = Array.isArray(r.acceptanceChecks) ? r.acceptanceChecks : [];
+	if (checks.length > 0) {
+		const passed = checks.filter((check: any) => check?.passed === true).length;
+		lines.push("", `Acceptance checks (${passed} passed, ${checks.length - passed} failed):`);
+		for (const check of checks.slice(0, 20)) lines.push(`${check?.passed === true ? "✔" : "✘"} ${squeeze(check?.criterion, 200)}${check?.evidence ? ` — ${squeeze(check.evidence, 300)}` : ""}`);
+		if (checks.length > 20) lines.push(`… and ${checks.length - 20} more`);
+	}
+	const fixtures = Array.isArray(r.fixtures) ? r.fixtures : [];
+	if (fixtures.length > 0) lines.push("", `Created for the test: ${fixtures.slice(0, 8).map((fixture: any) => `${squeeze(fixture?.description, 120)}${fixture?.keys ? ` (${squeeze(fixture.keys, 80)})` : ""}`).join("; ")}`);
+	const jira = r.jira ?? {};
+	const wrote = [jira.commented ? "commented" : "", jira.labelled ? "labelled" : "", jira.transitioned ? "moved back to In Progress" : "", jira.attached ? "video attached" : ""].filter(Boolean);
+	lines.push("", `Ticket: ${wrote.length > 0 ? wrote.join(", ") : "nothing was written"}${jira.skippedReason ? ` (${squeeze(jira.skippedReason, 200)})` : ""}`);
+	const evidence = Array.isArray(r.evidence) ? r.evidence.map((item: any) => squeeze(item?.filename, 120)).filter(Boolean) : [];
+	if (evidence.length > 0) lines.push(`Evidence: ${evidence.join(", ")}`);
+	return lines.join("\n");
+}
+
 /** The verification as a tool: what the model may call when the manager asks for a ticket in plain words. */
 export function verifyTicketTool(ticketPattern: RegExp, defaults: { url?: string; ref?: string }, perTurn: number): ChatJobTool {
 	return {
@@ -70,6 +111,7 @@ export function qaChat(env: NodeJS.ProcessEnv = process.env, ticketPattern: RegE
 	return {
 		instructions: CHAT_INSTRUCTIONS,
 		openInstructions: CHAT_OPEN_INSTRUCTIONS,
+		describeResult: describeQaResult,
 		...(tools ? { extension: tools.extension, askToolNames: CHAT_READ_TOOLS } : {}),
 		...(queue ? { jobTools: [verifyTicketTool(ticketPattern, defaults, batchMax)] } : {}),
 		...(defaults.url ? { checkout: () => ({ repoUrl: defaults.url!, ...(defaults.ref ? { ref: defaults.ref } : {}) }) } : {}),

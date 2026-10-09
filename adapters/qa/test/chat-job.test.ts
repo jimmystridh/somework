@@ -72,7 +72,7 @@ describe("a ticket verification given as an instruction in chat, in a domain tha
 			return "refuse" in result ? result : { ...result, input: { ...result.input, repository: { url: remote, ref: sh(remote, "rev-parse", "main").trim() } } };
 		};
 		const reply = await chat.responderFor(handler, planned as never, roleChat.describeResult).instruct("verify QA-1");
-		assert.match(reply, /^Done \(verified\)/);
+		assert.match(reply, /^QA-1: VERIFIED\nRevision tested: front end [0-9a-f]{12}\n\nFindings: done\n\nAcceptance checks \(1 passed, 0 failed\):\n✔ the total is right — saw it/);
 		assert.match(reply, /Attachments were not uploaded to the domain/);
 		assert.match(reply, /chat-m1-qa-video-1\.webm \(video\/webm, [^)]*\): on the agent host at .*chat-artifacts\/chat-m1\//);
 		assert.deepEqual(chat.domain.calls, []);

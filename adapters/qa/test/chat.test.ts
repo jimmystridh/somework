@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { askToolNames, instructToolNames } from "@somework/agent-kit";
-import { qaChat } from "../src/chat.ts";
+import { describeQaResult, qaChat } from "../src/chat.ts";
 import { profile } from "../src/profile.ts";
 
 describe("QA in chat", () => {
@@ -118,6 +118,43 @@ describe("QA in chat", () => {
 			assert.match(((await tool!.plan({ ticket: "OTHER-1" })) as any).refuse, /not a ticket key this agent handles/);
 			assert.match(((await tool!.plan({ ticket: "ABC-1", app: "../x" })) as any).refuse, /application profile/);
 			assert.match(((await tool!.plan({ ticket: "ABC-1", repo: "http://x" })) as any).refuse, /https/);
+		});
+	});
+
+	describe("the account of a finished verification", () => {
+		const result = {
+			verdict: "not_fixed",
+			ticket: "SAD-2258",
+			revision: { frontendSha: "ac65396e88d81b2f3e60d026169e6dc53bfc68a1", backendRevision: "9f3c2" },
+			notes: "The change is not in the application: the invoice screen sends no Datadog context and the source has no such call.",
+			acceptanceChecks: [
+				{ criterion: "the invoice screen sends the Datadog context", passed: false, evidence: "network log of the save shows no context headers" },
+				{ criterion: "the screen still saves", passed: true, evidence: "saved and reloaded" },
+			],
+			fixtures: [{ description: "a test invoice", keys: "INV-77" }],
+			evidence: [{ kind: "video", filename: "task-qa-video-1.webm" }],
+			jira: { commented: true, labelled: false, transitioned: true, attached: true },
+		};
+
+		it("says the findings first, then every check with what was seen, and what was written to the ticket", () => {
+			const text = describeQaResult(result)!;
+			const lines = text.split("\n");
+			assert.equal(lines[0], "SAD-2258: NOT FIXED");
+			assert.ok(text.indexOf("Findings: The change is not in the application") < text.indexOf("Acceptance checks"), "the finding comes before the checks");
+			assert.match(text, /Revision tested: front end ac65396e88d8 · back end 9f3c2/);
+			assert.match(text, /Acceptance checks \(1 passed, 1 failed\):\n✘ the invoice screen sends the Datadog context — network log of the save shows no context headers\n✔ the screen still saves — saved and reloaded/);
+			assert.match(text, /Created for the test: a test invoice \(INV-77\)/);
+			assert.match(text, /Ticket: commented, moved back to In Progress, video attached/);
+			assert.match(text, /Evidence: task-qa-video-1\.webm/);
+		});
+
+		it("is short for a skipped ticket, keeps long evidence in bounds and leaves anything that is not a result to the default", () => {
+			assert.equal(describeQaResult({ verdict: "skipped", ticket: "X-1", jira: { skippedReason: "not a key this agent handles" }, notes: "not a key this agent handles" }), "X-1: SKIPPED\n\nFindings: not a key this agent handles\n\nTicket: nothing was written (not a key this agent handles)");
+			const long = describeQaResult({ verdict: "verified", ticket: "A-1", acceptanceChecks: [{ criterion: "c".repeat(900), passed: true, evidence: "e".repeat(2000) }], notes: "n".repeat(5000) })!;
+			assert.ok(long.length < 2600, String(long.length));
+			assert.equal(describeQaResult(undefined), undefined);
+			assert.equal(describeQaResult({ status: "done" }), undefined);
+			assert.equal(qaChat({} as NodeJS.ProcessEnv).describeResult, describeQaResult);
 		});
 	});
 });
