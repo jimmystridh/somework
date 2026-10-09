@@ -164,6 +164,18 @@ describe("the open tier: an instructor's plain message is carried out", () => {
 		assert.equal(h.jobs.length, 0, "an unfinished turn starts nothing");
 	});
 
+	it("hands an instruction the role cannot plan strictly to the open tier, and says so when there is none", async () => {
+		const h = harness({ instruct: { ...harness().deps.instruct!, input: () => ({ plain: true }) } });
+		await new ModelChatResponder({ ...h.deps, open: openDeps(h) }).handle(incoming({ text: "instruct: do something loosely worded" }));
+		assert.equal(h.requests.length, 1, "the open tier ran");
+		assert.match(h.requests[0].instruction, /tier: open/);
+		assert.match(h.requests[0].instruction, /something loosely worded/);
+		assert.deepEqual(replies(h.posts), ["all fine"]);
+		const without = harness({ instruct: { ...harness().deps.instruct!, input: () => ({ plain: true }) } });
+		await new ModelChatResponder(without.deps).handle(incoming({ text: "instruct: do something loosely worded" }));
+		assert.match(replies(without.posts)[0]!, /names nothing I can start from here/);
+	});
+
 	it("leaves a question from a person, and the instruct: prefix, on their own tiers", async () => {
 		const h = harness();
 		const responder = new ModelChatResponder({ ...h.deps, open: openDeps(h) });

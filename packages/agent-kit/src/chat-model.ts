@@ -191,9 +191,10 @@ export interface PlannedJob {
 
 /**
  * What a role makes of an instruction: a job, why it cannot, or a queue of jobs (run one after another, each answered separately; `intro` says
- * what was found and what happens, before the first one starts).
+ * what was found and what happens, before the first one starts), or "plain": nothing strict to plan, so the text is handled as a plain message
+ * (the open tier, where the model has the role's tools and job tools) when there is one.
  */
-export type PlannedInstruction = PlannedJob | { refuse: string } | { batch: PlannedJob[]; intro: string };
+export type PlannedInstruction = PlannedJob | { refuse: string } | { batch: PlannedJob[]; intro: string } | { plain: true };
 
 /**
  * A capability of the role as a tool the model may call when the instructor asks for it in plain words. The call does not run the job: it checks
@@ -819,6 +820,13 @@ export class ModelChatResponder {
 			await this.#say(message, `I cannot do that as an instruction: ${planned.refuse}`, "refused");
 			this.#deps.log("info", "chat_instruction_refused", { from: message.sender.id, reason: planned.refuse.slice(0, 200) });
 			return this.#refuse(message, "outside_contract");
+		}
+		if ("plain" in planned) {
+			if (!(settings.open && this.#deps.open)) {
+				await this.#say(message, "I cannot do that as an instruction: it names nothing I can start from here. Say which ticket or state, or ask in plain words.", "refused");
+				return this.#refuse(message, "outside_contract");
+			}
+			return await this.#openTier(message, instruction, this.#deps.ledger.chatState(), remaining, started);
 		}
 		if ("batch" in planned) return await this.#instructBatch(message, planned, started);
 		return await this.#runPlanned(message, planned, remaining, started, `chat-${message.messageId}`);

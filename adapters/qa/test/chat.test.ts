@@ -34,7 +34,7 @@ describe("QA in chat", () => {
 	});
 
 	it("refuses an instruction with no ticket, a ticket outside the configured pattern and a bad app name", () => {
-		assert.match((chat.instructInput!("verify the thing") as any).refuse, /name the ticket\(s\).*in Test/);
+		assert.match((chat.instructInput!("verify the thing") as any).refuse, /name the ticket\(s\).*in Test/, "without a ticket system there is nothing to fall back on");
 		const strict = qaChat({ CHAT_REPOSITORY_URL: "https://github.com/acme/app" } as NodeJS.ProcessEnv, /^QA-\d+$/);
 		assert.ok("refuse" in strict.instructInput!("verify ABC-1"));
 		assert.ok("input" in strict.instructInput!("verify QA-1"));
@@ -78,13 +78,17 @@ describe("QA in chat", () => {
 			assert.deepEqual(tickets(again), ["ABC-1", "ABC-2", "ABC-3"]);
 		});
 
-		it("takes a status line or a query line, and refuses what is not a plain state name", async () => {
+		it("takes a status line or a query line, and does not search for what is not a plain state name", async () => {
 			searched.length = 0;
 			await queued.instructInput!("status: Ready for QA\nverify them");
 			await queued.instructInput!("jql: project = ABC AND labels = smoke\nverify them");
 			assert.deepEqual(searched.map((entry) => entry.jql), ['status = "Ready for QA" ORDER BY updated ASC', "project = ABC AND labels = smoke"]);
-			assert.ok("refuse" in (queued.instructInput!('status: x" OR 1=1 --\nverify them') as any));
+			assert.deepEqual(queued.instructInput!('status: x" OR 1=1 --\nverify them'), { plain: true }, "not a plain state name: left to the model, never a query");
 			assert.equal(searched.length, 2, "an odd status never reaches the ticket system");
+		});
+
+		it("leaves an instruction with nothing strict in it to the model, which has the ticket tools", () => {
+			assert.deepEqual(queued.instructInput!("queue another 5 tickets from Test after the current batch, use your normal QA process"), { plain: true });
 		});
 
 		it("says why when nothing is waiting, when it cannot look tickets up, and how to ask", async () => {

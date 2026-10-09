@@ -90,7 +90,8 @@ export function qaChat(env: NodeJS.ProcessEnv = process.env, ticketPattern: RegE
 				return { batch: some.map(job), intro: `Verifying ${some.length} tickets, one at a time: ${some.join(", ")}.${more}` };
 			}
 			const jql = options.jql ? options.jql.slice(0, 500) : statusJql(options.status ?? statusIn(rest, queue?.testStatus));
-			if (jql === undefined) return { refuse: HOW };
+			// nothing strict to go on: with the ticket tools available the model works out what is meant, as for a plain message
+			if (jql === undefined) return queue ? { plain: true } : { refuse: HOW };
 			if (!queue) return { refuse: "the ticket system is not connected, so I cannot look tickets up: name them, for example `instruct: verify ABC-123 ABC-124`" };
 			const again = AGAIN.test(rest);
 			return queue.search(jql, batchMax * 4).then((found): PlannedInstruction => {
