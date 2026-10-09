@@ -39,3 +39,11 @@ svg.throughput{width:100%;height:auto;max-height:130px}.throughput line{stroke:v
 @media(max-width:760px){.platform-card.setup dl{grid-template-columns:1fr}}
 
 .logs-link{font:10px var(--mono);margin-left:10px;color:var(--muted);text-decoration:underline}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}.tab{font:12px var(--mono);padding:8px 14px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}.tab small{margin-left:8px;color:var(--muted)}.tab.selected{background:var(--ink);border-color:var(--ink);color:var(--paper)}.tab.selected small{color:#c9d0c8}.tab:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.chips.pickers{max-width:none;margin:14px 0}.chip.pick{cursor:pointer;font:10px var(--mono)}.chip.pick.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.chip.good{border-color:#c7d8c3;background:#e9efdf;color:var(--green)}.chip.bad{border-color:#dfb69f;background:#f3e9dd;color:#8a3f1f}.chip.neutral{color:var(--muted)}
+.machine-table.history tr.job{cursor:pointer}.machine-table.history tr.job:hover td{background:#eceee4}.machine-table.history td small{display:block}
+.machine-table.history tr.job-detail>td{background:#f7f6ef;padding:14px 18px}.machine-table.history tr.job-detail dl{display:grid;grid-template-columns:150px 1fr;gap:5px 14px;margin:0 0 10px}.machine-table.history tr.job-detail dt{font:10px var(--mono);color:var(--muted);text-transform:uppercase}.machine-table.history tr.job-detail dd{margin:0;word-break:break-word}.machine-table.history tr.job-detail a{color:var(--green)}
+pre.summary-text{margin:0;padding:10px 12px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px var(--mono);background:#fff;border:1px solid var(--line)}
+@media(max-width:760px){.machine-table.history tr.job-detail dl{grid-template-columns:1fr}}
+p.more{margin:12px 0 0}

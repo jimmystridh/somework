@@ -30,6 +30,7 @@ const MAX_TASKS: usize = 4000;
 const PAGE: usize = 1000;
 const MAX_PAGES: usize = 40;
 const AUDIT_VERIFY_EVERY: Duration = Duration::from_secs(600);
+const USAGE_EVERY: Duration = Duration::from_secs(60);
 const CERT_CHECK_EVERY: Duration = Duration::from_secs(3600);
 
 pub const NOT_EXPOSED: [&str; 5] = [
@@ -548,6 +549,7 @@ pub fn assemble(inputs: &Inputs, book: &TaskBook, now_ms: i64) -> SomeWork {
         work,
         consumers,
         events,
+        usage: None,
     }
 }
 
@@ -573,6 +575,9 @@ pub struct Collector {
     agent_http: reqwest::Client,
     agent_targets: Vec<events::AgentTarget>,
     grafana_url: Option<String>,
+    usage: Option<crate::usage::UsageClient>,
+    /// The last read of the usage numbers and when: they change slowly and cost six queries, so they are read once a minute.
+    usage_read: Option<(Instant, Option<fleet_shared::somework::UsageView>)>,
     /// Recent firings by rule, read again only when the rule's counters moved.
     firings: BTreeMap<String, ((u64, u64), Value)>,
 }
@@ -615,6 +620,8 @@ impl Collector {
             agent_http: events::agent_http_client()?,
             agent_targets: Vec::new(),
             grafana_url: None,
+            usage: None,
+            usage_read: None,
             firings: BTreeMap::new(),
         })
     }
@@ -627,6 +634,25 @@ impl Collector {
     pub fn with_grafana(mut self, url: Option<String>) -> Self {
         self.grafana_url = url;
         self
+    }
+
+    pub fn with_usage(mut self, usage: crate::usage::UsageClient) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+
+    async fn usage_view(&mut self, now: i64) -> Option<fleet_shared::somework::UsageView> {
+        let client = self.usage.as_ref()?;
+        if let Some((at, view)) = &self.usage_read {
+            if at.elapsed() < USAGE_EVERY {
+                return view.clone();
+            }
+        }
+        let fresh = client.read(iso(now)).await;
+        // a failed read keeps the last good numbers instead of blanking the table
+        let kept = fresh.or_else(|| self.usage_read.as_ref().and_then(|(_, view)| view.clone()));
+        self.usage_read = Some((Instant::now(), kept.clone()));
+        kept
     }
 
     pub fn with_agent_targets(mut self, targets: Vec<events::AgentTarget>) -> Self {
@@ -813,6 +839,7 @@ impl Collector {
             events: EventInputs { rules, firings, hub, agents: agent_reads, agents_configured: self.agent_targets.len() as u64, grafana_url: self.grafana_url.clone() },
         };
         let mut sample = assemble(&inputs, &self.book, now);
+        sample.usage = self.usage_view(now).await;
         if !problems.is_empty() {
             sample.error = Some(format!("Some SomeWork reads failed: {}", problems.join("; ")));
         }

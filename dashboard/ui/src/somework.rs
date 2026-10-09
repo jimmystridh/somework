@@ -18,7 +18,7 @@ fn dash(value: Option<String>) -> String {
 pub fn SomeWorkSection(data: Option<SomeWork>, failed: bool, now: i64) -> Element {
     let Some(data) = data else {
         let waiting = if failed { "The SomeWork view could not be loaded." } else { "Waiting for the first SomeWork sample…" };
-        return rsx! { section { id: "somework", class: "section", div { class: "section-heading", h2 { span { "02 /" }, "SomeWork" } }, p { class: "empty", "{waiting}" } } };
+        return rsx! { section { id: "somework", class: "section", div { class: "section-heading", h2 { span { "01 /" }, "SomeWork" } }, p { class: "empty", "{waiting}" } } };
     };
     let providers = data.agents.iter().filter(|agent| agent.role == "provider").count();
     let alive = data.agents.iter().filter(|agent| agent.role == "provider" && agent.liveness_at(now).healthy()).count();
@@ -45,7 +45,7 @@ pub fn SomeWorkSection(data: Option<SomeWork>, failed: bool, now: i64) -> Elemen
     let notice = if failed { Some("Dashboard connection lost. SomeWork values are not current; retrying automatically.".to_string()) } else { data.error.clone() };
     rsx! {
         section { id: "somework", class: "section",
-            div { class: "section-heading", h2 { span { "02 /" }, "SomeWork" }, span { class: "section-note", "AGENT COLLABORATION · METADATA ONLY · SAMPLE {sampled}" } }
+            div { class: "section-heading", h2 { span { "01 /" }, "SomeWork" }, span { class: "section-note", "AGENT COLLABORATION · METADATA ONLY · SAMPLE {sampled}" } }
             if let Some(notice) = notice { div { class: "notice", role: "status", "{notice}" } }
             div { class: "summary six", "aria-label": "SomeWork summary",
                 div { span { class: "metric-label", "PROVIDERS ALIVE" }, strong { "{providers_text}" }, small { "Heartbeat within 90 s" } }

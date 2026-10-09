@@ -49,6 +49,13 @@ and when it changed, capabilities, model, budgets, tools and approval patterns, 
 expiry note), skills, chat and event settings, and the prompt text. The prompt is operator wording, shown as plain text only through the private
 gateway. The dashboard's source is in `dashboard/` (see its README for the build).
 
+## Work history and model usage (2026-10-09)
+
+Two additions go beyond the metadata of the domain, and each is a deliberate step:
+
+- **Work history.** Each agent's `/history` (its job record, on the private health port) is read per agent: task id (shortened), capability, outcome or failure code, what the job was about (ticket key, Aikido issue), start and end, duration, tokens by kind, cost, pull request address and branch, acceptance-check counts and the agent's own short summary of the outcome. The summary is free wording that an agent wrote about its result (redacted and cut at 800 characters on its side, plain text on the page). Task input, the model's conversation and artifact content are not in the record.
+- **Model usage and cost.** `somework_llm_tokens_total` and `somework_llm_cost_usd_total` from the central Prometheus through the read-only Grafana endpoint, with a Viewer token of its own (`somework-fleet-reader`) and a firewall rule on the Grafana host for the dashboard's address. It reads nothing else.
+
 ## What it cannot show
 
 - Backup age (the domain does not record it).

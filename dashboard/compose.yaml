@@ -23,6 +23,7 @@ services:
       DATA_DIR: /data
       GRAFANA_URL: ${GRAFANA_URL:-}                             # optional: https address of Grafana; with a `logs` selector per agents-health.json entry it makes the log links
       SOMEWORK_URL: ${SOMEWORK_URL:?the domain's TLS address}
+      METRICS_URL: ${METRICS_URL:-}                             # optional: the read-only Grafana endpoint (https) that reaches the central Prometheus, for the model usage and cost section; needs metrics-token and metrics-ca.pem in the secrets directory
     tmpfs: ['/tmp:size=16m,mode=1777']
     healthcheck:
       test: ['CMD', '/app/fleet-server', '--healthcheck']

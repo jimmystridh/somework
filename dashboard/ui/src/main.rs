@@ -1,11 +1,13 @@
 mod components;
 mod format;
+mod history;
 mod somework;
 
-use components::{AgentCard, MachineTable, Platform};
+use components::{MachineTable, Platform};
+use history::{UsagePanel, WorkHistory};
 use somework::SomeWorkSection;
 use dioxus::prelude::*;
-use fleet_shared::{AgentState, Fleet, somework::SomeWork, timestamp_ms};
+use fleet_shared::{Fleet, somework::SomeWork, timestamp_ms};
 use gloo_timers::future::TimeoutFuture;
 
 fn main() {
@@ -114,29 +116,15 @@ fn App() -> Element {
                 .collect()
         })
         .unwrap_or_default();
-    let agents: Vec<_> = data
-        .as_ref()
-        .map(|data| {
-            data.agents
-                .iter()
-                .map(|agent| {
-                    fleet_shared::Agent::from_heartbeat(Some(agent.heartbeat.clone()), time)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let online = agents
-        .iter()
-        .filter(|agent| agent.heartbeat.state.online())
-        .count();
-    let working = agents
-        .iter()
-        .filter(|agent| agent.heartbeat.state == AgentState::Working)
-        .count();
-    let idle = agents
-        .iter()
-        .filter(|agent| agent.heartbeat.state == AgentState::Idle)
-        .count();
+    let sw = somework.read().clone();
+    let listed = sw.as_ref().map(|work| work.events.agents.len());
+    let answering = sw.as_ref().map(|work| work.events.agents.iter().filter(|agent| agent.reachable).count());
+    let agents_text = match (answering, listed) {
+        (Some(answering), Some(listed)) if listed > 0 => format!("{answering} / {listed}"),
+        _ => "—".to_string(),
+    };
+    let handlers_on: usize = sw.as_ref().map(|work| work.events.agents.iter().map(|agent| agent.handlers.iter().filter(|handler| handler.enabled).count()).sum()).unwrap_or(0);
+    let jobs_listed: usize = sw.as_ref().map(|work| work.events.agents.iter().map(|agent| agent.jobs.len()).sum()).unwrap_or(0);
     let running = vms
         .iter()
         .filter(|machine| machine.status == "running")
@@ -169,10 +157,11 @@ fn App() -> Element {
             a { class: "brand", href: "/fleet/", "aria-label": "Fleet home", "F", span { "／" } }
             div { class: "rail-caption", "AGENT CLUSTER" }
             nav { "aria-label": "Dashboard navigation",
-                a { class: "selected", href: "#agents", span { "01" }, "Agents" }
-                a { href: "#somework", span { "02" }, "SomeWork" }
-                a { href: "#machines", span { "03" }, "Machines" }
-                a { href: "#platform", span { "04" }, "Platform" }
+                a { class: "selected", href: "#somework", span { "01" }, "SomeWork" }
+                a { href: "#history", span { "02" }, "Work history" }
+                a { href: "#usage", span { "03" }, "Model usage" }
+                a { href: "#machines", span { "04" }, "Machines" }
+                a { href: "#platform", span { "05" }, "Platform" }
                 a { href: "/d/agent-cluster-logs", span { "↗" }, "Grafana logs" }
             }
             div { class: "rail-bottom", span { class: "lock", "◆" }, "PRIVATE NETWORK", br {}, small { "Read-only · Rust + Dioxus" } }
@@ -187,17 +176,14 @@ fn App() -> Element {
             section { class: "intro", div { h1 { "Your fleet.", br {}, em { "In focus." } }, p { "Agents at work. Machines behind them.", br {}, "One place to keep a pulse on the cluster." } }, div { class: "intro-note", span { class: "coordinate", "59° N / OPERATIONS" }, span { "{clock}" }, span { class: "coordinate", "LIVE · 15 SECOND REFRESH" } } }
             if let Some(notice) = notice { div { class: "notice", role: "status", "{notice}" } }
             section { class: "summary", "aria-label": "Fleet summary",
-                div { span { class: "metric-label", "AGENTS ONLINE" }, strong { if data.is_some() { "{online}" } else { "—" } }, small { "{working} working · {idle} idle" } }
+                div { span { class: "metric-label", "AGENTS ANSWERING" }, strong { "{agents_text}" }, small { "{handlers_on} event handlers on · {jobs_listed} jobs recorded" } }
                 div { span { class: "metric-label", "MACHINES RUNNING" }, strong { "{running} / {vms.len()}" }, small { "Virtual machines on Proxmox" } }
                 div { span { class: "metric-label", "VM CPU LOAD" }, strong { "{format::number(cpu, 1)}%" }, small { "Weighted by assigned vCPUs" } }
                 div { span { class: "metric-label", "VM MEMORY" }, strong { "{format::bytes(memory)}" }, small { "Hypervisor-reported usage" } }
             }
-            section { id: "agents", class: "section",
-                div { class: "section-heading", h2 { span { "01 /" }, "Agents" }, span { class: "section-note", "LIVE STATE, NOT LOG ACTIVITY" } }
-                if agents.is_empty() { article { class: "agent-card skeleton", h3 { "Pi" }, p { "Waiting for a live heartbeat from the agent host." } } }
-                for agent in agents { AgentCard { key: "{agent.heartbeat.id}", agent, now: time } }
-            }
-            SomeWorkSection { data: somework.read().clone(), failed: somework_failed(), now: time }
+            SomeWorkSection { data: sw.clone(), failed: somework_failed(), now: time }
+            WorkHistory { data: sw.clone(), now: time }
+            UsagePanel { usage: sw.and_then(|work| work.usage), now: time }
             if let Some(data) = data {
                 MachineTable { machines: data.machines.clone() }
                 Platform { machines: data.machines, storage: data.storage }

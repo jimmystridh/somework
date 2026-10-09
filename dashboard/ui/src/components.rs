@@ -1,6 +1,6 @@
-use crate::format::{ago, bytes, duration, number, text};
+use crate::format::{bytes, duration, number};
 use dioxus::prelude::*;
-use fleet_shared::{Agent, Machine, Sample, Storage};
+use fleet_shared::{Machine, Sample, Storage};
 
 #[component]
 pub fn Status(value: String) -> Element {
@@ -13,54 +13,6 @@ fn Meter(value: Option<f64>) -> Element {
     let value = value.unwrap_or(0.0).clamp(0.0, 100.0);
     let count = (value / 5.0).round() as usize;
     rsx! { div { class: if value > 80.0 { "meter warn" } else { "meter" }, role: "meter", "aria-label": "Usage", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": "{value:.0}", for i in 0..20 { i { class: if i < count { "on" } else { "" } } } } }
-}
-
-#[component]
-pub fn AgentCard(agent: Agent, now: i64) -> Element {
-    let state = agent.heartbeat.state.label();
-    let model = text(&agent.heartbeat.model);
-    let thinking = text(&agent.heartbeat.thinking);
-    let observed = ago(Some(&agent.heartbeat.observed_at), now);
-    let last_activity = ago(agent.heartbeat.last_activity_at.as_deref(), now);
-    let link = agent
-        .heartbeat
-        .session_id
-        .as_ref()
-        .map(|id| {
-            format!(
-                "/d/agent-cluster-pi?var-session={}",
-                urlencoding::encode(id)
-            )
-        })
-        .unwrap_or_else(|| "/d/agent-cluster-pi".into());
-    let messages = agent
-        .heartbeat
-        .messages
-        .map(|count| count.to_string())
-        .unwrap_or_else(|| "—".into());
-    let tokens = agent
-        .heartbeat
-        .tokens
-        .map(|count| count.to_string())
-        .unwrap_or_else(|| "—".into());
-    rsx! {
-        article { class: "agent-card",
-            div { class: "agent-main",
-                div { class: "agent-icon", "aria-hidden": "true", "π" }
-                div { h3 { "Pi ", span { class: "description", "/ {agent.heartbeat.id}" } }, p { class: "description", "{agent.host} · VM {agent.vm_id}" }, Status { value: state.to_string() }, p { class: "heartbeat", "Heartbeat {observed}", if agent.stale { " · state is not current" } }, a { class: "agent-link", href: link, "View conversation ↗" } }
-            }
-            div { class: "agent-specs",
-                div { span { class: "metric-label", "MODEL / THINKING" }, b { "{model} / {thinking}" } }
-                div { span { class: "metric-label", "WORKSPACE / CHANNEL" }, b { "{agent.workspace} · Telegram" } }
-                div { span { class: "metric-label", "BROWSER" }, b { "{agent.browser}" } }
-            }
-            div { class: "agent-specs",
-                div { class: "split", div { span { class: "metric-label", "CONTAINER CPU" }, b { "{number(agent.heartbeat.cpu_percent, 1)}%" } }, div { span { class: "metric-label", "MEMORY" }, b { "{bytes(agent.heartbeat.memory_bytes)} / {bytes(agent.heartbeat.memory_limit)}" } } }
-                div { span { class: "metric-label", "SESSION ACTIVITY" }, b { "{messages} messages · {tokens} tokens" } }
-                div { span { class: "metric-label", "LAST ACTIVITY" }, b { "{last_activity}" } }
-            }
-        }
-    }
 }
 
 #[component]
@@ -122,7 +74,7 @@ pub fn MachineTable(machines: Vec<Machine>) -> Element {
         .collect();
     rsx! {
         section { id: "machines", class: "section",
-            div { class: "section-heading", h2 { span { "03 /" }, "Machines" }, label { class: "search", span { "⌕" }, input { r#type: "search", value: "{search}", placeholder: "Find a machine…", "aria-label": "Find a machine", oninput: move |event| search.set(event.value()) } } }
+            div { class: "section-heading", h2 { span { "04 /" }, "Machines" }, label { class: "search", span { "⌕" }, input { r#type: "search", value: "{search}", placeholder: "Find a machine…", "aria-label": "Find a machine", oninput: move |event| search.set(event.value()) } } }
             div { class: "machine-table", table {
                 caption { "Virtual machines · CPU and RAM sampled by Proxmox; primary disk shows provisioned capacity" }
                 thead { tr { th { "Machine / role" }, th { "State" }, th { "CPU / last hour" }, th { "Memory" }, th { "Network ↙ / ↗" }, th { "Disk / uptime" } } }
@@ -141,7 +93,7 @@ pub fn Platform(machines: Vec<Machine>, storage: Vec<Storage>) -> Element {
     let host = machines.into_iter().find(|machine| machine.kind == "node");
     rsx! {
         section { id: "platform", class: "section",
-            div { class: "section-heading", h2 { span { "04 /" }, "Platform" }, span { class: "section-note", "THE FOUNDATION" } }
+            div { class: "section-heading", h2 { span { "05 /" }, "Platform" }, span { class: "section-note", "THE FOUNDATION" } }
             div { class: "platform-grid",
                 div { class: "platform-card",
                     if let Some(host) = host {
@@ -158,7 +110,7 @@ pub fn Platform(machines: Vec<Machine>, storage: Vec<Storage>) -> Element {
                         StoragePool { key: "{pool.name}", pool }
                     }
                 }
-                div { class: "platform-card links", span { class: "metric-label", "GO DEEPER" }, a { href: "/d/agent-cluster-pi", "Pi conversations", span { "↗" } }, a { href: "/d/agent-cluster-logs", "Cluster logs", span { "↗" } }, p { "Detailed, redacted conversations and searchable logs stay in Grafana." } }
+                div { class: "platform-card links", span { class: "metric-label", "GO DEEPER" }, a { href: "/d/agent-cluster-logs", "Cluster logs", span { "↗" } }, p { "Detailed, redacted conversations and searchable logs stay in Grafana." } }
             }
         }
     }

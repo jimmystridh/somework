@@ -20,6 +20,45 @@ pub struct SomeWork {
     pub work: Work,
     pub consumers: Vec<ConsumerLag>,
     pub events: Events,
+    /// Model usage and cost from the central Prometheus; `None` when it is not configured or could not be read.
+    pub usage: Option<UsageView>,
+}
+
+/// Tokens by kind and cost in US dollars over a period.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UsageAmount {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost_usd: f64,
+}
+
+impl UsageAmount {
+    pub fn is_empty(&self) -> bool {
+        self.input == 0 && self.output == 0 && self.cache_read == 0 && self.cache_write == 0 && self.cost_usd <= 0.0
+    }
+}
+
+/// What one agent spent on one model, over the last 24 hours, 7 days and 30 days.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UsageRow {
+    pub agent: String,
+    pub provider: String,
+    pub model: String,
+    pub day: UsageAmount,
+    pub week: UsageAmount,
+    pub month: UsageAmount,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UsageView {
+    pub observed_at: Option<String>,
+    /// Most expensive over the last 30 days first.
+    pub rows: Vec<UsageRow>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -343,6 +382,36 @@ pub struct AgentEvents {
     pub logs: Option<String>,
     /// How the agent is set up, from its `/profile` endpoint; `None` when it did not answer or is too old to have one.
     pub setup: Option<AgentSetup>,
+    /// Its recent jobs, newest first, from its `/history` endpoint; empty when it did not answer or is too old to have one.
+    pub jobs: Vec<JobView>,
+}
+
+/// One finished job of an agent, from its own journal: what it was about, how it ended and what it cost. `summary` is the agent's short redacted
+/// wording of the outcome (a verdict's notes, a fix's description, a failure message), shown as plain text.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct JobView {
+    pub task: String,
+    pub capability: String,
+    /// `task` for a job from the domain, `chat` for an instruction given in chat.
+    pub source: String,
+    /// `completed` or `failed`.
+    pub state: String,
+    pub outcome: Option<String>,
+    /// A ticket key or an Aikido issue.
+    pub subject: Option<String>,
+    pub ended_at: Option<String>,
+    pub started_at: Option<String>,
+    pub seconds: Option<f64>,
+    pub tokens: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cost_usd: Option<f64>,
+    pub summary: Option<String>,
+    pub pr_url: Option<String>,
+    pub branch: Option<String>,
+    pub checks_passed: Option<u64>,
+    pub checks_failed: Option<u64>,
 }
 
 /// An agent's setup as it describes itself: prompt, tools, budgets, model, repository access, chat and event settings. Copied by name

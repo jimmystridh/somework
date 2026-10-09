@@ -48,9 +48,6 @@ pub fn ago(value: Option<&str>, now: i64) -> String {
         format!("{} ago", duration(Some(seconds)))
     }
 }
-pub fn text(value: &Option<String>) -> &str {
-    value.as_deref().unwrap_or("—")
-}
 
 /// Seconds as a short span: `12s`, `3m 2s`, `2h 5m`, `4d 1h`; `—` when unknown.
 pub fn age(value: Option<f64>) -> String {

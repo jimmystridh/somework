@@ -218,6 +218,8 @@ pub struct AgentRead {
     pub status: Option<Value>,
     /// The agent's `/profile` document, when its status address ends in `/status` and the agent answered.
     pub profile: Option<Value>,
+    /// The agent's `/history` document (its recent jobs), under the same conditions.
+    pub history: Option<Value>,
 }
 
 fn disabled_code(value: Option<&Value>) -> Option<String> {
@@ -282,6 +284,7 @@ fn agents(reads: &[AgentRead]) -> Vec<AgentEvents> {
             handlers: read.status.as_ref().map(handlers).unwrap_or_default(),
             pools: read.status.as_ref().and_then(pools),
             setup: read.profile.as_ref().and_then(crate::setup::setup),
+            jobs: read.history.as_ref().map(crate::history::jobs).unwrap_or_default(),
             logs: read.logs.clone(),
         })
         .collect();
@@ -504,7 +507,11 @@ pub async fn read_agents(http: &reqwest::Client, targets: &[AgentTarget]) -> Vec
                 Some(url) if status.is_some() => fetch_json(&http, &url).await,
                 _ => None,
             };
-            AgentRead { id: target.id, logs: target.logs, status, profile }
+            let history = match sibling_url(&target.url, &format!("history?limit={HISTORY_LIMIT}")) {
+                Some(url) if status.is_some() => fetch_json(&http, &url).await,
+                _ => None,
+            };
+            AgentRead { id: target.id, logs: target.logs, status, profile, history }
         });
     }
     let mut out = Vec::new();
@@ -523,10 +530,16 @@ async fn fetch_json(http: &reqwest::Client, url: &str) -> Option<Value> {
     }
 }
 
-/// The profile lives next to the status document on the same health port: `…/status` -> `…/profile`.
+/// The profile and the history live next to the status document on the same health port: `…/status` -> `…/profile`.
 fn profile_url(status_url: &str) -> Option<String> {
-    status_url.strip_suffix("/status").map(|base| format!("{base}/profile"))
+    sibling_url(status_url, "profile")
 }
+
+fn sibling_url(status_url: &str, path: &str) -> Option<String> {
+    status_url.strip_suffix("/status").map(|base| format!("{base}/{path}"))
+}
+
+const HISTORY_LIMIT: usize = 200;
 
 pub fn agent_http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder().timeout(Duration::from_secs(3)).connect_timeout(Duration::from_secs(2)).build().map_err(|_| "cannot build the HTTP client".to_string())
@@ -622,7 +635,7 @@ hub_inbox_size 0
                 stats: Some(json!({"sources": [{"name": "github", "paused": false, "token": "PRIVATE TOKEN"}], "schedules": [{"name": "nightly_digest", "nextRunAt": "2026-10-06T00:30:00Z", "cron": "PRIVATE CRON"}],
                     "receiver": {"queued": 2, "headers": "PRIVATE HEADERS"}, "extra": "PRIVATE"})),
             },
-            agents: vec![AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(pool_status(10, false, false)) }],
+            agents: vec![AgentRead { logs: None, profile: None, history: None, id: "agent/triage".into(), status: Some(pool_status(10, false, false)) }],
             agents_configured: 1,
             ..Default::default()
         };
@@ -681,7 +694,7 @@ hub_inbox_size 0
 
     #[test]
     fn handlers_and_pools_are_reduced_to_numbers_flags_and_a_reason_code() {
-        let agents = agents(&[AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(pool_status(250, true, false)) }, AgentRead { logs: None, profile: None, id: "agent/down".into(), status: None }]);
+        let agents = agents(&[AgentRead { logs: None, profile: None, history: None, id: "agent/triage".into(), status: Some(pool_status(250, true, false)) }, AgentRead { logs: None, profile: None, history: None, id: "agent/down".into(), status: None }]);
         let triage = agents.iter().find(|a| a.id == "agent/triage").unwrap();
         assert!(triage.reachable);
         let flaky = triage.handlers.iter().find(|h| h.name == "flaky").unwrap();
@@ -700,7 +713,7 @@ hub_inbox_size 0
         let mut inputs = EventInputs {
             rules: Some(domain_rules()),
             hub: HubRead::Read { metrics: metrics(HUB_METRICS), stats: None },
-            agents: vec![AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(pool_status(300, false, true)) }],
+            agents: vec![AgentRead { logs: None, profile: None, history: None, id: "agent/triage".into(), status: Some(pool_status(300, false, true)) }],
             agents_configured: 1,
             ..Default::default()
         };
@@ -721,7 +734,7 @@ hub_inbox_size 0
         let mut inputs = EventInputs {
             rules: Some(domain_rules()),
             hub: HubRead::Read { metrics: metrics("hub_receiver_up 1\nhub_receiver_oldest_pending_age_seconds 4\nhub_dead_letters{source=\"github\"} 0\n"), stats: None },
-            agents: vec![AgentRead { logs: None, profile: None, id: "agent/triage".into(), status: Some(json!({"handlers": [{"name": "triage", "enabled": true}], "tokenPools": {"tasks": {"used": 1, "limit": 10}, "events": {"used": 1, "limit": 10, "throttled": false, "stopped": false}}})) }],
+            agents: vec![AgentRead { logs: None, profile: None, history: None, id: "agent/triage".into(), status: Some(json!({"handlers": [{"name": "triage", "enabled": true}], "tokenPools": {"tasks": {"used": 1, "limit": 10}, "events": {"used": 1, "limit": 10, "throttled": false, "stopped": false}}})) }],
             agents_configured: 1,
             ..Default::default()
         };
@@ -777,6 +790,26 @@ hub_inbox_size 0
 
         let down = HubClient::new("http://127.0.0.1:9".into(), None, None, true).unwrap();
         assert!(matches!(down.read().await, HubRead::Unreachable));
+    }
+
+    #[tokio::test]
+    async fn an_agents_history_is_read_with_a_limit_and_reduced_to_job_metadata() {
+        use axum::{Json, Router, extract::RawQuery, routing::get};
+        let app = Router::new().route("/status", get(|| async { Json(json!({"handlers": []})) })).route(
+            "/history",
+            get(|RawQuery(query): RawQuery| async move {
+                assert_eq!(query.as_deref(), Some("limit=200"));
+                Json(json!({"jobs": [{"taskId": "task_01ABCDEFGH", "capability": "qa.verify@1", "state": "completed", "outcome": "verified", "subject": "SAD-1", "secret": "PRIVATE"}]}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let reads = read_agents(&agent_http_client().unwrap(), &[AgentTarget { id: "agent/qa".into(), url: format!("{base}/status"), logs: None }]).await;
+        let events = assemble(&EventInputs { agents: reads, agents_configured: 1, ..Default::default() }, None, None, NOW);
+        let jobs = &events.agents[0].jobs;
+        assert_eq!((jobs.len(), jobs[0].subject.as_deref(), jobs[0].outcome.as_deref()), (1, Some("SAD-1"), Some("verified")));
+        assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE"));
     }
 
     #[test]

@@ -8,6 +8,14 @@ Each agent serves `/profile` next to `/status` on its health port (`packages/age
 
 `agents-health.json` entries may carry `"logs": "{container=\"somework-pi-agent-1\"}"` (a stream selector of one to three matchers); with `GRAFANA_URL` set (plain https, no path) the page links each agent to its logs in Grafana Explore. Only plain selectors and addresses are accepted.
 
+## Work history and model usage
+
+Each agent also serves `/history` next to `/status` (its job record: the latest 500 jobs with what each was about, how it ended, duration, tokens by kind, cost, pull request and a short redacted summary). The dashboard reads up to 200 per agent through `server/src/history.rs` (names, restricted alphabets, the summary as plain text) and shows them under "Work history": one tab per agent (Aikido fixer and QA first), the outcomes as filter chips, a row per job that opens to its details. The jobs are the ones an agent has recorded since it runs a version with the extended record.
+
+"Model usage and cost" reads the central Prometheus through the read-only Grafana endpoint (`server/src/usage.rs`): the agents' `somework_llm_tokens_total` and `somework_llm_cost_usd_total` as increases over 24 hours, 7 days and 30 days per agent, provider and model. It needs `METRICS_URL` (https, for example `https://10.10.10.13:9444`) and, in the secrets directory, `metrics-token` (a Viewer token: `deploy/grafana/provision-reader.py --name somework-fleet-reader`) and `metrics-ca.pem`; the Grafana host must allow the dashboard's address. Without them the section says it is not available. The numbers are read once a minute.
+
+The old heartbeat card of the "Pi" demo agent is gone from the page (the `/ingest/pi` endpoint still accepts heartbeats and is unused).
+
 ## Build
 
 ```

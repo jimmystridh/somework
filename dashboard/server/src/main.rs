@@ -2,10 +2,12 @@ mod assertion;
 mod auth;
 mod certs;
 mod events;
+mod history;
 mod prometheus;
 mod proxmox;
 mod setup;
 mod somework;
+mod usage;
 
 use axum::{
     Json, Router,
@@ -193,6 +195,13 @@ async fn somework_collector(secrets: &std::path::Path, preview: bool) -> Result<
         collector = collector.with_hub(events::HubClient::new(hub_url, ca.as_deref(), bearer, plain)?);
     }
     collector = collector.with_grafana(env::var("GRAFANA_URL").ok().and_then(|url| events::grafana_base(&url)));
+    if let Ok(metrics_url) = env::var("METRICS_URL") {
+        // Model usage and cost: the central Prometheus through the read-only Grafana endpoint (a Viewer token and the CA that signed it).
+        let token = fs::read_to_string(secrets.join("metrics-token")).await.map_err(|_| "METRICS_URL is set but metrics-token is missing from the secrets directory".to_string())?;
+        let ca = fs::read_to_string(secrets.join("metrics-ca.pem")).await.map_err(|_| "METRICS_URL is set but metrics-ca.pem is missing from the secrets directory".to_string())?;
+        let datasource = env::var("METRICS_DATASOURCE").unwrap_or_else(|_| "cluster-prometheus".into());
+        collector = collector.with_usage(usage::UsageClient::new(metrics_url, token, &ca, datasource)?);
+    }
     if let Ok(contents) = fs::read(secrets.join("agents-health.json")).await {
         collector = collector.with_agent_targets(events::parse_agent_targets(&contents)?);
     }
