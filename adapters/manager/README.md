@@ -54,7 +54,7 @@ model, and the Manager itself never answers a chat message, so chats cannot loop
   action digest and revision). The Manager polls for pending ones (`MANAGER_APPROVAL_POLL_MS`) and tells the owner once: capability,
   side effects, rule and the event it fired on, budget, a redacted input summary, expiry, with Approve and Deny buttons (or
   `/approve <id>`, `/deny <id>`). The decision carries the digest and revision the domain reported, so the domain's own checks stay in
-  charge. Decided elsewhere or expired approvals are reported once. Only the paired owner's taps and commands count.
+  charge. Decided elsewhere or expired approvals are reported once. Only the paired owner's taps and commands count. **Standing approvals** (`MANAGER_AUTO_APPROVE=qa.verify@1=qa-on-ticket`, comma separated `<capability>@<version>=<rule name>`) are the owner's decision made once: a pending approval of that capability, for a task the domain records as started by that rule's reaction, is approved by the Manager at once with the same digest and revision, without a message to the owner (the audit shows the comment). Anything else, a task whose origin cannot be read, a refusal by the domain, and the time everything is suspended, goes to the owner as above.
 * **Event forwarding, no model.** Events the Manager is woken by (rules owned by `agent/manager`) are shown as one compact message each
   when the topic is on the allow-list, de-duplicated by event id, limited per topic and hour (the excess is summarised), optionally held
   during quiet hours, and the schedule topic produces a digest (tasks, approvals, rules, sources, handlers). Event text is shown as data:

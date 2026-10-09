@@ -1,5 +1,5 @@
 name: qa-on-ticket
-description: Verify a ticket in a browser when it enters the Test status. qa.verify writes to the ticket system, so every firing waits for the owner's approval; the agent's own ticket writes then run without asking.
+description: Verify a ticket in a browser when it enters the Test status. qa.verify writes to the ticket system, so the domain asks for an approval of every firing; the Manager approves those at once on the owner's standing rule (MANAGER_AUTO_APPROVE), and the agent's own ticket writes run without asking.
 owner: automation/qa-on-ticket
 selector: jira.issue.transitioned
 where:

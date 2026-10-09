@@ -21,6 +21,8 @@ export interface Config {
 	controls: ControlsConfig;
 	/** Path of the JSON file that names the stacks and the Windows machines /suspend and /unsuspend stop and start (MANAGER_HOST_CONTROL). */
 	hostControl?: string;
+	/** Approvals the owner decided once and for all (MANAGER_AUTO_APPROVE, `qa.verify@1=qa-on-ticket`: the capability and the rule whose reaction starts it). */
+	autoApprove?: string;
 }
 
 const need = (env: NodeJS.ProcessEnv, name: string): string => {
@@ -92,6 +94,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			...(env.MANAGER_QUIET_HOURS ? { quietHours: env.MANAGER_QUIET_HOURS } : {}),
 		},
 		...(env.MANAGER_HOST_CONTROL ? { hostControl: env.MANAGER_HOST_CONTROL } : {}),
+		...(env.MANAGER_AUTO_APPROVE ? { autoApprove: env.MANAGER_AUTO_APPROVE } : {}),
 		controls: {
 			hubUrl: env.MANAGER_HUB_URL,
 			hubTokenFile: env.MANAGER_HUB_TOKEN_FILE,

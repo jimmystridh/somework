@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SomeWorkError } from "@somework/sdk";
+import { parseAutoApprovals, ReactionApprovals } from "../src/reaction-approvals.ts";
 import { approval, build, rule, say, tap } from "./events-helpers.ts";
 
 test("a pending domain approval reaches the owner once, with what is being approved and buttons", async () => {
@@ -134,4 +135,52 @@ test("/approvals lists what waits, from both the Manager and the domain", async 
 	await say(b, "/approvals");
 	const text = b.telegram.texts().at(-1)!;
 	assert.ok(text.includes("code.agent@1") && text.includes("appr_13"));
+});
+
+const standing = (b: ReturnType<typeof build>, options: { suspended?: boolean } = {}) =>
+	new ReactionApprovals({ domain: b.domain, owner: b.bridge, state: b.state, save: async () => undefined, autoApprove: parseAutoApprovals("qa.verify@1=qa-on-ticket"), isSuspended: () => options.suspended === true });
+
+test("a standing approval decides what the owner approved once and for all, without a message", async () => {
+	const b = build();
+	b.domain.approvals = [approval("appr_a1", { actionDigest: "dg", taskRevision: 4 })];
+	b.domain.tasks.task_for_appr_a1 = { taskId: "task_for_appr_a1", origin: { kind: "reaction", rule: "qa-on-ticket", eventId: "evt_1", depth: 1 }, input: {} };
+	await standing(b).poll();
+	assert.deepEqual(b.domain.decisions.map((d) => [d.approvalId, d.decision.decision, d.decision.actionDigest, d.decision.taskRevision]), [["appr_a1", "approved", "dg", 4]]);
+	assert.match(b.domain.decisions[0]!.decision.comment ?? "", /standing rule for qa.verify@1 from the rule qa-on-ticket/);
+	assert.equal(b.telegram.sent.filter((s) => s.method === "sendMessage").length, 0, "the owner is not asked");
+});
+
+test("a standing approval does not cover another rule, a task that is not a reaction, an unreadable task, a suspended fleet or a refusal", async () => {
+	const b = build();
+	b.domain.approvals = [approval("appr_b1"), approval("appr_b2"), approval("appr_b3"), approval("appr_b4")];
+	b.domain.getTask = (async (id: string) => {
+		if (id === "task_for_appr_b1") return { taskId: id, origin: { kind: "reaction", rule: "other-rule" }, input: {} };
+		if (id === "task_for_appr_b2") return { taskId: id, origin: { kind: "event", rule: "qa-on-ticket" }, input: {} };
+		if (id === "task_for_appr_b3") throw new SomeWorkError(403, "policy_denied", "no");
+		return { taskId: id, origin: { kind: "reaction", rule: "qa-on-ticket" }, input: {} };
+	}) as never;
+	await standing(b).poll();
+	assert.deepEqual(b.domain.decisions.map((d) => d.approvalId), ["appr_b4"], "only the matching reaction is approved");
+	assert.equal(b.telegram.sent.filter((s) => s.method === "sendMessage").length, 3, "the others are announced to the owner as before");
+
+	const suspended = build();
+	suspended.domain.approvals = [approval("appr_c1")];
+	suspended.domain.getTask = (async (id: string) => ({ taskId: id, origin: { kind: "reaction", rule: "qa-on-ticket" }, input: {} })) as never;
+	await standing(suspended, { suspended: true }).poll();
+	assert.equal(suspended.domain.decisions.length, 0);
+
+	const refused = build();
+	refused.domain.approvals = [approval("appr_d1")];
+	refused.domain.getTask = (async (id: string) => ({ taskId: id, origin: { kind: "reaction", rule: "qa-on-ticket" }, input: {} })) as never;
+	refused.domain.decideApproval = async () => {
+		throw new SomeWorkError(409, "conflict", "changed");
+	};
+	await standing(refused).poll();
+	assert.equal(refused.telegram.sent.filter((s) => s.method === "sendMessage").length, 1, "a refused decision goes to the owner");
+});
+
+test("the standing approval setting takes plain names only", () => {
+	assert.deepEqual(parseAutoApprovals("qa.verify@1=qa-on-ticket, other@2 = some-rule"), [{ action: "qa.verify@1", rule: "qa-on-ticket" }, { action: "other@2", rule: "some-rule" }]);
+	assert.deepEqual(parseAutoApprovals(undefined), []);
+	for (const bad of ["qa.verify=qa-on-ticket", "qa.verify@1=", "qa.verify@1=Rule With Space", "*@1=x"]) assert.throws(() => parseAutoApprovals(bad), /MANAGER_AUTO_APPROVE/);
 });

@@ -10,7 +10,7 @@ import { Controls } from "./controls.ts";
 import { HostControls, loadHostConfig } from "./host.ts";
 import { RestDomain } from "./domain.ts";
 import { EventIntake } from "./event-intake.ts";
-import { ReactionApprovals } from "./reaction-approvals.ts";
+import { parseAutoApprovals, ReactionApprovals } from "./reaction-approvals.ts";
 import { createGateway } from "./gateway.ts";
 import { InboxReader, Notifications, PollingFeed, TaskTracker, WakeFeed } from "./notifier.ts";
 import { ChildPiRpc } from "./rpc.ts";
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
 	);
 	const rpc = new ChildPiRpc(child);
 	const bridge = new TelegramBridge({ state, api, rpc, save, tracker, notifications });
-	const reactionApprovals = new ReactionApprovals({ domain, owner: bridge, state, save, log });
+	const reactionApprovals = new ReactionApprovals({ domain, owner: bridge, state, save, log, autoApprove: parseAutoApprovals(config.autoApprove), isSuspended: () => controls.isSuspended() });
 	const host = config.hostControl ? new HostControls(loadHostConfig(config.hostControl)) : undefined;
 	const controls = new Controls({
 		domain,

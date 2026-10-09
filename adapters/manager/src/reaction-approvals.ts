@@ -34,8 +34,28 @@ const budgetOf = (value: unknown): Context["budget"] => {
 	return typeof budget?.maxTokens === "number" && typeof budget?.maxMinutes === "number" ? { maxTokens: budget.maxTokens, maxMinutes: budget.maxMinutes } : undefined;
 };
 
+/** A standing decision of the owner: this action, started by this rule's reaction, is approved without asking again. */
+export interface AutoApproval {
+	action: string;
+	rule: string;
+}
+
+/** `qa.verify@1=qa-on-ticket,other@1=other-rule`: a capability and the rule whose reaction starts it, plain names only, so a typo cannot widen what is approved. */
+export function parseAutoApprovals(text: string | undefined): AutoApproval[] {
+	if (text === undefined || text.trim() === "") return [];
+	return text.split(",").map((entry) => {
+		const match = /^\s*([a-z][a-z0-9._-]{0,60}@[A-Za-z0-9._-]{1,20})\s*=\s*([a-z][a-z0-9-]{0,60})\s*$/.exec(entry);
+		if (!match) throw new Error(`MANAGER_AUTO_APPROVE: "${entry.trim().slice(0, 60)}" is not <capability>@<version>=<rule name>`);
+		return { action: match[1]!, rule: match[2]! };
+	});
+}
+
 export interface ReactionApprovalDeps {
 	domain: DomainApi;
+	/** The owner's standing approvals: matching approvals are decided here, with the same digest and revision checks, and not announced. */
+	autoApprove?: readonly AutoApproval[];
+	/** While everything is suspended nothing is approved, standing decisions included. */
+	isSuspended?: () => boolean;
 	owner: ApprovalChannel;
 	state: ManagerState;
 	save: SaveState;
@@ -72,6 +92,7 @@ export class ReactionApprovals {
 			const rules = new RuleBook(this.#deps.domain);
 			for (const approval of pending) {
 				if (this.#known[approval.approvalId]) continue;
+				if (await this.#autoApprove(approval)) continue;
 				const text = await this.#describe(approval, rules);
 				const messageId = await this.#deps.owner.tell(text, approvalButtons(approval.approvalId));
 				this.#known[approval.approvalId] = { announcedAt: new Date(this.#now()).toISOString(), status: "pending", ...(messageId === undefined ? {} : { messageId }) };
@@ -93,6 +114,32 @@ export class ReactionApprovals {
 		} finally {
 			this.#polling = false;
 		}
+	}
+
+	/** True when a standing approval of the owner decided it. A refusal by the domain leaves the approval to the owner, as any other. */
+	async #autoApprove(approval: DomainApproval): Promise<boolean> {
+		const candidates = this.#deps.autoApprove?.filter((entry) => entry.action === approval.action) ?? [];
+		if (candidates.length === 0 || this.#deps.isSuspended?.()) return false;
+		if (Date.parse(approval.expiresAt) <= this.#now()) return false;
+		// the domain records which rule's reaction started a task; a task nobody can show the origin of is left to the owner
+		const origin = (await this.#deps.domain.getTask(approval.taskId).catch(() => undefined))?.origin;
+		const rule = origin?.kind === "reaction" ? candidates.find((entry) => entry.rule === origin.rule) : undefined;
+		if (!rule) return false;
+		try {
+			await this.#deps.domain.decideApproval(approval.approvalId, {
+				decision: "approved",
+				actionDigest: approval.actionDigest,
+				taskRevision: approval.taskRevision,
+				comment: `approved by the owner's standing rule for ${rule.action} from the rule ${rule.rule}`,
+			});
+		} catch (error) {
+			this.#deps.log?.("approval_auto_refused", { approvalId: approval.approvalId, error: this.#why(error) });
+			return false;
+		}
+		this.#known[approval.approvalId] = { announcedAt: new Date(this.#now()).toISOString(), status: "approved", reported: true };
+		await this.#deps.save(this.#deps.state);
+		this.#deps.log?.("approval_auto_approved", { approvalId: approval.approvalId, action: approval.action, rule: rule.rule });
+		return true;
 	}
 
 	async pending(): Promise<DomainApproval[]> {
