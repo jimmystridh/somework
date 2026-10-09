@@ -120,3 +120,25 @@ test("/profile serves the description and is absent when a service gives none", 
 	assert.equal(((await response.json()) as { hash: string }).hash, described.hash);
 	assert.equal((await get(createHealthServer(base), "/profile")).status, 404);
 });
+
+test("/history serves the newest jobs with a bounded limit and is absent when a service keeps none", async () => {
+	const { createHealthServer } = await import("../src/health.ts");
+	const get = async (server: import("node:http").Server, path: string) => {
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as import("node:net").AddressInfo;
+		try {
+			return await fetch(`http://127.0.0.1:${port}${path}`);
+		} finally {
+			server.close();
+		}
+	};
+	const base = { runtime: { health: () => ({ ready: true }) } as any, metrics: { render: () => "" } as any };
+	const asked: number[] = [];
+	const history = (limit: number) => (asked.push(limit), [{ taskId: "t1" }]);
+	assert.deepEqual(await (await get(createHealthServer({ ...base, history }), "/history")).json(), { jobs: [{ taskId: "t1" }] });
+	await get(createHealthServer({ ...base, history }), "/history?limit=25");
+	await get(createHealthServer({ ...base, history }), "/history?limit=99999");
+	await get(createHealthServer({ ...base, history }), "/history?limit=-3");
+	assert.deepEqual(asked, [100, 25, 500, 100]);
+	assert.equal((await get(createHealthServer(base), "/history")).status, 404);
+});

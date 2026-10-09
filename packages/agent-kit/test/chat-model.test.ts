@@ -765,6 +765,17 @@ describe("the job journal and the state summary", () => {
 		assert.deepEqual(describeOutcome({ type: "completed", result: { verdict: "pass", usage: { totalTokens: 7 } } } as Outcome), { state: "completed", outcome: "pass", summary: undefined, prUrl: undefined, branch: undefined, tokens: 7 });
 	});
 
+	it("records what a verification and a fix were about, their checks, tokens by kind and cost", () => {
+		const qa = describeOutcome({ type: "completed", result: { verdict: "not_fixed", ticket: "SAD-2512", notes: "the grid still shows the old value", acceptanceChecks: [{ passed: true }, { passed: false }, { passed: false }], usage: { totalTokens: 30, inputTokens: 20, outputTokens: 10, costUsd: 0.42 } } } as Outcome);
+		assert.deepEqual(qa, { state: "completed", outcome: "not_fixed", summary: "the grid still shows the old value", prUrl: undefined, branch: undefined, subject: "SAD-2512", checks: { passed: 1, failed: 2 }, tokens: 30, inputTokens: 20, outputTokens: 10, costUsd: 0.42 });
+		const fix = describeOutcome({ type: "completed", result: { outcome: "pr_opened", aikidoIssueId: 50177726, summary: "bump the package", prUrl: "https://github.com/o/r/pull/1", branch: "agent/aikido-1" } } as Outcome);
+		assert.equal(fix?.subject, "Aikido #50177726");
+		assert.equal(fix?.prUrl, "https://github.com/o/r/pull/1");
+		assert.ok(!("tokens" in fix!) && !("costUsd" in fix!));
+		const failed = describeOutcome({ type: "failed", failure: { code: "job_error", message: "x".repeat(2000), retryable: false } } as Outcome);
+		assert.equal(failed?.summary?.length, 803);
+	});
+
 	it("survives an unreadable journal file", () => {
 		const dir = mkdtempSync(join(tmpdir(), "journal-"));
 		writeFileSync(join(dir, "j.json"), "{not json");

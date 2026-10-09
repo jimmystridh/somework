@@ -279,6 +279,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				runtime,
 				metrics,
 				profile: () => description,
+				history: (limit) => journal.recent(limit),
 				status: () => ({ ...(events ? events.status() : { handlers: [], tokenPools: ledger.usage() }), ...(chatResponder ? { chat: { mode: "model", askers: chatSettings!.askers, instructors: chatSettings!.instructors } } : {}), ...(observe ? { observe: observe.status() } : {}) }),
 				checks: { ...(hooks.envFactory ? {} : { sandbox: async () => (await fetch(`${config.sandbox.url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok }), ...hooks.readinessChecks },
 			});

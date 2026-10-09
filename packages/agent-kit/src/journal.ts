@@ -9,17 +9,27 @@ export interface JobRecord {
 	/** `task` for a job from the domain, `chat` for an instruction given in chat. */
 	source: "task" | "chat";
 	state: "completed" | "failed";
+	/** When the job ended. */
 	at: string;
+	startedAt?: string;
 	ms: number;
 	tokens?: number;
+	inputTokens?: number;
+	outputTokens?: number;
+	costUsd?: number;
 	/** What the result says it was (`pr_opened`, `completed`, `blocked`, a verdict) or the failure code. */
 	outcome?: string;
 	summary?: string;
 	prUrl?: string;
 	branch?: string;
+	/** What the job was about: a ticket key, an Aikido issue number. */
+	subject?: string;
+	/** Acceptance checks of a verification: how many passed and failed. */
+	checks?: { passed: number; failed: number };
 }
 
-const KEEP = 50;
+const KEEP = 500;
+const SUMMARY = 800;
 const text = (value: unknown, max: number): string | undefined => {
 	if (typeof value !== "string" || value.trim() === "") return undefined;
 	// eslint-disable-next-line no-control-regex
@@ -28,18 +38,29 @@ const text = (value: unknown, max: number): string | undefined => {
 };
 
 /** What a finished job says about itself, from its result or failure: names and short text only, redacted. */
-export function describeOutcome(outcome: Outcome): Pick<JobRecord, "state" | "outcome" | "summary" | "prUrl" | "branch" | "tokens"> | undefined {
+export function describeOutcome(outcome: Outcome): Pick<JobRecord, "state" | "outcome" | "summary" | "prUrl" | "branch" | "tokens" | "inputTokens" | "outputTokens" | "costUsd" | "subject" | "checks"> | undefined {
 	if (outcome.type === "detach") return undefined;
-	if (outcome.type === "failed") return { state: "failed", outcome: text(outcome.failure.code, 60), summary: text(outcome.failure.message, 300) };
+	if (outcome.type === "failed") return { state: "failed", outcome: text(outcome.failure.code, 60), summary: text(outcome.failure.message, SUMMARY) };
 	const result = (outcome.result ?? {}) as Record<string, any>;
-	const tokens = Number(result.usage?.totalTokens);
+	const count = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined);
+	const tokens = count(result.usage?.totalTokens);
+	const inputTokens = count(result.usage?.inputTokens);
+	const outputTokens = count(result.usage?.outputTokens);
+	const costUsd = count(result.usage?.costUsd);
+	const subject = text(result.ticket, 60) ?? (count(result.aikidoIssueId) !== undefined ? `Aikido #${result.aikidoIssueId}` : undefined);
+	const checks = Array.isArray(result.acceptanceChecks) ? { passed: result.acceptanceChecks.filter((check: any) => check?.passed === true).length, failed: result.acceptanceChecks.filter((check: any) => check?.passed === false).length } : undefined;
 	return {
 		state: "completed",
 		outcome: text(result.outcome ?? result.verdict ?? result.status, 60),
-		summary: text(result.summary, 300),
+		summary: text(result.summary ?? result.notes, SUMMARY),
 		prUrl: text(result.prUrl, 200),
 		branch: text(result.branch, 120),
-		...(Number.isFinite(tokens) ? { tokens } : {}),
+		...(subject ? { subject } : {}),
+		...(checks ? { checks } : {}),
+		...(tokens !== undefined ? { tokens } : {}),
+		...(inputTokens !== undefined ? { inputTokens } : {}),
+		...(outputTokens !== undefined ? { outputTokens } : {}),
+		...(costUsd !== undefined ? { costUsd } : {}),
 	};
 }
 
