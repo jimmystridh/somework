@@ -1,5 +1,6 @@
 import { DEFAULT_APPROVAL_PATTERNS } from "../../src/policy.ts";
 import { runAgentService } from "../../src/service.ts";
+import { Type } from "@earendil-works/pi-ai";
 
 /** A minimal role that answers chat with a model: instructions become code.agent tasks on the repository the test names. */
 runAgentService({
@@ -16,6 +17,18 @@ runAgentService({
 		chat: {
 			instructions: "You are the chat fixture.",
 			context: () => "fixture fact: the sky is blue",
+			...(process.env.FIXTURE_JOB_TOOL
+				? {
+						jobTools: [
+							{
+								name: "add_note",
+								description: "Add a note file to the repository.",
+								parameters: Type.Object({ text: Type.String() }),
+								plan: (args: { text: string }) => ({ capability: { id: "code.agent", version: "1" }, input: { repository: { url: process.env.FIXTURE_REMOTE, ref: "main" }, instruction: `add note.txt with: ${args.text}` } }),
+							},
+						],
+					}
+				: {}),
 			instructInput: (text) => ({ capability: { id: "code.agent", version: "1" }, input: { repository: { url: process.env.FIXTURE_REMOTE, ref: "main" }, instruction: text } }),
 		},
 	},

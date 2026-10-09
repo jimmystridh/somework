@@ -2,6 +2,7 @@
 export * from "./chat.ts";
 export * from "./chat-artifacts.ts";
 export * from "./chat-model.ts";
+export * from "./chat-jobs.ts";
 export * from "./config.ts";
 export * from "./credentials.ts";
 export * from "./events/index.ts";

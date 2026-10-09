@@ -92,4 +92,50 @@ describe("chat end to end (real domain, real sandbox, real service process)", ()
 		const jobs = (await status()).tokenPools;
 		assert.ok(jobs.chat.used > 0);
 	});
+
+	it("lets the model queue the role's job from a plain message: it says what it queued, then the job runs and reports", async () => {
+		const domain = await startDomain({ cardFile: join(here, "../../../adapters/pi/card.json") });
+		cleanups.push(() => domain.stop());
+		const { remote } = makeRemote();
+		const dir = mkdtempSync(join(tmpdir(), "chat-e2e-"));
+		const workspaces = join(dir, "workspaces");
+		mkdirSync(workspaces);
+		const state = join(dir, "state");
+		mkdirSync(state);
+		const tokenFile = join(dir, "sandbox-token");
+		writeFileSync(tokenFile, "s".repeat(48));
+		const sandboxPort = await freePort();
+		const sandbox = run(join(here, "../src/sandbox/main.ts"), { SANDBOX_TOKEN_FILE: tokenFile, SANDBOX_ROOT: workspaces, SANDBOX_PORT: String(sandboxPort), SANDBOX_HOST: "127.0.0.1" });
+		cleanups.push(() => void sandbox.kill("SIGKILL"));
+		await until("the sandbox", async () => (await fetch(`http://127.0.0.1:${sandboxPort}/healthz`)).ok);
+		const healthPort = await freePort();
+		const service = run(join(here, "fixtures/chat-main.ts"), {
+			SOMEWORK_URL: domain.url,
+			SOMEWORK_KEY_FILE: join(domain.dir, "worker.key.json"),
+			PI_STATE_DIR: state,
+			PI_PROVIDER: "faux",
+			PI_FAUX_PLAN: JSON.stringify(['call:add_note:{"text":"hello"}', "final:I queued the note."]),
+			SANDBOX_URL: `http://127.0.0.1:${sandboxPort}`,
+			SANDBOX_TOKEN_FILE: tokenFile,
+			SANDBOX_WORKSPACES: workspaces,
+			HEALTH_PORT: String(healthPort),
+			PI_CONCURRENCY: "1",
+			SOMEWORK_LEASE_SECONDS: "5",
+			CHAT_ALLOWED_SENDERS: "agent/ts-author",
+			CHAT_INSTRUCTORS: "agent/ts-author",
+			CHAT_BUSY_AFTER_SECONDS: "60",
+			FIXTURE_REMOTE: remote,
+			FIXTURE_JOB_TOOL: "1",
+		});
+		cleanups.push(() => void service.kill("SIGKILL"));
+		const status = async () => (await (await fetch(`http://127.0.0.1:${healthPort}/status`)).json()) as any;
+		await until("the service to report chat", async () => (await status()).chat?.mode === "model");
+		const replies = async () => (((await domain.author.get("/v1/inbox?limit=200")).messages ?? []) as any[]).filter((m) => m.type === "chat.message" && m.labels?.[CHAT_REPLY_LABEL] === "true" && m.sender?.id === "agent/ts-worker");
+		const text = (message: any): string => (typeof message.content?.data === "string" ? message.content.data : JSON.stringify(message.content?.data));
+		await domain.author.post("/v1/messages", { recipients: [{ kind: "agent", id: "agent/ts-worker" }], content: { mediaType: "text/plain", data: "please add a note saying hello" }, triggerMode: "directed" });
+		const said = await until("the queued job to be reported", async () => ((await replies()).length >= 2 ? await replies() : undefined), 60_000);
+		const all = said.map(text);
+		assert.ok(all.some((line) => /I queued the note/.test(line)), all.join("\n"));
+		assert.ok(all.some((line) => /^\(1\/1\) /.test(line)), all.join("\n"));
+	});
 });

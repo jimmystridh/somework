@@ -6,6 +6,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { Identity, SomeWorkClient, Worker, type Handler } from "@somework/sdk";
 import { runChatResponder } from "./chat.ts";
 import { ChatArtifacts } from "./chat-artifacts.ts";
+import { createChatJobTools } from "./chat-jobs.ts";
 import { askToolNames, buildState, ChatApprovals, createStatusTool, instructToolNames, KIT_CHAT_RULES, KIT_OPEN_CHAT_RULES, ModelChatResponder, resolveChatMode, resolveChatModel } from "./chat-model.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
@@ -134,11 +135,15 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const chatState = (): Promise<string> =>
 				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
 			const chatTools = chatSettings ? createStatusTool(chatState) : undefined;
+			// the role's capabilities as tools for the open chat tier: the responder exists only later, so the queue is looked up late
+			let chatResponderRef: ModelChatResponder | undefined;
+			const chatJobs = chatSettings?.open && hooks.chat?.jobTools?.length ? createChatJobTools(hooks.chat.jobTools, (tool, planned) => chatResponderRef?.queueJob(tool, planned) ?? { refuse: "chat is not running" }) : undefined;
 			const observe = createObserve({ profile: profile.observe, env, log, metrics, agentId: identity.agentId });
 			const extensions = [
 				...(hooks.extensions ?? []),
 				...(events ? [events.extension] : []),
 				...(chatTools ? [chatTools.extension] : []),
+				...(chatJobs ? [chatJobs.extension] : []),
 				...(observe ? [observe.extension] : []),
 				...(timers ? [timers.extension] : []),
 				...(chatSettings && hooks.chat?.extension ? [hooks.chat.extension] : []),
@@ -203,7 +208,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				const ask = [...new Set([...askToolNames(profile.chat, hooks.chat), ...(observe?.toolNames ?? [])])];
 				const instruct = [...new Set([...instructToolNames(profile.chat, profile.allowedTools), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])])];
 				for (const name of [...ask, ...instruct]) if (!known.has(name)) throw new Error(`chat: the tool ${name} does not exist (known: ${[...known].join(", ")})`);
-				const instructHandler = hooks.chat?.instructInput
+				const instructHandler = hooks.chat?.instructInput || chatJobs
 					? createHandler({ ...baseDeps, source: "chat", requestTools: instruct, ledger: { remaining: () => ledger.chatRemaining(), record: (tokens) => ledger.record(tokens, "chat") } })
 					: undefined;
 				const approvals = new ChatApprovals({ client, log, timeoutMinutes: chatSettings.approvalMinutes });
@@ -216,7 +221,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					await prepareWorkspace(session, { repoUrl: target.repoUrl, ref: target.ref ?? "HEAD", taskId: "chat", workspace: checkout, detach: true });
 					return checkout;
 				};
-				chatResponder = new ModelChatResponder({
+				chatResponder = chatResponderRef = new ModelChatResponder({
 					client,
 					agentId: identity.agentId,
 					role: profile.id,
@@ -234,7 +239,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 						? {
 								open: {
 									runtime,
-									tools: [...new Set([...instruct, ...ask, ...OPEN_BASE_TOOLS])].filter((name) => known.has(name)),
+									tools: [...new Set([...instruct, ...ask, ...OPEN_BASE_TOOLS, ...(chatJobs?.toolNames ?? [])])].filter((name) => known.has(name)),
 									instructions: [hooks.chat?.openInstructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}. In a conversation with your owner's manager you do whatever is asked with your tools.`, KIT_OPEN_CHAT_RULES].join("\n\n"),
 									workspace: askWorkspace,
 									approvals,
@@ -242,7 +247,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 								},
 							}
 						: {}),
-					...(instructHandler && hooks.chat?.instructInput ? { instruct: { handler: instructHandler, input: hooks.chat.instructInput, ...(hooks.chat.plainInstruct ? { plain: hooks.chat.plainInstruct } : {}), describe: hooks.chat.describeResult, gate, approvals, ...(chatArtifacts ? { artifacts: chatArtifacts } : {}) } } : {}),
+					...(instructHandler ? { instruct: { handler: instructHandler, input: hooks.chat?.instructInput ?? (() => ({ refuse: "this role takes no structured instructions: ask in plain words" })), ...(hooks.chat?.plainInstruct ? { plain: hooks.chat.plainInstruct } : {}), describe: hooks.chat?.describeResult, gate, approvals, ...(chatArtifacts ? { artifacts: chatArtifacts } : {}) } } : {}),
 					log,
 					metrics,
 				});

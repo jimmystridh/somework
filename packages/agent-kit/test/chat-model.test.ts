@@ -129,6 +129,41 @@ describe("the open tier: an instructor's plain message is carried out", () => {
 		assert.equal(h.jobs.length, 0, "no role job was started");
 	});
 
+	it("runs the jobs the model queued with its job tools after the reply, one at a time, each answered on its own", async () => {
+		const h = harness();
+		const tool = { name: "do_it", description: "d", parameters: {} as never, plan: () => ({ refuse: "unused" }) };
+		const responder = new ModelChatResponder({ ...h.deps, open: openDeps(h) });
+		h.runtime.execute = (async (request: any) => {
+			h.requests.push(request);
+			const first = responder.queueJob(tool, { capability: { id: "do.it", version: "1" }, input: { what: "one" } });
+			const again = responder.queueJob(tool, { capability: { id: "do.it", version: "1" }, input: { what: "one" } });
+			const second = responder.queueJob(tool, { capability: { id: "do.it", version: "1" }, input: { what: "two" } });
+			assert.deepEqual([first, again, second], [{ queued: 1 }, { queued: 1 }, { queued: 2 }], "the same job twice is queued once");
+			return { status: "done" as const, answer: "I queued two.", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 10, costUsd: 0 } };
+		}) as never;
+		await responder.handle(incoming({ text: "do one and two" }));
+		assert.deepEqual(h.jobs.map((entry) => (entry.job.input as any).what), ["one", "two"]);
+		const said = replies(h.posts);
+		assert.equal(said[0], "I queued two.");
+		assert.match(said[1]!, /^\(1\/2\) /);
+		assert.match(said[2]!, /^\(2\/2\) /);
+		assert.ok("refuse" in responder.queueJob(tool, { capability: { id: "do.it", version: "1" }, input: {} }), "outside a turn nothing is queued");
+	});
+
+	it("limits a job tool per turn and drops the queue of a turn that did not finish", async () => {
+		const h = harness();
+		const tool = { name: "do_it", description: "d", parameters: {} as never, plan: () => ({ refuse: "unused" }), perTurn: 2 };
+		const responder = new ModelChatResponder({ ...h.deps, open: openDeps(h) });
+		const results: unknown[] = [];
+		h.runtime.execute = (async () => {
+			for (const n of [1, 2, 3]) results.push(responder.queueJob(tool, { capability: { id: "do.it", version: "1" }, input: { n } }));
+			return { status: "aborted" as const, reason: "timeout", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 10, costUsd: 0 } };
+		}) as never;
+		await responder.handle(incoming({ text: "do three" }));
+		assert.match((results[2] as { refuse: string }).refuse, /at most 2 per request/);
+		assert.equal(h.jobs.length, 0, "an unfinished turn starts nothing");
+	});
+
 	it("leaves a question from a person, and the instruct: prefix, on their own tiers", async () => {
 		const h = harness();
 		const responder = new ModelChatResponder({ ...h.deps, open: openDeps(h) });

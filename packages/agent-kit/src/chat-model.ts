@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { Type } from "@earendil-works/pi-ai";
+import { createHash, randomBytes } from "node:crypto";
+import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import type { Handler, Job, JobControl, Outcome, SomeWorkClient } from "@somework/sdk";
 import { AUTO_REPLY_LABEL, CHAT_APPROVAL_DECISION_LABEL, CHAT_APPROVAL_REQUEST_LABEL, CHAT_REPLY_LABEL, ReplyLimiter, type ChatConfig, type InboundMessage } from "./chat.ts";
@@ -195,6 +195,20 @@ export interface PlannedJob {
  */
 export type PlannedInstruction = PlannedJob | { refuse: string } | { batch: PlannedJob[]; intro: string };
 
+/**
+ * A capability of the role as a tool the model may call when the instructor asks for it in plain words. The call does not run the job: it checks
+ * it (`plan`) and queues it, and the queued jobs run one after another when the reply has been sent, each answered in the conversation.
+ */
+export interface ChatJobTool {
+	name: string;
+	description: string;
+	parameters: TSchema;
+	/** The job the arguments ask for, or why not (the model is told, and may correct itself). */
+	plan(args: any): PlannedJob | { refuse: string } | Promise<PlannedJob | { refuse: string }>;
+	/** At most this many calls of the tool in one turn (default 5). */
+	perTurn?: number;
+}
+
 /** What a role supplies for chat. Everything in it is the role's own, trusted code; every member is optional. */
 export interface ChatRoleHooks {
 	/** The role's standing orders for the ask tier: what the agent is and how to talk about it. The kit adds its own rules after them. */
@@ -218,11 +232,14 @@ export interface ChatRoleHooks {
 	 * this only for requests that cannot be mistaken for a question (an action word and a target it knows), because a job is real work.
 	 */
 	plainInstruct?(text: string): { capability: { id: string; version: string }; input: Record<string, unknown> } | undefined;
+	/** Capabilities the model may invoke from a plain message of an instructor (see `ChatJobTool`). */
+	jobTools?: ChatJobTool[];
 	/** Words for a finished instruction (default: the outcome, the summary, the pull request and the branch). */
 	describeResult?(result: unknown): string | undefined;
 }
 
 export const AGENT_STATUS_TOOL = "agent_status";
+const DEFAULT_JOBS_PER_TURN = 5;
 
 /** Rules every ask session gets after the role's own instructions. */
 export const KIT_CHAT_RULES = `Chat rules that do not change:
@@ -534,6 +551,8 @@ export class ModelChatResponder {
 	/** The window (by the time of its answer) for which the slow-down notice was already sent, per sender and conversation. */
 	readonly #slowedDown = new Map<string, number>();
 	#turn: Promise<unknown> = Promise.resolve();
+	/** Jobs the model queued during the open turn that is running (turns run one at a time). */
+	#queued: { jobs: PlannedJob[]; byTool: Map<string, number> } | undefined;
 
 	constructor(deps: ModelChatDeps) {
 		this.#deps = deps;
@@ -668,6 +687,20 @@ export class ModelChatResponder {
 		}
 	}
 
+	/** The tools' way to queue a job during an open turn; refused outside one and past the limits. */
+	queueJob(tool: ChatJobTool, planned: PlannedJob): { queued: number } | { refuse: string } {
+		const queue = this.#queued;
+		if (!queue) return { refuse: "nothing can be queued right now: this is not a conversation turn that takes work" };
+		const key = JSON.stringify(planned);
+		if (queue.jobs.some((job) => JSON.stringify(job) === key)) return { queued: queue.jobs.length };
+		const used = queue.byTool.get(tool.name) ?? 0;
+		const limit = tool.perTurn ?? DEFAULT_JOBS_PER_TURN;
+		if (used >= limit) return { refuse: `at most ${limit} per request: ${used} are queued already; the rest has to be asked for again afterwards` };
+		queue.byTool.set(tool.name, used + 1);
+		queue.jobs.push(planned);
+		return { queued: queue.jobs.length };
+	}
+
 	// ---- ASK -----------------------------------------------------------------------------------------------------------------
 
 	async #askTier(message: InboundMessage, text: string, pool: "ok" | "throttled" | "stopped", remaining: number, started: number): Promise<ModelChatOutcome> {
@@ -724,6 +757,8 @@ export class ModelChatResponder {
 		const stop = new AbortController();
 		const forward = () => stop.abort(this.#deps.signal?.reason);
 		this.#deps.signal?.addEventListener("abort", forward, { once: true });
+		this.#queued = { jobs: [], byTool: new Map() };
+		let queued: PlannedJob[] = [];
 		try {
 			const run = async () => {
 				let workspace = this.#deps.ask.fallbackWorkspace;
@@ -753,15 +788,18 @@ export class ModelChatResponder {
 			this.#deps.ledger.record(outcome.usage.totalTokens, "chat");
 			this.#deps.metrics?.counter("somework_chat_tokens_total", "Model tokens used by chat, by tier")({ tier: "open" }, outcome.usage.totalTokens);
 			if (outcome.status !== "done") return this.#refuse(message, outcome.status === "aborted" ? `aborted_${outcome.reason}` : "unanswered", "I could not finish that in time. Try a smaller step, or submit a task.");
+			queued = this.#queued?.jobs ?? [];
 			const reply = finishReply(outcome.answer, settings.replyMaxBytes);
-			if (reply === "") return this.#refuse(message, "empty_answer", "I finished, but have nothing to report.");
-			await this.#say(message, reply, "answer");
-			this.#deps.log("info", "chat_answered", { to: message.sender.id, conversationId: message.conversationId, tier: "open", tokens: outcome.usage.totalTokens, throttled: pool === "throttled", ms: Date.now() - started });
+			if (reply === "" && queued.length === 0) return this.#refuse(message, "empty_answer", "I finished, but have nothing to report.");
+			if (reply !== "") await this.#say(message, reply, "answer");
+			this.#deps.log("info", "chat_answered", { to: message.sender.id, conversationId: message.conversationId, tier: "open", tokens: outcome.usage.totalTokens, throttled: pool === "throttled", queued: queued.length, ms: Date.now() - started });
 			this.#count("answered", "open");
-			return { answered: true };
 		} finally {
+			this.#queued = undefined;
 			this.#deps.signal?.removeEventListener("abort", forward);
 		}
+		if (queued.length > 0) await this.#instructBatch(message, { batch: queued, intro: "" }, started);
+		return { answered: true };
 	}
 
 	// ---- INSTRUCT --------------------------------------------------------------------------------------------------------------
@@ -788,7 +826,7 @@ export class ModelChatResponder {
 
 	/** Several jobs for one instruction (a queue of tickets): one after another, each answered on its own, within what is left of the chat budget. */
 	async #instructBatch(message: InboundMessage, planned: { batch: PlannedJob[]; intro: string }, started: number): Promise<ModelChatOutcome> {
-		await this.#say(message, finishReply(planned.intro, this.#deps.settings.replyMaxBytes), "answer");
+		if (planned.intro !== "") await this.#say(message, finishReply(planned.intro, this.#deps.settings.replyMaxBytes), "answer");
 		let done = 0;
 		for (const [index, job] of planned.batch.entries()) {
 			const remaining = this.#deps.ledger.chatRemaining();
@@ -912,7 +950,8 @@ export class ModelChatResponder {
 				content: { mediaType: "text/plain", data: finishReply(text, this.#deps.settings.replyMaxBytes) },
 				labels: { [CHAT_REPLY_LABEL]: "true" },
 			},
-			{ idempotencyKey: `chat${kind}:${message.messageId}` },
+			// one message may get several replies (what was queued, then each result): the key follows the words, so a retried reply is the same one and another is not
+			{ idempotencyKey: `chat${kind}:${message.messageId}:${createHash("sha256").update(text).digest("hex").slice(0, 16)}` },
 		);
 	}
 }
