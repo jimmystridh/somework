@@ -94,4 +94,26 @@ describe("QA in chat", () => {
 			assert.match((chat.instructInput!("status: Test\nverify them") as any).refuse, /ticket system is not connected/);
 		});
 	});
+
+	describe("as a tool the model may call", () => {
+		const env = { CHAT_REPOSITORY_URL: "https://github.com/acme/app" } as NodeJS.ProcessEnv;
+		const queue = { testStatus: "Test", verifiedLabel: "AgentTested", search: async () => [] };
+
+		it("offers verify_ticket when the ticket system is connected, with the batch limit per request", () => {
+			assert.equal(qaChat(env).jobTools, undefined);
+			const tools = qaChat({ ...env, QA_CHAT_BATCH_MAX: "3" } as NodeJS.ProcessEnv, /^ABC-\d+$/, undefined, queue).jobTools!;
+			assert.deepEqual(tools.map((tool) => [tool.name, tool.perTurn]), [["verify_ticket", 3]]);
+		});
+
+		it("plans the verification of one ticket with its options and says why it cannot", async () => {
+			const [tool] = qaChat(env, /^ABC-\d+$/, undefined, queue).jobTools!;
+			assert.deepEqual(await tool!.plan({ ticket: " ABC-7 ", scenario: "log in as admin", app: "shop" }), {
+				capability: { id: "qa.verify", version: "1" },
+				input: { ticket: "ABC-7", repository: { url: "https://github.com/acme/app", ref: "HEAD" }, scenario: "log in as admin", app: "shop" },
+			});
+			assert.match(((await tool!.plan({ ticket: "OTHER-1" })) as any).refuse, /not a ticket key this agent handles/);
+			assert.match(((await tool!.plan({ ticket: "ABC-1", app: "../x" })) as any).refuse, /application profile/);
+			assert.match(((await tool!.plan({ ticket: "ABC-1", repo: "http://x" })) as any).refuse, /https/);
+		});
+	});
 });
