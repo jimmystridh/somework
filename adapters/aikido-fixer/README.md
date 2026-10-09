@@ -49,6 +49,7 @@ All `AIKIDO_*` unless noted; `deploy/.env.example` and `deploy/compose.yaml` lis
 | `AIKIDO_REGION` | `eu` | `eu`, `us` or `me` |
 | `AIKIDO_CLIENT_FILE` | `/run/secrets/aikido-client.json` | `{"clientId","clientSecret"}` |
 | `AIKIDO_MIN_SEVERITY` | `high` | handler and task both apply it |
+| `AIKIDO_API_MIN_INTERVAL_MS` | `1500` | the least time between two requests to Aikido, whatever the number of jobs; a 429 is waited out (the `Retry-After` it names, else 2, 4, 8 s) and retried three times, and resolved issues are shared between jobs for five minutes. A job reads the issue group first and the issues of the group (the heaviest request) only when it is going to run |
 | `AIKIDO_FIX_TYPES` | `open_source,sast,iac` | issue types it attempts |
 | `AIKIDO_MAX_FILES` | `40` | larger changes are blocked |
 | `AIKIDO_PROTECTED_PATHS` | built-in list | globs; a change touching one is blocked |

@@ -131,23 +131,36 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 			const followUp = input?.followUp === undefined ? undefined : parseFollowUp(input.followUp);
 			if (followUp && pullRequestRepository(followUp.pullRequest) !== repositoryFullName(parsed.repository.url)) throw new InvalidInput("the pull request belongs to another repository");
 			if (followUp && !options.reader) throw new InvalidInput("this agent is not set up to follow up on pull requests");
-			let found;
-			try {
-				found = await options.aikido.resolveIssue(parsed.issue.id);
-			} catch (error) {
-				if (error instanceof AikidoError && error.permanent) throw new InvalidInput(error.message);
-				throw error;
-			}
-			const summary = summariseIssue(found);
+			const resolve = async (details: boolean) => {
+				try {
+					return await options.aikido.resolveIssue(parsed.issue.id, { details });
+				} catch (error) {
+					if (error instanceof AikidoError && error.permanent) throw new InvalidInput(error.message);
+					throw error;
+				}
+			};
 			if (followUp) {
+				const summary = summariseIssue(await resolve(true));
 				const pullRequest = await options.reader!.read(followUp.pullRequest);
 				const skip = pullRequest.state !== "open" ? `the pull request is ${pullRequest.state}` : pullRequest.feedback.length === 0 && !parsed.hint ? "the pull request has no new review feedback since its newest commit" : undefined;
 				tasks.set(taskId, { input: parsed, summary, followUp: { input: followUp, pullRequest }, ...(skip ? { skip } : {}), files: [] });
 				log("info", "fixer_followup_prepared", { taskId, issue: summary.groupId, round: followUp.round, state: pullRequest.state, feedback: pullRequest.feedback.length, ciVisible: pullRequest.ci.visible, ciPending: pullRequest.ci.pending, skipped: skip !== undefined });
 				return { ...input, agentKey: `aikido-followup:${summary.groupId}`, repository: { ...input.repository, ref: followUp.branch } };
 			}
-			const verdict = eligibility(summary, settings, parsed.issue.repository);
-			let skip = verdict.eligible ? undefined : verdict.reason;
+			// Aikido is asked for as little as the decision needs: the group alone settles type, severity and status, and the attempt limits need only its id;
+			// the issues of the group (the heaviest request) are read only for a job that is going to run.
+			let summary = summariseIssue(await resolve(false));
+			let verdict = eligibility(summary, settings, parsed.issue.repository);
+			let skip = !verdict.eligible && verdict.code !== "repository" ? verdict.reason : undefined;
+			if (!skip) {
+				const window = attempts.wouldBegin(summary.groupId, taskId);
+				if (!window.ok) skip = window.reason;
+			}
+			if (!skip) {
+				summary = summariseIssue(await resolve(true));
+				verdict = eligibility(summary, settings, parsed.issue.repository);
+				skip = verdict.eligible ? undefined : verdict.reason;
+			}
 			if (!skip) {
 				const begun = attempts.begin(summary.groupId, taskId);
 				if (!begun.ok) skip = begun.reason;
@@ -348,7 +361,7 @@ export async function aikidoFixerHooksFor(context: ServiceContext): Promise<Role
 	if (!context.gitToken) throw new Error("the Aikido fixer needs GIT_TOKEN_FILE or a GitHub App (GITHUB_APP_ID): a credential that can push agent/* branches and open pull requests on its repository");
 	if (context.config.concurrency !== 1) throw new Error("the Aikido fixer runs one fix at a time: PI_CONCURRENCY must be 1");
 	readCredentials(settings.credentialsFile);
-	const aikido = new AikidoClient({ region: settings.region, credentials: () => readCredentials(settings.credentialsFile), apiBase: settings.apiBase, oauthUrl: settings.oauthUrl });
+	const aikido = new AikidoClient({ region: settings.region, credentials: () => readCredentials(settings.credentialsFile), apiBase: settings.apiBase, oauthUrl: settings.oauthUrl, minIntervalMs: settings.apiMinIntervalMs });
 	seedHandler({ stateDir: context.config.state.dir, settings, log: context.log, reseed: context.env.AIKIDO_RESEED_HANDLER === "1" });
 	const reader = new GitHubPullRequestReader({ apiBase: context.config.git.githubApi, token: async () => (context.gitTokenSource ? await context.gitTokenSource() : context.gitToken!) });
 	const hooks = createFixerHooks({ settings, aikido, reader, ...(context.timers ? { timers: context.timers } : {}), stateDir: context.config.state.dir, log: context.log });

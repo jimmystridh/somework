@@ -19,11 +19,14 @@ interface Rig {
 	resolved: string[];
 	stateDir: string;
 	clock: { now: Date };
+	/** The `details` option of every read, in order: false is the group alone, true the group with its issues. */
+	reads: boolean[];
 }
 
 function rig(env: NodeJS.ProcessEnv = {}, resolve?: (id: string | number) => Promise<any>): Rig {
 	const stateDir = mkdtempSync(join(tmpdir(), "aikido-hooks-"));
 	const resolved: string[] = [];
+	const reads: boolean[] = [];
 	const clock = { now: new Date("2026-10-06T09:00:00Z") };
 	const settings = loadSettings({ AIKIDO_REPOSITORY_URL: REPO, ...env });
 	const hooks = createFixerHooks({
@@ -31,9 +34,9 @@ function rig(env: NodeJS.ProcessEnv = {}, resolve?: (id: string | number) => Pro
 		stateDir,
 		now: () => clock.now,
 		boundary: () => "testbound",
-		aikido: { resolveIssue: async (id) => (resolved.push(String(id)), resolve ? resolve(id) : { group: group(), issue }) },
+		aikido: { resolveIssue: async (id, options) => (resolved.push(String(id)), reads.push(options?.details !== false), resolve ? resolve(id) : { group: group(), issue }) },
 	});
-	return { hooks, resolved, stateDir, clock };
+	return { hooks, resolved, stateDir, clock, reads };
 }
 
 const request = (extra: Record<string, unknown> = {}) => ({ issue: { id: 12 }, repository: { url: REPO }, budget: { maxTokens: 300_000, maxMinutes: 30 }, ...extra });
@@ -75,7 +78,8 @@ describe("preparing a task", () => {
 		const prepared = await prepare(r, "t1");
 		assert.equal(prepared.agentKey, "aikido:12");
 		assert.deepEqual(prepared.repository, { url: REPO, ref: "HEAD" });
-		assert.deepEqual(r.resolved, ["12"]);
+		assert.deepEqual(r.resolved, ["12", "12"], "the group first, then the group with its issues for a job that will run");
+		assert.deepEqual(r.reads, [false, true]);
 		const instruction = r.hooks.instruction!(prepared, { taskId: "t1" });
 		assert.match(instruction, /<<<AIKIDO-testbound/);
 		assert.match(instruction, /Prototype pollution in lodash/);
@@ -97,7 +101,19 @@ describe("preparing a task", () => {
 		const r = rig();
 		await assert.rejects(prepare(r, "t1", request({ repository: { url: "https://github.com/acme/other.git" } })), /only fixes the repository it is configured for/);
 		await prepare(r, "t2", request({ repository: { url: "https://github.com/ACME/shop" } }));
-		assert.deepEqual(r.resolved, ["12"]);
+		assert.deepEqual(r.resolved, ["12", "12"]);
+	});
+
+	it("decides what it can from the group alone: an issue of a type it does not fix, or inside the attempt window, never costs the heavy read", async () => {
+		const secret = rig({}, async () => ({ group: group({ type: "leaked_secret" }), issue }));
+		await prepare(secret, "t1");
+		assert.deepEqual(secret.reads, [false], "a leaked secret is skipped after the group");
+		const again = rig();
+		await prepare(again, "a");
+		assert.deepEqual(again.reads, [false, true]);
+		again.clock.now = new Date("2026-10-06T09:01:00Z");
+		await prepare(again, "b");
+		assert.deepEqual(again.reads, [false, true, false], "inside the window the second job reads the group only");
 	});
 
 	it("turns an unknown issue and refused credentials into invalid input, and a passing Aikido outage into a retry", async () => {

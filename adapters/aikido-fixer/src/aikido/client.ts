@@ -60,6 +60,31 @@ export interface AikidoClientOptions {
 	fetch?: typeof fetch;
 	now?: () => number;
 	timeoutMs?: number;
+	/** The least time between two requests to Aikido, whatever the number of jobs asking (default 1500 ms). */
+	minIntervalMs?: number;
+	/** How often a rate-limited request is tried again, after the wait Aikido names or a growing one (default 3). */
+	maxRetries?: number;
+	/** How long a resolved issue is kept and shared between jobs (default 5 minutes; 0 keeps nothing). */
+	cacheMs?: number;
+	sleep?: (ms: number) => Promise<void>;
+}
+
+const MAX_WAIT_MS = 60_000;
+const BASE_WAIT_MS = 2_000;
+
+/** The wait a `Retry-After` header asks for (seconds or a date), cut at a minute; undefined when it names none. */
+export function retryAfterMs(header: string | null | undefined, now: number): number | undefined {
+	if (!header) return undefined;
+	const seconds = Number(header);
+	if (Number.isFinite(seconds) && seconds >= 0) return Math.min(MAX_WAIT_MS, Math.round(seconds * 1000));
+	const date = Date.parse(header);
+	return Number.isNaN(date) ? undefined : Math.min(MAX_WAIT_MS, Math.max(0, date - now));
+}
+
+interface Resolved {
+	group: Record<string, any>;
+	issue?: Record<string, any>;
+	issues?: Record<string, any>[];
 }
 
 type Json = Record<string, any>;
@@ -76,8 +101,16 @@ export class AikidoClient {
 	readonly #fetch: typeof fetch;
 	readonly #now: () => number;
 	readonly #timeoutMs: number;
+	readonly #minIntervalMs: number;
+	readonly #maxRetries: number;
+	readonly #cacheMs: number;
+	readonly #sleep: (ms: number) => Promise<void>;
 	#token?: { value: string; expiresAt: number };
 	#pending?: Promise<string>;
+	#lastSend = 0;
+	#turn: Promise<unknown> = Promise.resolve();
+	readonly #groups = new Map<string, { at: number; value: Promise<{ found: Resolved; direct: boolean }> }>();
+	readonly #exports = new Map<string, { at: number; value: Promise<Json[]> }>();
 
 	constructor(options: AikidoClientOptions) {
 		const region = (options.region ?? "eu").toLowerCase();
@@ -92,6 +125,45 @@ export class AikidoClient {
 		this.#fetch = options.fetch ?? fetch;
 		this.#now = options.now ?? Date.now;
 		this.#timeoutMs = options.timeoutMs ?? 15_000;
+		this.#minIntervalMs = options.minIntervalMs ?? 1500;
+		this.#maxRetries = options.maxRetries ?? 3;
+		this.#cacheMs = options.cacheMs ?? 300_000;
+		this.#sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+	}
+
+	/** One request at a time leaves, at least `minIntervalMs` after the previous one: a burst of jobs is spread out instead of sent at once. */
+	#paced(): Promise<void> {
+		const mine = this.#turn.then(async () => {
+			const wait = this.#lastSend + this.#minIntervalMs - this.#now();
+			if (wait > 0) await this.#sleep(wait);
+			this.#lastSend = this.#now();
+		});
+		this.#turn = mine.catch(() => undefined);
+		return mine;
+	}
+
+	/** A paced request that is tried again when Aikido says it is going too fast (429), after the wait it names or a growing one. */
+	async #request(url: string, init: RequestInit): Promise<{ status: number; text: string }> {
+		for (let attempt = 0; ; attempt++) {
+			await this.#paced();
+			const answer = await this.#send(url, init);
+			if (answer.status !== 429 || attempt >= this.#maxRetries) return answer;
+			const wait = answer.retryAfter ?? Math.min(MAX_WAIT_MS, BASE_WAIT_MS * 2 ** attempt) + Math.floor(Math.random() * 500);
+			await this.#sleep(wait);
+		}
+	}
+
+	#remember<T>(cache: Map<string, { at: number; value: Promise<T> }>, key: string, load: () => Promise<T>): Promise<T> {
+		const hit = cache.get(key);
+		if (hit && this.#now() - hit.at < this.#cacheMs) return hit.value;
+		const value = load();
+		cache.set(key, { at: this.#now(), value });
+		// a failure is not kept: the next job asks again
+		value.catch(() => {
+			if (cache.get(key)?.value === value) cache.delete(key);
+		});
+		if (cache.size > 200) for (const [old, entry] of cache) if (this.#now() - entry.at >= this.#cacheMs) cache.delete(old);
+		return value;
 	}
 
 	#guard(url: string): void {
@@ -117,11 +189,12 @@ export class AikidoClient {
 		return Buffer.concat(chunks).toString("utf8");
 	}
 
-	async #send(url: string, init: RequestInit): Promise<{ status: number; text: string }> {
+	async #send(url: string, init: RequestInit): Promise<{ status: number; text: string; retryAfter?: number }> {
 		this.#guard(url);
 		try {
 			const response = await this.#fetch(url, { ...init, redirect: "error", signal: AbortSignal.timeout(this.#timeoutMs) });
-			return { status: response.status, text: await this.#read(response) };
+			const retryAfter = retryAfterMs(response.headers?.get?.("retry-after"), this.#now());
+			return { status: response.status, text: await this.#read(response), ...(retryAfter !== undefined ? { retryAfter } : {}) };
 		} catch (error) {
 			if (error instanceof AikidoError) throw error;
 			throw new AikidoError("unavailable", `Aikido could not be reached: ${error instanceof Error ? error.name : "error"}`);
@@ -134,7 +207,7 @@ export class AikidoClient {
 			try {
 				const { clientId, clientSecret } = this.#credentials();
 				const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-				const { status, text } = await this.#send(this.#oauthUrl, { method: "POST", headers: { authorization: `Basic ${basic}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ grant_type: "client_credentials" }) });
+				const { status, text } = await this.#request(this.#oauthUrl, { method: "POST", headers: { authorization: `Basic ${basic}`, "content-type": "application/json", accept: "application/json" }, body: JSON.stringify({ grant_type: "client_credentials" }) });
 				if (status === 400 || status === 401 || status === 403) throw new AikidoError("unauthorized", `Aikido refused the client credentials (${status})`, status);
 				if (status >= 400) throw new AikidoError(status === 429 ? "rate_limited" : "unavailable", `Aikido's token endpoint answered ${status}`, status);
 				let parsed: Json;
@@ -156,7 +229,7 @@ export class AikidoClient {
 
 	async #get(path: string, retried = false): Promise<Json> {
 		const token = await this.#accessToken(retried);
-		const { status, text } = await this.#send(`${this.#apiBase}${path}`, { method: "GET", headers: { authorization: `Bearer ${token}`, accept: "application/json" } });
+		const { status, text } = await this.#request(`${this.#apiBase}${path}`, { method: "GET", headers: { authorization: `Bearer ${token}`, accept: "application/json" } });
 		if (status === 401 && !retried) return this.#get(path, true);
 		if (status === 401 || status === 403) throw new AikidoError("unauthorized", `Aikido refused the request for ${path.split("/").slice(0, 3).join("/")} (${status}): the client lacks read access to issues`, status);
 		if (status === 404) throw new AikidoError("not_found", `Aikido has nothing at ${path.split("/").slice(0, 3).join("/")}`, 404);
@@ -182,24 +255,33 @@ export class AikidoClient {
 		}
 	}
 
+	/** The group (or the issue and its group) an id names: one to three requests, shared between jobs for a few minutes. */
+	#lookup(key: string): Promise<{ found: Resolved; direct: boolean }> {
+		return this.#remember(this.#groups, key, async () => {
+			try {
+				return { found: { group: await this.#get(`/issues/groups/${key}`) }, direct: true };
+			} catch (error) {
+				if (!(error instanceof AikidoError) || error.kind !== "not_found") throw error;
+			}
+			const issue = await this.#get(`/issues/${key}`);
+			const groupId = issue.group_id ?? issue.groupId;
+			if (!Number.isInteger(groupId)) return { found: { group: { id: issue.id, title: issue.rule ?? "", severity: issue.severity, type: issue.type }, issue }, direct: false };
+			return { found: { group: await this.#get(`/issues/groups/${groupId}`), issue }, direct: false };
+		});
+	}
+
 	/**
 	 * The issue group with that id and the open issues in it (file, package, versions: the group alone has none of that); when there is no
 	 * group, the issue with that id and its group. The issues are best effort: a group is still returned when they cannot be read.
+	 * `details: false` leaves the issues out, which saves the heaviest request: enough to decide whether the issue is worth working on.
 	 * Ids are integers: anything else is refused before a request is made.
 	 */
-	async resolveIssue(id: string | number): Promise<{ group: Json; issue?: Json; issues?: Json[] }> {
+	async resolveIssue(id: string | number, options: { details?: boolean } = {}): Promise<Resolved> {
 		const key = String(id);
 		if (!/^[0-9]{1,12}$/.test(key)) throw new AikidoError("not_found", "an Aikido issue id is a whole number");
-		try {
-			const group = await this.#get(`/issues/groups/${key}`);
-			const issues = await this.#groupIssues(key);
-			return { group, ...(issues.length ? { issue: issues[0], issues } : {}) };
-		} catch (error) {
-			if (!(error instanceof AikidoError) || error.kind !== "not_found") throw error;
-		}
-		const issue = await this.#get(`/issues/${key}`);
-		const groupId = issue.group_id ?? issue.groupId;
-		if (!Number.isInteger(groupId)) return { group: { id: issue.id, title: issue.rule ?? "", severity: issue.severity, type: issue.type }, issue };
-		return { group: await this.#get(`/issues/groups/${groupId}`), issue };
+		const { found, direct } = await this.#lookup(key);
+		if (!direct || options.details === false) return found;
+		const issues = await this.#remember(this.#exports, key, () => this.#groupIssues(key));
+		return { group: found.group, ...(issues.length ? { issue: issues[0], issues } : {}) };
 	}
 }

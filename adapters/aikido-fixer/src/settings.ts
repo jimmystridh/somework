@@ -33,6 +33,8 @@ export interface FixerSettings {
 	ciWatchMinutes: number;
 	/** Follow-up tasks the handler starts per day. */
 	followUpCapPerDay: number;
+	/** The least time between two requests to Aikido, in milliseconds (`AIKIDO_API_MIN_INTERVAL_MS`). */
+	apiMinIntervalMs: number;
 	apiBase?: string;
 	oauthUrl?: string;
 	/** A JSON file of earlier attempts to seed the account the chat gives of what the agent did (`AIKIDO_LEDGER_IMPORT`). Imported once, harmlessly again. */
@@ -121,6 +123,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): FixerSetting
 		followUpMinutes: minutesList(env, "AIKIDO_FOLLOWUP_MINUTES", [10, 20, 40, 90, 180, 360]),
 		ciWatchMinutes: integer(env, "AIKIDO_CI_WATCH_MINUTES", 10),
 		followUpCapPerDay: integer(env, "AIKIDO_FOLLOWUP_CAP_PER_DAY", 10),
+		apiMinIntervalMs: integer(env, "AIKIDO_API_MIN_INTERVAL_MS", 1500),
 		...(env.AIKIDO_LEDGER_IMPORT ? { ledgerImport: env.AIKIDO_LEDGER_IMPORT } : {}),
 		...(override && env.AIKIDO_API_BASE ? { apiBase: env.AIKIDO_API_BASE } : {}),
 		...(override && env.AIKIDO_OAUTH_URL ? { oauthUrl: env.AIKIDO_OAUTH_URL } : {}),

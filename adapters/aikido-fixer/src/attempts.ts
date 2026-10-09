@@ -97,17 +97,32 @@ export class AttemptLedger {
 	}
 
 	/** Records a fix attempt for the issue unless a limit says no. Safe to call again for the same task. */
-	begin(groupId: string, taskId: string): Begin {
-		const stored = this.#read();
+	/** What `begin` would answer, without recording anything: lets a job that will be skipped anyway be skipped before it costs requests. */
+	wouldBegin(groupId: string, taskId: string): Begin {
+		return this.#check(this.#read(), groupId, taskId);
+	}
+
+	#check(stored: ReturnType<AttemptLedger["#read"]>, groupId: string, taskId: string): Begin {
 		const now = this.#now();
 		const day = now.toISOString().slice(0, 10);
-		const issue = (stored.issues[groupId] ??= { attempts: [] });
+		const issue = stored.issues[groupId] ?? { attempts: [] };
 		if (issue.attempts.some((attempt) => attempt.taskId === taskId)) return { ok: true };
 		if (issue.attempts.length >= this.#limits.maxAttemptsPerIssue) return { ok: false, reason: `this issue was already attempted ${issue.attempts.length} time(s) (the limit is ${this.#limits.maxAttemptsPerIssue}): a person has to look at it` };
 		const last = issue.attempts.at(-1);
 		if (last && now.getTime() - Date.parse(last.at) < this.#limits.cooldownMinutes * 60_000) return { ok: false, reason: `an attempt on this issue started less than ${this.#limits.cooldownMinutes} minutes ago` };
+		if ((stored.days[day] ?? []).length >= this.#limits.dailyCap) return { ok: false, reason: `the daily cap of ${this.#limits.dailyCap} fix attempts is reached` };
+		return { ok: true };
+	}
+
+	begin(groupId: string, taskId: string): Begin {
+		const stored = this.#read();
+		const answer = this.#check(stored, groupId, taskId);
+		if (!answer.ok) return answer;
+		const issue = (stored.issues[groupId] ??= { attempts: [] });
+		if (issue.attempts.some((attempt) => attempt.taskId === taskId)) return { ok: true };
+		const now = this.#now();
+		const day = now.toISOString().slice(0, 10);
 		const today = (stored.days[day] ??= []);
-		if (today.length >= this.#limits.dailyCap) return { ok: false, reason: `the daily cap of ${this.#limits.dailyCap} fix attempts is reached` };
 		issue.attempts.push({ taskId, at: now.toISOString() });
 		today.push(taskId);
 		for (const old of Object.keys(stored.days)) if (Date.parse(`${old}T00:00:00Z`) < now.getTime() - KEEP_DAYS * 86_400_000) delete stored.days[old];

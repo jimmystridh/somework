@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { AikidoClient, AikidoError, API_BASES, OAUTH_URL, readCredentials } from "../src/aikido/client.ts";
+import { AikidoClient, AikidoError, API_BASES, OAUTH_URL, readCredentials, retryAfterMs } from "../src/aikido/client.ts";
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -203,5 +203,98 @@ describe("Aikido credentials file", () => {
 		assert.throws(() => readCredentials("/nonexistent/client.json"), /cannot be read: ENOENT/);
 		assert.throws(() => readCredentials(write("secret-not-json")), (error: Error) => /is not valid JSON/.test(error.message) && !error.message.includes("secret-not-json"));
 		assert.throws(() => readCredentials(write('{"clientId":"a"}')), /needs clientId and clientSecret/);
+	});
+});
+
+describe("Aikido client: pacing, rate limits and sharing", () => {
+	const OAUTH = "https://aikido.test/oauth";
+	const API = "https://aikido.test/api";
+	const json = (body: unknown, status = 200, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+
+	function scripted(answers: Record<string, (() => Response)[] | (() => Response)>) {
+		const calls: { at: number; url: string }[] = [];
+		const clock = { now: 1_000_000 };
+		const sleeps: number[] = [];
+		const fetcher = (async (url: string) => {
+			const path = url.startsWith(OAUTH) ? "/oauth" : url.slice(API.length);
+			calls.push({ at: clock.now, url: path });
+			if (path === "/oauth") return json({ access_token: "tok", expires_in: 3600 });
+			const answer = answers[path];
+			const next = Array.isArray(answer) ? (answer.length > 1 ? answer.shift()! : answer[0]!) : answer;
+			return next ? next() : json({}, 404);
+		}) as unknown as typeof fetch;
+		const make = (extra: Partial<ConstructorParameters<typeof AikidoClient>[0]> = {}) =>
+			new AikidoClient({
+				credentials: { clientId: "client-id-1", clientSecret: "client-secret-value" },
+				apiBase: API,
+				oauthUrl: OAUTH,
+				fetch: fetcher,
+				now: () => clock.now,
+				sleep: async (ms) => {
+					sleeps.push(ms);
+					clock.now += ms;
+				},
+				...extra,
+			});
+		return { make, calls, sleeps, clock };
+	}
+
+	it("spaces requests out: a burst waits for its turn instead of going at once", async () => {
+		const s = scripted({ "/issues/groups/1": () => json({ id: 1 }), "/issues/groups/2": () => json({ id: 2 }), "/issues/groups/3": () => json({ id: 3 }) });
+		const c = s.make({ minIntervalMs: 1500, cacheMs: 0 });
+		await Promise.all([1, 2, 3].map((id) => c.resolveIssue(id, { details: false })));
+		const times = s.calls.map((call) => call.at);
+		for (let i = 1; i < times.length; i++) assert.ok(times[i]! - times[i - 1]! >= 1500, `request ${i} came ${times[i]! - times[i - 1]!} ms after the previous one`);
+	});
+
+	it("waits as long as Retry-After says and tries again, then gives up with rate_limited", async () => {
+		const answers = [() => json({}, 429, { "retry-after": "7" }), () => json({ id: 1 })];
+		const s = scripted({ "/issues/groups/1": answers });
+		const found = await s.make({ minIntervalMs: 0, cacheMs: 0 }).resolveIssue(1, { details: false });
+		assert.deepEqual(found.group, { id: 1 });
+		assert.ok(s.sleeps.includes(7000), `slept ${s.sleeps}`);
+
+		const never = scripted({ "/issues/groups/1": () => json({}, 429) });
+		await assert.rejects(never.make({ minIntervalMs: 0, cacheMs: 0, maxRetries: 2 }).resolveIssue(1, { details: false }), (error: unknown) => error instanceof AikidoError && error.kind === "rate_limited");
+		assert.equal(never.calls.filter((call) => call.url === "/issues/groups/1").length, 3, "the first try and two more");
+		const grown = never.sleeps.filter((ms) => ms >= 2000);
+		assert.ok(grown.length >= 2 && grown[1]! > grown[0]!, `the wait grows: ${never.sleeps}`);
+	});
+
+	it("reads a Retry-After given as a date, and never waits more than a minute", () => {
+		assert.equal(retryAfterMs("3", 0), 3000);
+		assert.equal(retryAfterMs("999", 0), 60_000);
+		assert.equal(retryAfterMs(new Date(5000).toUTCString(), 1000), 4000);
+		assert.equal(retryAfterMs("soon", 0), undefined);
+		assert.equal(retryAfterMs(null, 0), undefined);
+	});
+
+	it("shares an issue between jobs: the same id is asked for once, also when asked at the same time, and a failure is not kept", async () => {
+		const failing = [() => json({}, 503), () => json({ id: 5 })];
+		const s = scripted({ "/issues/groups/4": () => json({ id: 4 }), "/issues/export?format=json&filter_status=open&filter_issue_group_id=4": () => json([{ id: 41 }]), "/issues/groups/5": failing });
+		const c = s.make({ minIntervalMs: 0, cacheMs: 60_000 });
+		const [a, b] = await Promise.all([c.resolveIssue(4), c.resolveIssue("4")]);
+		assert.deepEqual(a, b);
+		await c.resolveIssue(4);
+		assert.equal(s.calls.filter((call) => call.url === "/issues/groups/4").length, 1);
+		assert.equal(s.calls.filter((call) => call.url.startsWith("/issues/export")).length, 1);
+		await assert.rejects(c.resolveIssue(5, { details: false }), (error: unknown) => error instanceof AikidoError && error.kind === "unavailable");
+		assert.deepEqual((await c.resolveIssue(5, { details: false })).group, { id: 5 });
+		const later = scripted({ "/issues/groups/4": () => json({ id: 4 }) });
+		const short = later.make({ minIntervalMs: 0, cacheMs: 1000 });
+		await short.resolveIssue(4, { details: false });
+		later.clock.now += 2000;
+		await short.resolveIssue(4, { details: false });
+		assert.equal(later.calls.filter((call) => call.url === "/issues/groups/4").length, 2, "a kept issue goes stale");
+	});
+
+	it("leaves the heaviest request out when only the group is wanted, and asks for it later", async () => {
+		const s = scripted({ "/issues/groups/9": () => json({ id: 9 }), "/issues/export?format=json&filter_status=open&filter_issue_group_id=9": () => json([{ id: 91 }]) });
+		const c = s.make({ minIntervalMs: 0 });
+		assert.deepEqual(await c.resolveIssue(9, { details: false }), { group: { id: 9 } });
+		assert.ok(!s.calls.some((call) => call.url.startsWith("/issues/export")));
+		const full = await c.resolveIssue(9);
+		assert.deepEqual(full.issues, [{ id: 91 }]);
+		assert.equal(s.calls.filter((call) => call.url === "/issues/groups/9").length, 1, "the group is not read twice");
 	});
 });
