@@ -183,6 +183,18 @@ export function senderMatches(entries: readonly string[], sender: { kind: string
 	return entries.some((entry) => (entry.startsWith("kind:") ? entry.slice(5).toLowerCase() === sender.kind.toLowerCase() : entry === sender.id));
 }
 
+/** One job an instruction asks for. */
+export interface PlannedJob {
+	capability: { id: string; version: string };
+	input: Record<string, unknown>;
+}
+
+/**
+ * What a role makes of an instruction: a job, why it cannot, or a queue of jobs (run one after another, each answered separately; `intro` says
+ * what was found and what happens, before the first one starts).
+ */
+export type PlannedInstruction = PlannedJob | { refuse: string } | { batch: PlannedJob[]; intro: string };
+
 /** What a role supplies for chat. Everything in it is the role's own, trusted code; every member is optional. */
 export interface ChatRoleHooks {
 	/** The role's standing orders for the ask tier: what the agent is and how to talk about it. The kit adds its own rules after them. */
@@ -200,7 +212,7 @@ export interface ChatRoleHooks {
 	 * Turns an instruction into a task input for the role's own capability, or says why the role cannot do it. The kit sets the budget
 	 * itself and overwrites whatever the input says about it. Without this hook the role takes no instructions in chat.
 	 */
-	instructInput?(text: string): { capability: { id: string; version: string }; input: Record<string, unknown> } | { refuse: string };
+	instructInput?(text: string): PlannedInstruction | Promise<PlannedInstruction>;
 	/**
 	 * For an instructor's plain message (no `instruct:`): the job it plainly asks for, or undefined to let the open tier answer it. A role offers
 	 * this only for requests that cannot be mistaken for a question (an action word and a target it knows), because a job is real work.
@@ -764,15 +776,39 @@ export class ModelChatResponder {
 			await this.#say(message, `There is nothing after ${settings.instructPrefix} Tell me what to do, for example: ${settings.instructPrefix} <what you want done>.`, "refused");
 			return this.#refuse(message, "empty_instruction");
 		}
-		const planned = instruct.input(instruction);
+		const planned = await instruct.input(instruction);
 		if ("refuse" in planned) {
 			await this.#say(message, `I cannot do that as an instruction: ${planned.refuse}`, "refused");
 			this.#deps.log("info", "chat_instruction_refused", { from: message.sender.id, reason: planned.refuse.slice(0, 200) });
 			return this.#refuse(message, "outside_contract");
 		}
+		if ("batch" in planned) return await this.#instructBatch(message, planned, started);
+		return await this.#runPlanned(message, planned, remaining, started, `chat-${message.messageId}`);
+	}
+
+	/** Several jobs for one instruction (a queue of tickets): one after another, each answered on its own, within what is left of the chat budget. */
+	async #instructBatch(message: InboundMessage, planned: { batch: PlannedJob[]; intro: string }, started: number): Promise<ModelChatOutcome> {
+		await this.#say(message, finishReply(planned.intro, this.#deps.settings.replyMaxBytes), "answer");
+		let done = 0;
+		for (const [index, job] of planned.batch.entries()) {
+			const remaining = this.#deps.ledger.chatRemaining();
+			if (this.#deps.signal?.aborted) break;
+			if (remaining < 1000) {
+				await this.#say(message, `I stopped after ${done} of ${planned.batch.length}: my chat budget for today is used. The rest are not started.`, "answer");
+				break;
+			}
+			await this.#runPlanned(message, job, remaining, started, `chat-${message.messageId}-${index + 1}`, `(${index + 1}/${planned.batch.length}) `);
+			done += 1;
+		}
+		this.#count("answered", "instruct");
+		return { answered: true };
+	}
+
+	async #runPlanned(message: InboundMessage, planned: PlannedJob, remaining: number, started: number, taskId: string, prefix = ""): Promise<ModelChatOutcome> {
+		const { settings, instruct } = this.#deps;
+		if (!instruct) return this.#refuse(message, "no_instruct_tier");
 		// the budget is the role's chat budget, whatever the input or the message says; the handler still clamps it to the role's own limits
 		const budget = { maxTokens: Math.min(settings.instructBudget.maxTokens, settings.hardTokenCap, remaining), maxMinutes: settings.instructBudget.maxMinutes };
-		const taskId = `chat-${message.messageId}`;
 		const job = { taskId, capability: { id: planned.capability.id, version: planned.capability.version }, input: { ...planned.input, budget }, task: { conversationId: undefined }, fencingToken: 0, runtimeInstanceId: "chat" } as unknown as Job;
 		const stop = new AbortController();
 		const forward = () => stop.abort(this.#deps.signal?.reason);
@@ -799,7 +835,7 @@ export class ModelChatResponder {
 				if (waiting) clearTimeout(waiting);
 			}
 			this.#deps.metrics?.counter("somework_chat_instructions_total", "Instructions given in chat, by outcome")({ outcome: outcome.type === "completed" ? "completed" : outcome.type === "failed" ? outcome.failure.code : "detached" });
-			const main = finishReply(this.#describe(outcome), settings.replyMaxBytes);
+			const main = finishReply(`${prefix}${this.#describe(outcome)}`, settings.replyMaxBytes);
 			const attachments = describeCaptured(instruct.artifacts?.take(taskId) ?? [], settings.replyMaxBytes - Buffer.byteLength(main) - 2);
 			const reply = finishReply(attachments ? `${main}\n${attachments}` : main, settings.replyMaxBytes);
 			await this.#say(message, reply, "answer");

@@ -145,7 +145,7 @@ WHO sent the message and by an explicit prefix, never by what the message says:
   `hooks.chat.context`), never from a record the model wrote. The earlier messages of the conversation and the new message are data inside
   random markers; replies are redacted, cut at 4 KB and sent in the same conversation with the label `chatReply`.
 * **INSTRUCT** (default instructors: `agent/manager`; the message must start with `instruct:`). `hooks.chat.instructInput(text)` turns the text
-  into the input of one of the role's own capabilities, or refuses with a reason ("outside my contract"); the instruction then runs as a
+  into the input of one of the role's own capabilities, or refuses with a reason ("outside my contract"), or (it may answer asynchronously) plans a queue of jobs `{ batch, intro }` that run one after another, each answered on its own with `(i/n)` in front, until the chat budget of the day is used; the instruction then runs as a
   synthetic job of the role's normal handler, so the same sandbox, tools, guards, approval policy, git protocol and `wrapRuntime` apply
   as for a task. The budget is the chat budget (`instructBudget`, default 150 000 tokens and 15 minutes; the message cannot change it), clamped
   by what the `chat` pool has left and by the role's own limits. A step that needs approval is asked of the instructor as a chat message
