@@ -87,6 +87,12 @@ export class DurableInbox {
 		if (item) this.#table.put({ ...item, status: "running", attempts: item.attempts + 1 });
 	}
 
+	/** Puts a message back as not handled: the run for it was interrupted (shutdown) and the next start takes it up again. */
+	release(id: string): void {
+		const item = this.#table.get(id);
+		if (item && item.status === "running") this.#table.put({ ...item, status: "received" });
+	}
+
 	finish(id: string): void {
 		const item = this.#table.get(id);
 		if (!item) return;
