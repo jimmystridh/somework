@@ -33,7 +33,7 @@ export interface Issue {
 		components?: { name: string }[];
 		issuetype?: { name: string };
 		comment?: { comments?: Comment[] };
-		attachment?: { id: string; filename: string; size?: number }[];
+		attachment?: { id: string; filename: string; size?: number; mimeType?: string; content?: string; created?: string; author?: { displayName?: string; name?: string } }[];
 		issuelinks?: unknown[];
 		[field: string]: unknown;
 	};
@@ -130,6 +130,36 @@ export class JiraClient {
 			throw new JiraError(response.status, this.#scrub(`${method} ${path.split("?")[0]} answered ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`));
 		}
 		return (response.body ? JSON.parse(response.body) : undefined) as T;
+	}
+
+	/** The bytes of an attachment, from the address Jira gave for it: this ticket system only, no redirect, at most `maxBytes`. */
+	download(contentUrl: string, maxBytes: number): Promise<Buffer> {
+		const url = new URL(contentUrl, `${this.#base.origin}/`);
+		if (url.origin !== this.#base.origin) return Promise.reject(new JiraError(0, "refusing to download from another host"));
+		return new Promise((resolve, reject) => {
+			const req = httpsRequest(url, { method: "GET", agent: this.#agent, headers: { authorization: `Bearer ${this.#token}`, accept: "*/*" } }, (response) => {
+				const status = response.statusCode ?? 0;
+				if (status < 200 || status >= 300) {
+					response.resume();
+					return reject(new JiraError(status, this.#scrub(`the attachment answered ${status}`)));
+				}
+				const chunks: Buffer[] = [];
+				let size = 0;
+				response.on("data", (chunk: Buffer) => {
+					size += chunk.length;
+					if (size > maxBytes) {
+						req.destroy();
+						return reject(new JiraError(0, `the attachment is larger than ${maxBytes} bytes`));
+					}
+					chunks.push(chunk);
+				});
+				response.on("error", reject);
+				response.on("end", () => resolve(Buffer.concat(chunks)));
+			});
+			req.setTimeout(this.#timeout, () => req.destroy(new Error("request timed out")));
+			req.on("error", (error) => reject(error instanceof JiraError ? error : new JiraError(0, this.#scrub(`cannot reach the ticket system: ${error.message}`))));
+			req.end();
+		});
 	}
 
 	/** Who the token belongs to; the cheapest call that proves the certificate and the token work. */

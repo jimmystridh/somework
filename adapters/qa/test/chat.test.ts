@@ -16,7 +16,7 @@ describe("QA in chat", () => {
 
 	it("reads tickets and the repository in a conversation, and its standing orders say so", () => {
 		const withTools = qaChat({ CHAT_REPOSITORY_URL: "https://github.com/acme/app", CHAT_REPOSITORY_REF: "main" } as NodeJS.ProcessEnv, undefined, { extension: { name: "qa-jira", tools: [] } as any });
-		assert.deepEqual(askToolNames(profile.chat, withTools), ["read", "agent_status", "jira_get_issue", "jira_search", "jira_changelog", "jira_get_comments"]);
+		assert.deepEqual(askToolNames(profile.chat, withTools), ["read", "agent_status", "jira_get_issue", "jira_search", "jira_changelog", "jira_get_comments", "jira_get_attachments"]);
 		assert.deepEqual(withTools.checkout!(), { repoUrl: "https://github.com/acme/app", ref: "main" });
 		assert.equal(chat.checkout!()!.ref, undefined);
 		assert.equal(qaChat({} as NodeJS.ProcessEnv).checkout, undefined, "no repository configured: nothing to read");

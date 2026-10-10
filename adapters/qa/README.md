@@ -106,6 +106,7 @@ used only by the harness, and scrubbed from logs, artifacts and results. The mod
 | Tool | |
 |---|---|
 | `jira_get_issue`, `jira_get_comments`, `jira_changelog`, `jira_search` | read. Only keys that match the ticket pattern; without a key they read the ticket under verification |
+| `jira_get_attachments` | read. Lists the ticket's attachments, or fetches one by name: text files as text, images and pdf saved under `ticket-files/` in the evidence folder (to open with `read`); at most 15 MB, this ticket system only, never the other kinds of file. The prompt and the skill overlay tell the model to look at them before it starts |
 | `qa_record_verdict` | the model's verdict, recorded before it writes; the write tools check it. Changes nothing outside the job |
 | `jira_attach` | attach a `.webm` from `videos/` or a `.png` from `screenshots/` of the evidence folder (nothing else, size-limited, confined) |
 | `jira_comment` | a comment on the ticket under verification |

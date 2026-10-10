@@ -11,7 +11,7 @@ export interface FakeIssue {
 	assignee: { name: string; displayName: string } | null;
 	labels: string[];
 	comments: { id: string; author: { displayName: string }; body: string; created: string }[];
-	attachments: { id: string; filename: string; size: number }[];
+	attachments: { id: string; filename: string; size: number; mimeType?: string; content?: string; author?: { displayName: string }; created?: string }[];
 	histories: { created: string; author: { displayName: string }; items: { field: string; from?: string | null; fromString?: string | null; to?: string | null; toString?: string | null }[] }[];
 }
 
@@ -46,6 +46,8 @@ export class FakeJira {
 	readonly requests: { method: string; path: string; body?: string }[] = [];
 	transitions: Transition[] = DEFAULT_TRANSITIONS;
 	/** Users by the key or name the changelog records. */
+	/** Bytes of the attachments by their path (`/secure/attachment/<id>/<name>`). */
+	readonly files = new Map<string, Buffer>();
 	readonly users = new Map<string, { name: string; key: string; displayName: string; active: boolean }>();
 	/** Accept an assignment (204) without applying it. */
 	ignoreAssign = false;
@@ -93,6 +95,13 @@ export class FakeJira {
 			if (req.headers.authorization !== `Bearer ${PAT}`) return reply(401, { errorMessages: ["bad token"] });
 			this.beforeRequest?.(req.method!, url.pathname);
 			const parts = url.pathname.split("/").filter(Boolean); // rest api 2 issue KEY ...
+			if (url.pathname.startsWith("/secure/attachment/")) {
+				const bytes = this.files.get(url.pathname);
+				if (!bytes) return reply(404, { errorMessages: ["no such file"] });
+				res.statusCode = 200;
+				res.end(bytes);
+				return;
+			}
 			if (url.pathname === "/rest/api/2/user") {
 				const ref = url.searchParams.get("key") ?? url.searchParams.get("username") ?? "";
 				const user = this.users.get(ref);
