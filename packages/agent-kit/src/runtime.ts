@@ -25,6 +25,8 @@ export interface AgentRequest {
 	tools?: readonly string[];
 	/** Standing orders of this conversation instead of the runtime's. Fixed when the conversation is created. */
 	instructions?: string;
+	/** What the tools of this run may ask for while it goes (who is being answered, which conversation): see `AgentRuntime.contextOf`. Not stored. */
+	context?: unknown;
 }
 
 export interface Usage {
@@ -67,6 +69,10 @@ export interface AgentRuntime {
 	execute(request: AgentRequest, hooks: RunHooks): Promise<AgentOutcome>;
 	health(): { ready: boolean; reason?: string };
 	close(): Promise<void>;
+	/** The `context` of the run a tool call belongs to; `conversationId` is the one the tool's execution api carries. Undefined outside a run. */
+	contextOf?(conversationId: number): unknown;
+	/** Adds a message to a run that is going, read at its next turn boundary. False when no run with that request id is active. */
+	steer?(requestId: string, text: string): Promise<boolean>;
 }
 
 export const emptyUsage = (): Usage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 });

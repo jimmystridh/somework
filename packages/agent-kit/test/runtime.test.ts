@@ -100,6 +100,23 @@ describe("PiDurableRuntime", () => {
 		assert.equal(outcome.status, "done");
 	});
 
+	it("adds a message to a run that is going (steer): the model reads it at its next turn", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-steer-"));
+		const contexts: any[] = [];
+		const fake = scriptedModels(["bash:sleep 2", "final:done"], (context) => contexts.push(context));
+		const runtime = new PiDurableRuntime({ storagePath: join(dir, "state.sqlite"), models: fake.models, model: fake.model, env: (cwd) => new NodeExecutionEnv({ cwd: cwd ?? dir }) });
+		await runtime.start();
+		open.push(runtime);
+		const running = runtime.execute(request(dir, { requestId: "run-a", agentKey: "a", context: { sender: "agent/x" } }), hooks().hooks);
+		await sleep(700);
+		assert.equal(await runtime.steer("run-a", "please stop soon"), true);
+		assert.equal(await runtime.steer("nobody", "hello"), false);
+		assert.equal((await running).status, "done");
+		const lastTurn = JSON.stringify(contexts.at(-1)?.messages ?? []);
+		assert.match(lastTurn, /please stop soon/, "the model's last turn included the steered message");
+		assert.equal(await runtime.steer("run-a", "too late"), false, "a finished run takes nothing");
+	});
+
 	it("a repeated requestId returns the original run instead of running again", async () => {
 		const { runtime, workspace, fake } = await runtimeFor(["bash:echo once", "final:done"]);
 		const ws = workspace("w1");

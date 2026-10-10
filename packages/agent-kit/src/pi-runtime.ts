@@ -52,6 +52,9 @@ type ModelTotals = Record<string, Omit<ModelSpend, "provider" | "modelId">>;
 
 interface Active {
 	hooks: RunHooks;
+	requestId: string;
+	conversation: Conversation;
+	context?: unknown;
 }
 
 /** Pi Durable behind the `AgentRuntime` interface. One harness, one storage owner, one conversation per agent key. */
@@ -114,6 +117,19 @@ export class PiDurableRuntime implements AgentRuntime {
 		return [...this.#registered.keys()];
 	}
 
+	contextOf(conversationId: number): unknown {
+		return this.#active.get(conversationId)?.context;
+	}
+
+	async steer(requestId: string, text: string): Promise<boolean> {
+		for (const active of this.#active.values()) {
+			if (active.requestId !== requestId) continue;
+			await active.conversation.submit({ type: "input", content: text, whenBusy: "steer" } as never, ctx);
+			return true;
+		}
+		return false;
+	}
+
 	health(): { ready: boolean; reason?: string } {
 		return this.#harness && this.#resumed ? { ready: true } : { ready: false, reason: "storage not open or resume not finished" };
 	}
@@ -155,7 +171,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		if (!harness) throw new Error("the runtime is not started");
 		const conversation = await this.#conversation(request);
 		const conversationId = conversation.id as unknown as number;
-		this.#active.set(conversationId, { hooks });
+		this.#active.set(conversationId, { hooks, requestId: request.requestId, conversation, ...(request.context !== undefined ? { context: request.context } : {}) });
 		if (request.tools) this.#conversationTools.set(conversationId, new Set(request.tools));
 		const baseline = await this.#usageOf(conversation);
 		const reported = { totals: await this.#usageByModel(conversation) };
