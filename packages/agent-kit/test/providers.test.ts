@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider, type Context, type Provider } from "@earendil-works/pi-ai";
-import type { Job, JobControl } from "@somework/sdk";
+import type { Job, JobControl } from "../src/job-types.ts";
 import { loadConfig } from "../src/config.ts";
 import { FileCredentialStore } from "../src/credentials.ts";
 import { allowlist, isAllowed, parseModelList } from "../src/providers/allowlist.ts";

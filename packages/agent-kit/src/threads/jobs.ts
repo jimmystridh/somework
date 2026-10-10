@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { Handler, Job, JobControl, Outcome, StopReason } from "@somework/sdk";
+import type { Handler, Job, JobControl, Outcome, StopReason } from "../job-types.ts";
 import type { JobGate } from "../gate.ts";
 import { silent, type Log } from "../log.ts";
 import type { ApprovalDecision } from "../runtime.ts";

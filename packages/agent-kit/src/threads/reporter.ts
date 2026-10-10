@@ -1,4 +1,4 @@
-import type { Outcome } from "@somework/sdk";
+import type { Outcome } from "../job-types.ts";
 import { describeOutcome } from "../journal.ts";
 import { silent, type Log } from "../log.ts";
 import type { JobEntry, JobReporter, Party } from "./jobs.ts";

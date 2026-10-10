@@ -6,7 +6,7 @@ import { after, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createHandler, type AgentRuntime, type GitHost } from "@somework/agent-kit";
 import { makeRemote, sh } from "@somework/agent-kit/testing";
-import type { Job, JobControl } from "@somework/sdk";
+import type { Job, JobControl } from "@somework/agent-kit";
 import { createFixerHooks } from "../src/hooks.ts";
 import { profile } from "../src/profile.ts";
 import { loadSettings } from "../src/settings.ts";

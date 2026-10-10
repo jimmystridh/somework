@@ -8,6 +8,7 @@ export * from "./githost.ts";
 export * from "./github-app.ts";
 export * from "./handler.ts";
 export * from "./health.ts";
+export * from "./job-types.ts";
 export * from "./journal.ts";
 export * from "./ledger.ts";
 export * from "./log.ts";

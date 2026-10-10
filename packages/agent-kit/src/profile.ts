@@ -1,6 +1,7 @@
 import type { Extension } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import type { Failure, Outcome, ProgressUpdate, SomeWorkClient } from "@somework/sdk";
+import type { SomeWorkClient } from "@somework/sdk";
+import type { Failure, Outcome, ProgressUpdate } from "./job-types.ts";
 import type { ThreadRoleHooks } from "./threads/role.ts";
 import type { ThreadsConfig } from "./threads/settings.ts";
 import { validateEventsProfile } from "./events/config.ts";

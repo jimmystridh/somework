@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import type { Job, JobControl } from "@somework/sdk";
+import type { Job, JobControl } from "../src/job-types.ts";
 import { BranchExhaustedError, finalizeWorkspace, MAX_BRANCH_SUFFIX, prepareWorkspace, pushedWork, workspaceFor, type GitSession } from "../src/git.ts";
 import type { GitHost } from "../src/githost.ts";
 import { createHandler } from "../src/handler.ts";

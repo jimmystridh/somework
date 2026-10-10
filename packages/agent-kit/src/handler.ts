@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
-import type { Failure, Handler, Job, JobControl, Outcome, SomeWorkClient } from "@somework/sdk";
+import type { SomeWorkClient } from "@somework/sdk";
+import type { Failure, Handler, Job, JobControl, Outcome } from "./job-types.ts";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { BranchExhaustedError, DEFAULT_BRANCH_PREFIX, finalizeWorkspace, prepareScratchWorkspace, prepareWorkspace, pushedWork, RefNotFoundError, workspaceFor, type FinalizeResult, type GitSession } from "./git.ts";
 import { noPullRequests, type GitHost } from "./githost.ts";

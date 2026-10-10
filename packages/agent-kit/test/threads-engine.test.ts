@@ -11,7 +11,7 @@ import { MessageSender, type InboundMessage } from "../src/threads/message.ts";
 import { ResourceRegistry } from "../src/threads/resources.ts";
 import { DEFAULT_THREAD_SETTINGS, type ThreadSettings } from "../src/threads/settings.ts";
 import { DurableInbox, DurableTable } from "../src/threads/store.ts";
-import type { Handler } from "@somework/sdk";
+import type { Handler } from "../src/job-types.ts";
 import type { AgentOutcome, AgentRequest, RunHooks } from "../src/runtime.ts";
 
 const ME = "agent/qa";

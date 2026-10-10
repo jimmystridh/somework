@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import type { Handler, Outcome } from "@somework/sdk";
+import type { Handler, Outcome } from "../src/job-types.ts";
 import { JobGate } from "../src/gate.ts";
 import { JobManager, type JobEntry, type JobReporter, type JobSpec } from "../src/threads/jobs.ts";
 import { ResourceRegistry } from "../src/threads/resources.ts";

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import type { Job, JobControl } from "@somework/sdk";
+import type { Job, JobControl } from "../src/job-types.ts";
 import { createHandler } from "../src/handler.ts";
 import { PiDurableRuntime } from "../src/pi-runtime.ts";
 import { DEFAULT_APPROVAL_PATTERNS } from "../src/policy.ts";

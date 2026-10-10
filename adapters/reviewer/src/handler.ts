@@ -1,5 +1,5 @@
 import { createHandler, noPullRequests, type HandlerDeps } from "@somework/agent-kit";
-import type { Handler } from "@somework/sdk";
+import type { Handler } from "@somework/agent-kit";
 import { createReviewerHooks, type ReviewerOptions } from "./hooks.ts";
 import { profile } from "./profile.ts";
 

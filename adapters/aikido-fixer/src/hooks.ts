@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { InvalidInput, silent, type AgentRuntime, type TimersClient, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
-import type { Outcome } from "@somework/sdk";
+import type { Outcome } from "@somework/agent-kit";
 import { AikidoClient, AikidoError, readCredentials } from "./aikido/client.ts";
 import { eligibility, summariseIssue, type IssueSummary } from "./aikido/issue.ts";
 import { createAikidoTools } from "./aikido/tool.ts";

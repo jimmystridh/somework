@@ -1,4 +1,4 @@
-import type { ProgressUpdate } from "@somework/sdk";
+import type { ProgressUpdate } from "./job-types.ts";
 import type { ModelRef } from "./providers/allowlist.ts";
 
 export interface Budget {

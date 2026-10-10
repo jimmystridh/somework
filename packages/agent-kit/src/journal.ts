@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Outcome } from "@somework/sdk";
+import type { Outcome } from "./job-types.ts";
 import { redactText } from "./events/redact.ts";
 
 export interface JobRecord {

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Handler } from "@somework/sdk";
+import type { Handler, Job, Outcome, StopReason } from "./job-types.ts";
 import { JobGate } from "./gate.ts";
 import type { GitHost } from "./githost.ts";
 import { JobArtifacts } from "./threads/artifacts.ts";
@@ -100,4 +100,26 @@ export function jobRig(options: { stateDir: string; domain?: DomainWithoutJobTas
 			return { entry: manager.get(entry.id)!, text: String(sent?.content?.data ?? ""), artifacts: sent?.artifacts ?? [] };
 		},
 	};
+}
+
+/**
+ * Runs a role's handler on one synthetic job and returns its outcome, without the job manager, the domain or any message: for role tests of the
+ * handler pipeline (validation, guards, result shape, approvals). `approve` answers the job's approval questions (default: refuse), `signal` stops it.
+ */
+export async function runHandler(
+	handler: Handler,
+	spec: { capability: { id: string; version: string }; input: Record<string, unknown>; taskId?: string; conversationId?: string },
+	options: { approve?: (question: { tool: string; summary: string }) => Promise<{ approved: boolean; reason?: string }> | { approved: boolean; reason?: string }; signal?: AbortSignal } = {},
+): Promise<Outcome> {
+	const control = new AbortController();
+	options.signal?.addEventListener("abort", () => control.abort(options.signal!.reason ?? "cancel_requested"), { once: true });
+	const job = { taskId: spec.taskId ?? `job-${Math.random().toString(36).slice(2, 10)}`, capability: spec.capability, input: spec.input, task: { conversationId: spec.conversationId }, fencingToken: 0, runtimeInstanceId: "test" } as unknown as Job;
+	return handler(job, {
+		signal: control.signal,
+		get stopReason() {
+			return control.signal.aborted ? (control.signal.reason as StopReason) : undefined;
+		},
+		progress: () => undefined,
+		requestInput: async (question: unknown) => (await options.approve?.(question as { tool: string; summary: string })) ?? { approved: false, reason: "no approver in this test" },
+	});
 }
