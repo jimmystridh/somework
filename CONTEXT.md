@@ -22,6 +22,26 @@ _Avoid_: bot, worker
 An advertisement on the agent's card of what it can be asked to do: a name, a description, examples and an advisory side-effect class. It enforces nothing; what an agent will actually do is its own decision.
 _Avoid_: skill, tool, contract
 
+**Setup override**:
+An operator's edit of one agent's operator instructions (an addendum appended to the role's built-in system prompt, which operators can read but not change), skill list, tool servers, model or approval patterns, kept by that agent and sent to it as a message from the Operations principal, the only principal an agent accepts a setup override from. It wins over the role's built-in setup, takes effect from the agent's next model run (runs already in progress finish with the old setup), and is removed by resetting to the role's default. Library skills reach the model under their own `library/` names, so they never replace a repository skill; the override also holds the per-agent overlay (the differences from a repository skill).
+_Avoid_: config, settings, patch
+
+**Operations**:
+The operators' console for the fleet (the former fleet dashboard): it lists the agents, shows each one's metrics, jobs and history, and is where an operator edits an agent's setup override and the MCP catalog. It has its own database; the domain does not store any of it.
+_Avoid_: dashboard, admin UI (the domain's own UI is a separate thing)
+
+**Fleet limits**:
+The one set of budget limits (per-run caps, daily token limit, raise ceiling) that applies to every agent alike. Administrators edit it in Operations and it is sent to all agents; an agent falls back to its own environment values until it has received one. It is not part of any *Setup override*.
+_Avoid_: budget (a job's own budget is a different thing), quota
+
+**MCP catalog**:
+The one list, shared by every agent, of the tool servers (MCP servers) that an agent may be given. Operators maintain it in Operations; an agent can use only the entries its setup override enables. An entry can say how a local server is obtained for each operating system, with a fixed version and checksum, and names the secrets it needs without holding them.
+_Avoid_: plugin list, registry
+
+**Skill library**:
+The one shared collection of skills, kept in Operations, that operators add to and that every agent keeps an up-to-date local copy of. A skill is written guidance for doing one kind of work (distinct from a *Capability*, which only advertises what an agent can be asked to do). An agent may use a library skill only when its setup override allows it. A repository can carry skills of its own; see how the two combine under *Setup override*.
+_Avoid_: skill store, skill registry
+
 **Message**:
 A durable, typed communication from one principal to others within a conversation. Every message sent to an agent is delivered at least once and recovered after the agent restarts.
 _Avoid_: chat (chat is one kind of message), notification
