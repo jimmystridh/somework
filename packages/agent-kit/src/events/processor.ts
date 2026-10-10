@@ -159,7 +159,7 @@ export class EventProcessor {
 					return "submitted";
 				} catch (error) {
 					log("warn", "event_submit_failed", { eventId: event.id, handler, error: clip(String(error)) });
-					inbox.add(event, `task submission failed: ${clip(String(error), 120)}`, handler);
+					inbox.add(event, `starting the job failed: ${clip(String(error), 120)}`, handler);
 					return "delivered";
 				}
 			case "wake":

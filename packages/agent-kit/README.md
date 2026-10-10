@@ -113,75 +113,35 @@ code it moves here.
 | `sandbox/server`, `sandbox/remote-env`, `egress/proxy` | the sandbox daemon, Pi's `ExecutionEnv` over HTTP, the egress allowlist proxy (their `main.ts` files are the container entry points) |
 | `policy`, `ledger`, `shards`, `metrics`, `log`, `credentials`, `config`, `health` | approvals, daily token ledger, shard table, Prometheus metrics, redacted JSON logs, `auth.json` store, env config, `/live` `/ready` `/metrics` |
 | `windows` | what every role that runs on a Windows machine needs: the confined local `ExecutionEnv` (Git Bash, path confinement, environment allow-list, sweep of the service account's leftover processes), log redaction, the machine settings (`WINDOWS_*`) and `windowsExecutionHooks(settings)` that wires them into a service |
-| `chat` | the automatic answer to direct chat messages (below) |
+| `threads` | conversations and jobs: durable inbox, conversation engine, job manager, resources, thread tools (below) |
 | `skills` | the repository knowledge loader (below) |
-| `testing` | `makeRemote` (a local bare repository), `FakeHost`, `sh`: for role tests |
+| `testing` | `makeRemote` (a local bare repository), `FakeHost`, `sh`, `jobRig` (a job through the real job manager and artifact handling): for role tests |
 
-## Chat: agents take tasks, not chat
+## Conversations and jobs: agents talk, and long work runs in the background
 
-A message sent to an agent used to sit unread, and the sender never learned that. Every kit service now answers a direct `chat.message`
-once with a `chat.notice`: who this is, that nobody reads the thread, and the capabilities to submit a task for. It is deterministic (no
-model, no tokens) and never echoes what the sender wrote.
+Agents do not take tasks. Every `chat.message` addressed to an agent (a person, the manager, another agent, a group conversation) is read by its model. Decisions: `docs/adr/0003-messages-and-events-replace-tasks.md`.
 
-* **It cannot loop.** The answer is a `chat.notice`, whose only permitted trigger mode is `never`, so it wakes nobody; it carries the
-  label `autoReply`; and the responder acts only on plain `chat.message`s without that label, never on its own messages. Per sender and
-  conversation there is at most one answer per 10 minutes, at most 30 per hour in total, and a message older than 5 minutes is not
-  answered, so a restart does not answer a backlog.
-* **Switch and wording.** `profile.chat = { autoReply: false }` turns it off for a role; `CHAT_AUTOREPLY=0` turns it off for one
-  deployment; `profile.chat.replyTemplate(context)` replaces the text (it must not include anything the sender sent).
-* **Observability.** Logs `chat_message_received` (with `replied` and `reason`), `chat_reply_sent`, `chat_reply_failed`; the counter
-  `somework_chat_messages_total{result,reason}`.
+* **Nothing is lost.** A message is written to the agent's durable inbox (`threads/inbox.json` in its state directory) before its wake is acknowledged and is handled once per message id. After a restart every unfinished message is taken up again, and the service sweeps the domain's unread inbox at start and every minute for what no wake announced. The first start of an agent ever treats what the domain holds for it as history (marked read, not answered).
+* **A run per message.** The message gets a model run of its own (`thread:<messageId>`, a scratch directory per conversation, the role's tools and the kit's thread tools). Several conversations go on at once (`THREADS_MAX_CONVERSATIONS`, default 4), one message at a time within a conversation. A backlog (found after a start, or sent more than two minutes before it arrived) is worked through one at a time, people before agents, oldest first, beside the live conversations; the model is told how long a message waited. Everyone in the domain is trusted: there is no list of askers.
+* **The answer goes to everyone in the conversation** (the sender and the others the message was addressed to) unless the model answers exactly `NO_REPLY`. Receivers decide for themselves whether to answer; the domain's hop depth (`causationId` chain, default 16) bounds agent-to-agent loops.
+* **Jobs.** A role's capabilities are `hooks.chat.jobTools` (name, description, TypeBox parameters, `plan(args)` that returns `{capability, input, label}` or `{refuse}`). A call starts the job at once in the background (`JobManager`, `threads/jobs.ts`), through the same `createHandler` pipeline as always (same sandbox, git protocol, guards, approvals) with the profile's `defaultBudget`. The result is posted to the conversation as one message, with the artifacts the job uploaded; `agent.<slug>.job.started|waiting|finished` events are published (the agent needs the permission `events.publish:agent.<slug>.`). Running jobs are written to `threads/jobs.json` and started again under the same run id after a restart. Events: a handler's `submit` decision starts a job of the agent.
+* **Singleton resources.** `hooks.chat.jobResources(capabilityId, input)` names what only one job can hold (QA: `app-stack`). A job waits (FIFO, people first) until all of its resources are free and says what it waits for. The `resources` tool shows who holds what; using one by hand in a conversation is advisory.
+* **Talking to a running job.** A message in the conversation of a running job is also handed to the job's model at its next turn boundary, as a note, and the conversation's own run answers in parallel. Tools of a conversation run: `job_status`, `job_stop` (a signal only: a job that has not started does not start, a running job's model decides what to do), `resources`, `message_send` (write to somebody else; the answer arrives as a message), `attachment_get` (save an attachment of the domain into the scratch directory), `agent_status`, the role's tools and `read`, `write`, `edit`, `bash`.
+* **Approvals.** A step that needs approval is asked of the approver (`profile.chat.approvers`, default `agent/manager` and `kind:human`; the message's sender when they are one) as a message labelled `chatApprovalRequest=<id>`; only that principal's message labelled `chatApprovalDecision=<id>` with the text `approve` or `deny` decides. Silence for ten minutes is a denial.
+* **Budget.** Conversation runs draw on the `chat` pool, jobs on the `tasks` pool; the daily limits are a runaway guard per agent, the money budget is global (Prometheus and the manager).
 
-### Chat answered by the model (the default)
-
-Every role now answers a direct `chat.message` with a model unless `profile.chat.mode = "notice"` or `CHAT_MODE=notice`. Two tiers, chosen by
-WHO sent the message and by an explicit prefix, never by what the message says:
-
-* **ASK** (default askers: `agent/manager` and every human, `kind:human`). One bounded model turn in a light session of the runtime's own
-  conversation store, with its own tool list and instructions: `read` (of a read-only checkout of the role's repository or of the recent
-  workspaces), `agent_status`, and the role's read-only tools (`hooks.chat.askToolNames`). No `bash`, `edit` or `write` (a profile that lists
-  one fails at startup), no task submission, every approval request is refused. It answers from a state summary the service builds from its
-  own records (readiness, the three token pools, the recent jobs with outcome, branch and pull request, the role's own facts from
-  `hooks.chat.context`), never from a record the model wrote. The earlier messages of the conversation and the new message are data inside
-  random markers; replies are redacted, cut at 4 KB and sent in the same conversation with the label `chatReply`.
-* **Job tools.** A role may offer its capabilities as tools of the open tier (`hooks.chat.jobTools`: name, description, TypeBox parameters, `plan(args)` that returns the job or says why not, optionally `perTurn`, default 5). A plain message from an instructor is then enough: the model calls the tool for each thing asked, the calls only queue the jobs, and after the model's reply they run one after another as chat jobs, each answered in the conversation (`(i/n)`). Replies to one message have their own idempotency keys (a hash of the words).
-* **INSTRUCT** (default instructors: `agent/manager`; the message must start with `instruct:`). `hooks.chat.instructInput(text)` turns the text
-  into the input of one of the role's own capabilities, or refuses with a reason ("outside my contract"), or (it may answer asynchronously) plans a queue of jobs `{ batch, intro }` that run one after another, each answered on its own with `(i/n)` in front, until the chat budget of the day is used; the instruction then runs as a
-  synthetic job of the role's normal handler, so the same sandbox, tools, guards, approval policy, git protocol and `wrapRuntime` apply
-  as for a task. The budget is the chat budget (`instructBudget`, default 150 000 tokens and 15 minutes; the message cannot change it), clamped
-  by what the `chat` pool has left and by the role's own limits. A step that needs approval is asked of the instructor as a chat message
-  labelled `chatApprovalRequest=<id>`; only a message from that same instructor, in that conversation, labelled `chatApprovalDecision=<id>`
-  and saying exactly `approve` or `deny`, decides. Silence is a denial after `approvalMinutes` (10). The Manager relays it with
-  `/chatapprove <id>` and `/chatdeny <id>`. A role that wraps its runtime to refuse approvals (the Aikido fixer) refuses them here too.
-
-**Artifacts of an instruction.** An instruction is a synthetic job (`chat-<messageId>`) that has no task in the domain, so the domain refuses every call bound to it (an artifact upload names its source task and would be a `404 not_found: task not found`). The service therefore gives the role's code and the handler a client wrapped by `ChatArtifacts`: an upload whose `sourceTaskId` is a chat job is not sent but written under `<state dir>/chat-artifacts/<job>/` on the agent host (the newest 10 jobs are kept, at most 200 MB per file), and the role gets a reference `inline:<job>:<n>` in its place, so its own code runs unchanged; any other call whose path names a chat job's task (`/tasks/chat-...`) is skipped; the progress, input and approval calls of the job are local. Nothing changes for a task that exists. The reply then shows each text artifact (patch, report, logs) after the outcome, cut to what is left of the 4 KB with a note `[truncated: N of M bytes shown; full copy on the agent host at <path>]`; anything else (a video, a screenshot) is named with its size and where it stays, and the reply says that attachments were not uploaded. A role needs nothing to get this; its tests can use `chatInstructionRig` and `DomainWithoutChatTasks` from `@somework/agent-kit/testing`.
-
-**A message that comes too soon.** A second message from the same sender in the same conversation within the window (15 seconds) is not answered by the model, but it is not dropped silently either: the sender gets one `chat.notice` labelled `autoReply` (it wakes nobody and no responder answers it), either "Slow down: one message at a time; your previous one was still being worked on when this arrived. I answered you N seconds ago; send your next message after X seconds." (the previous turn had not finished when it arrived) or "I answered you N seconds ago; send your next message after X seconds." At most one such notice per sender, conversation and window; the next early message of a later window gets its own. Messages over the hourly limit are still dropped without a word.
-
-Guard rails: one chat turn at a time (a turn that waits more than `busyAfterSeconds` says "busy, queued"); instructions take a job slot
-through the same `JobGate` as tasks, tasks first and nothing preempted; the `chat` token pool is its own share of the daily limit
-(`share`, default 0.1; asks get half the cap at 80% of it and the model is not called at 100%, when the sender gets the deterministic notice);
-one answer per sender and conversation per 15 seconds, 20 per hour; a message older than 5 minutes, an own message, a `chatReply` or
-`autoReply` message and a duplicate are never answered, so two agents cannot loop; a sender that is not allowed gets the notice only.
-
-| Profile field (`profile.chat`) | Default | Environment override |
+| Setting (`profile.chat`) | Default | Environment override |
 |---|---|---|
-| `mode` | `model` | `CHAT_MODE` (`notice` or `model`) |
-| `askers` / `instructors` | `agent/manager`, `kind:human` / `agent/manager` | `CHAT_ALLOWED_SENDERS` / `CHAT_INSTRUCTORS` (ids or `kind:<kind>`, comma or space separated) |
-| `tokenCap` / `hardTokenCap` | 40 000 / 200 000 | `CHAT_TOKEN_CAP` / `CHAT_HARD_TOKEN_CAP` |
-| `maxMinutes` | 2 | `CHAT_MAX_MINUTES` |
-| `instructBudget` | 150 000 tokens, 15 minutes | `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` |
+| `mode` | `on` | `CHAT_MODE=off` |
+| `approvers` | `agent/manager`, `kind:human` | `APPROVERS` |
+| `maxConversations` | 4 | `THREADS_MAX_CONVERSATIONS` |
+| `liveWindowSeconds` | 120 | `THREADS_LIVE_WINDOW_SECONDS` |
+| `runBudget` (one conversation run) | 150 000 tokens, 15 minutes | `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` |
+| `hardTokenCap` | 200 000 | `CHAT_HARD_TOKEN_CAP` |
 | `approvalMinutes` | 10 | `CHAT_APPROVAL_MINUTES` |
 | `busyAfterSeconds` | 20 | `CHAT_BUSY_AFTER_SECONDS` |
 | `share` / `throttleAt` | 0.1 / 0.8 | `CHAT_TOKEN_SHARE` / `CHAT_THROTTLE_AT` |
-| `hourlyLimit` | 20 | `CHAT_HOURLY_LIMIT` |
-| `tools.ask` / `tools.instruct` | `read`, `agent_status` + role's / the role's `allowedTools` | none |
-| `instructPrefix`, `historyMessages`, `messageChars`, `replyMaxBytes`, `senderWindowMs`, `maxAgeMs` | `instruct:`, 10, 600, 4096, 15 000, 300 000 | none |
 
-Instructions also need the role's `CHAT_REPOSITORY_URL` (and optionally `CHAT_REPOSITORY_REF`) unless the instruction names `repo:`; the
-Aikido fixer takes its repository from `AIKIDO_REPOSITORY_URL`. Logs: `chat_received`, `chat_answered`, `chat_refused`,
-`chat_instruction_refused`, `chat_approval_*`; counters `somework_chat_model_total{result,reason}`, `somework_chat_tokens_total{tier}`,
-`somework_chat_instructions_total{outcome}`. `/status` of the health endpoint shows the chat mode, askers and instructors and the `chat` pool.
 
 ## `/profile`: how an agent is set up
 

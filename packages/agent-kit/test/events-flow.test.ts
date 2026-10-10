@@ -149,7 +149,7 @@ describe("what happens to an event", () => {
 		assert.match(calls.notify[0]!, /github\.pull_request\.opened/);
 	});
 
-	it("submit: submits the task with the capped budget", async () => {
+	it("submit: starts the job with the capped budget", async () => {
 		const decision = { action: "submit", task: { capability: { id: "code.review", version: 3 }, input: { n: 1 }, budget: { maxTokens: 9_999_999, maxMinutes: 999 } } };
 		const { processor, calls } = rig({ handlers: { h: handlerSource }, script: ok(decision) });
 		assert.equal(await processor.process(feed(1)), "submitted");
@@ -159,7 +159,7 @@ describe("what happens to an event", () => {
 	it("a failing notify or submit delivers the event to the inbox instead of losing it", async () => {
 		const submit = rig({ handlers: { h: handlerSource }, script: ok({ action: "submit", task: { capability: { id: "x", version: 1 }, input: {} } }), actions: { submit: async () => Promise.reject(new Error("policy denied")) } });
 		assert.equal(await submit.processor.process(feed(1)), "delivered");
-		assert.match(submit.inbox.recent()[0]!.why, /task submission failed: .*policy denied/);
+		assert.match(submit.inbox.recent()[0]!.why, /starting the job failed: .*policy denied/);
 		const notify = rig({ handlers: { h: handlerSource }, script: ok({ action: "notify", message: "hi" }), actions: { notify: async () => Promise.reject(new Error("manager gone")) } });
 		assert.equal(await notify.processor.process(feed(1)), "delivered");
 		assert.equal(notify.inbox.recent()[0]!.why, "notify failed");
