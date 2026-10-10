@@ -12,17 +12,12 @@ export interface Config {
 	gateway: { bind: string; port: number; urlForPi: string };
 	policy: PolicyConfig;
 	/** `wake`: the SDK's NATS wake with an HTTP safety net. `polling`: short HTTP lookups on a timer only. */
-	/** `wake`: the SDK's NATS wake with an HTTP safety net. `polling`: short HTTP lookups on a timer only. */
-	feed: { mode: "wake" | "polling"; taskIntervalMs: number; inboxIntervalMs: number; sweepEveryMs: number };
+	feed: { mode: "wake" | "polling"; inboxIntervalMs: number; sweepEveryMs: number };
 	telemetryPath: string;
-	/** Domain approvals for reactions: how often the pending list is looked at. */
-	approvals: { pollMs: number };
 	events: EventIntakeConfig & { pollMs: number };
 	controls: ControlsConfig;
 	/** Path of the JSON file that names the stacks and the Windows machines /suspend and /unsuspend stop and start (MANAGER_HOST_CONTROL). */
 	hostControl?: string;
-	/** Approvals the owner decided once and for all (MANAGER_AUTO_APPROVE, `qa.verify@1=qa-on-ticket`: the capability and the rule whose reaction starts it). */
-	autoApprove?: string;
 }
 
 const need = (env: NodeJS.ProcessEnv, name: string): string => {
@@ -68,22 +63,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		},
 		policy: {
 			...defaultPolicy,
-			budgetCeiling: {
-				maxTokens: number(env, "MANAGER_MAX_TOKENS_CEILING", defaultPolicy.budgetCeiling.maxTokens),
-				maxMinutes: number(env, "MANAGER_MAX_MINUTES_CEILING", defaultPolicy.budgetCeiling.maxMinutes),
-			},
-			submissionsPerHour: number(env, "MANAGER_SUBMISSIONS_PER_HOUR", defaultPolicy.submissionsPerHour),
 			messagesPerHour: number(env, "MANAGER_MESSAGES_PER_HOUR", defaultPolicy.messagesPerHour),
 			approvalTtlMs: number(env, "MANAGER_APPROVAL_TTL_MINUTES", 10) * 60_000,
 		},
 		feed: {
 			mode: env.MANAGER_FEED === "polling" ? "polling" : "wake",
-			taskIntervalMs: number(env, "MANAGER_POLL_TASK_MS", 4000),
 			inboxIntervalMs: number(env, "MANAGER_POLL_INBOX_MS", 8000),
 			sweepEveryMs: number(env, "MANAGER_SWEEP_MS", 60_000),
 		},
 		telemetryPath: env.MANAGER_TELEMETRY_PATH ?? join(homedir(), ".local", "state", "agent-cluster", "pi-live.json"),
-		approvals: { pollMs: number(env, "MANAGER_APPROVAL_POLL_MS", 15_000) },
 		events: {
 			pollMs: number(env, "MANAGER_EVENT_POLL_MS", 5000),
 			topics: list(env, "MANAGER_EVENT_TOPICS", defaultEventIntake.topics),
@@ -94,7 +82,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			...(env.MANAGER_QUIET_HOURS ? { quietHours: env.MANAGER_QUIET_HOURS } : {}),
 		},
 		...(env.MANAGER_HOST_CONTROL ? { hostControl: env.MANAGER_HOST_CONTROL } : {}),
-		...(env.MANAGER_AUTO_APPROVE ? { autoApprove: env.MANAGER_AUTO_APPROVE } : {}),
 		controls: {
 			hubUrl: env.MANAGER_HUB_URL,
 			hubTokenFile: env.MANAGER_HUB_TOKEN_FILE,

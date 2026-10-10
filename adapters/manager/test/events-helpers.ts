@@ -1,32 +1,19 @@
 import { TelegramBridge } from "../src/bridge.ts";
 import { Controls, type ControlsConfig } from "../src/controls.ts";
-import type { DomainApproval, RuleSummary } from "../src/domain.ts";
+import type { RuleSummary } from "../src/domain.ts";
 import { EventIntake, type EventIntakeConfig } from "../src/event-intake.ts";
-import { Notifications, TaskTracker } from "../src/notifier.ts";
+import { Notifications } from "../src/notifier.ts";
 import { defaultPolicy } from "../src/policy.ts";
-import { ReactionApprovals } from "../src/reaction-approvals.ts";
 import { ManagerService } from "../src/service.ts";
 import type { ManagerState } from "../src/state.ts";
 import { FakeDomain, recordingApi, stubRpc } from "./helpers.ts";
 
 export const OWNER = 42;
 
-export const approval = (id: string, extra: Partial<DomainApproval> = {}): DomainApproval => ({
-	approvalId: id,
-	taskId: `task_for_${id}`,
-	taskRevision: 3,
-	actionDigest: `digest-of-${id}`,
-	action: "qa.verify@1",
-	requestedBy: "agent/automation/qa-on-ticket",
-	status: "pending",
-	expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
-	...extra,
-});
-
 export const rule = (name: string, extra: Partial<RuleSummary> = {}): RuleSummary => ({
 	name,
 	description: "",
-	owner: "agent/automation/qa-on-ticket",
+	owner: "agent/manager",
 	selector: "jira.issue.transitioned",
 	wake: false,
 	status: "active",
@@ -49,29 +36,25 @@ export function build(options: { paired?: boolean; controls?: Partial<ControlsCo
 	const state: ManagerState = options.paired === false ? {} : { allowedUserId: OWNER, chatId: OWNER };
 	const saves: number[] = [];
 	const save = async () => void saves.push(Date.now());
-	const tracker = new TaskTracker(domain, state, save, notifications);
 	const { rpc, calls: rpcCalls } = stubRpc();
-	const bridge = new TelegramBridge({ state, api: telegram.api, rpc, save, tracker, notifications, now: options.now });
+	const bridge = new TelegramBridge({ state, api: telegram.api, rpc, save, notifications, now: options.now });
 	const httpCalls: Calls[] = [];
 	const controls = new Controls({
 		domain,
 		state,
 		save,
 		config: { agentHealth: {}, ...options.controls },
-		tasks: () => tracker.tasks,
-		localPendingApprovals: () => service.pending().length,
-		domainPendingApprovals: async () => (await reactionApprovals.pending()).length,
+		pendingQuestions: () => service.pendingRequests() + Object.keys(state.chatApprovals ?? {}).length,
 		http: async (url, opts) => {
 			httpCalls.push({ url, method: opts?.method, authorization: opts?.headers?.authorization });
 			return (options.http ?? (() => ({ status: 404, text: "" })))(url, opts?.method);
 		},
 		readToken: async () => "hub-admin-token\n",
 	});
-	const reactionApprovals = new ReactionApprovals({ domain, owner: bridge, state, save, now: options.now });
-	const service: ManagerService = new ManagerService({ domain, policy: defaultPolicy, owner: bridge, tracker, reactionApprovals, controls, now: options.now });
+	const service: ManagerService = new ManagerService({ domain, policy: defaultPolicy, owner: bridge, controls, now: options.now });
 	bridge.service = service;
 	const intake = new EventIntake({ domain, owner: bridge, state, save, config: options.events, digest: () => controls.digest(), now: options.now });
-	return { domain, telegram, bridge, service, state, saves, reactionApprovals, controls, intake, httpCalls, rpcCalls, tracker };
+	return { domain, telegram, bridge, service, state, saves, controls, intake, httpCalls, rpcCalls };
 }
 
 export const say = (b: ReturnType<typeof build>, text: string, from = OWNER) =>

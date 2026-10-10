@@ -9,10 +9,9 @@ import { ChatSessions } from "./chat.ts";
 import { Controls } from "./controls.ts";
 import { HostControls, loadHostConfig } from "./host.ts";
 import { RestDomain } from "./domain.ts";
-import { EventIntake } from "./event-intake.ts";
-import { parseAutoApprovals, ReactionApprovals } from "./reaction-approvals.ts";
+import { ensureJobSubscription, EventIntake } from "./event-intake.ts";
 import { createGateway } from "./gateway.ts";
-import { InboxReader, Notifications, PollingFeed, TaskTracker, WakeFeed } from "./notifier.ts";
+import { InboxReader, Notifications, PollingFeed, WakeFeed } from "./notifier.ts";
 import { ChildPiRpc } from "./rpc.ts";
 import { ManagerService } from "./service.ts";
 import { fileSaver, loadState } from "./state.ts";
@@ -20,12 +19,11 @@ import { telegramApi } from "./telegram.ts";
 import { startTelemetry } from "./telemetry.ts";
 
 const SYSTEM_PROMPT = [
-	"You are the Manager: you work for the paired owner over Telegram and coordinate other SomeWork agents for them.",
-	"Use somework_catalog to find an agent, somework_submit to give it a task, somework_task to follow it, somework_message and somework_inbox to talk to agents.",
-	"Anything that changes things (a capability whose side effects are write or irreversible) waits for the owner's explicit approval in Telegram; the gateway enforces that. After submitting such a task, tell the owner what you asked and stop; never say it is running before it is approved.",
-	"The owner is told automatically when a task finishes or asks a question, so do not poll in a loop.",
-	"When a capability exists in several versions, use the highest one, read its input schema and fill every required field; never pick an older version just because its input is easier to satisfy. If the catalog has no suitable agent, say so instead of improvising. Results marked latest are the highest version. When a submission is refused, tell the owner why and ask; never retry the same work with a different capability or version on your own.",
-	"Agents take tasks and also answer chat. A question you send them in a message is answered by reading only. When the owner wants an agent to DO something in chat (verify, fix, handle feedback), start the message text with `instruct:`; without it the agent only answers and will say it did not act. Prefer a task through somework_submit when a capability fits, and a chat instruction when it does not. If a message gets no answer, tell the owner so.",
+	"You are the Manager: you work for the paired owner over Telegram and coordinate other SomeWork agents for them, the way a colleague would.",
+	"Use somework_catalog to find out who can do what: a capability in the catalog is an advertisement, not a button. To get something done, ask the agent in a message in plain words with somework_ask (the owner sees the answer in Telegram); somework_message and somework_inbox are for talking to agents and reading what they sent.",
+	"Everyone in this domain is trusted, so you do not ask permission to talk to an agent. Every message wakes the agent and the agent decides what to do with it: it may answer, start work, or ask you something back. Long work runs as the agent's own background job; its result arrives as a message in the conversation and the owner is told in one line when any job finishes, so do not poll in a loop.",
+	"When an agent needs the owner's approval for a risky step it asks in a message; the owner decides in Telegram and you never decide for them. After asking an agent for something, tell the owner what you asked and stop; never say work is done before the agent says so.",
+	"If the catalog has no suitable agent, say so instead of improvising. When an agent refuses or cannot do what you asked, tell the owner why and ask; never retry the same request with different wording to get around a refusal.",
 	"When an agent has used up a token pool (somework_handlers shows used against limit, STOPPED or throttled) or the owner asks for more budget, use somework_control with raise_budget: name the agent, the pool and a sensible number of tokens, and say why. The owner confirms, the raise lasts for today only, and the agent confirms by message.",
 	"Keep project work in /workspace. For public web research use tff-search_web and lightpanda_fetch.",
 	"Never read credentials, auth files, or unrelated paths outside /workspace, and never expose secrets in replies.",
@@ -66,7 +64,6 @@ async function main(): Promise<void> {
 	const gatewayTokenValue = await gatewayToken(join(config.configDir, "gateway-token"));
 
 	const notifications = new Notifications();
-	const tracker = new TaskTracker(domain, state, save, notifications);
 	const inbox = new InboxReader(domain, notifications);
 
 	const child = spawn(
@@ -83,8 +80,7 @@ async function main(): Promise<void> {
 		{ stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, MANAGER_GATEWAY_URL: config.gateway.urlForPi, MANAGER_GATEWAY_TOKEN: gatewayTokenValue } },
 	);
 	const rpc = new ChildPiRpc(child);
-	const bridge = new TelegramBridge({ state, api, rpc, save, tracker, notifications });
-	const reactionApprovals = new ReactionApprovals({ domain, owner: bridge, state, save, log, autoApprove: parseAutoApprovals(config.autoApprove), isSuspended: () => controls.isSuspended() });
+	const bridge = new TelegramBridge({ state, api, rpc, save, notifications });
 	const host = config.hostControl ? new HostControls(loadHostConfig(config.hostControl)) : undefined;
 	const controls = new Controls({
 		domain,
@@ -92,14 +88,13 @@ async function main(): Promise<void> {
 		...(host ? { host } : {}),
 		state,
 		save,
-		tasks: () => tracker.tasks,
-		localPendingApprovals: () => service.pending().length,
-		domainPendingApprovals: async () => (await reactionApprovals.pending()).length,
+		pendingQuestions: () => service.pendingRequests() + Object.keys(state.chatApprovals ?? {}).length,
 	});
 	const chats = new ChatSessions({ domain, owner: bridge, state, save, knownAgents: () => service.knownAgentIds() });
-	const service: ManagerService = new ManagerService({ domain, policy: config.policy, owner: bridge, tracker, reactionApprovals, controls, chats });
+	const service: ManagerService = new ManagerService({ domain, policy: config.policy, owner: bridge, controls, chats });
 	const eventIntake = new EventIntake({ domain, owner: bridge, state, save, config: config.events, digest: () => controls.digest(), log });
 	bridge.service = service;
+	await ensureJobSubscription(domain, state, save, log);
 	const gateway = createGateway({ service, token: gatewayTokenValue, log });
 
 	const controller = new AbortController();
@@ -138,18 +133,15 @@ async function main(): Promise<void> {
 		rpc.onTelemetryEvent = telemetry.observe;
 		const feed =
 			config.feed.mode === "polling"
-				? new PollingFeed(tracker, inbox, config.feed, log)
-				: new WakeFeed(client, tracker, inbox, { sweepEveryMs: config.feed.sweepEveryMs, activeTaskEveryMs: config.feed.taskIntervalMs, wake: { logger: (level, message, fields) => log(`wake_${level}`, { message, ...fields }) } }, log);
+				? new PollingFeed(inbox, config.feed, log)
+				: new WakeFeed(client, inbox, { sweepEveryMs: config.feed.sweepEveryMs, wake: { logger: (level, message, fields) => log(`wake_${level}`, { message, ...fields }) } }, log);
 		void feed.run(controller.signal);
-		const sweep = setInterval(() => void service.announceExpired(), 30_000);
-		sweep.unref();
 		const every = (name: string, ms: number, step: () => Promise<unknown>) => {
 			const timer = setInterval(() => void step().catch((error: unknown) => log(`${name}_failed`, { error: error instanceof Error ? error.message.slice(0, 160) : "error" })), ms);
 			timer.unref();
 			return timer;
 		};
 		const timers = [
-			every("approvals_poll", config.approvals.pollMs, () => reactionApprovals.poll()),
 			every("events_poll", config.events.pollMs, () => eventIntake.poll()),
 			every("notices_report", 60_000, () => bridge.reportSuppressed()),
 			every("chat_sweep", 20_000, () => chats.sweep()),
@@ -174,7 +166,6 @@ async function main(): Promise<void> {
 				await new Promise((resolve) => setTimeout(resolve, 10_000));
 			}
 		}
-		clearInterval(sweep);
 		for (const timer of timers) clearInterval(timer);
 		clearInterval(bridge.typingTimer);
 		await bridge.delivery;

@@ -40,10 +40,10 @@ test("metrics parsing and per-source statistics", () => {
 
 test("/rules lists status, kind, counters and last fired", async () => {
 	const b = build();
-	b.domain.rules = [rule("pr-review-opened", { reaction: { capability: { id: "code.review", version: 3 } }, selector: "github.pull_request.opened", lastFiredAt: "2026-10-05T10:00:00Z", counters: { fired: 7, skipped: { rate: 2, approval: 0 } } }), rule("alerts", { wake: true, status: "paused", selector: "grafana.alert.*" })];
+	b.domain.rules = [rule("pr-review-opened", { selector: "github.pull_request.opened", lastFiredAt: "2026-10-05T10:00:00Z", counters: { fired: 7, skipped: { rate: 2, approval: 0 } } }), rule("alerts", { wake: true, status: "paused", selector: "grafana.alert.*" })];
 	await say(b, "/rules");
 	const text = b.telegram.texts().at(-1)!;
-	assert.ok(text.includes("pr-review-opened [active] reaction on github.pull_request.opened; fired 7, skipped: rate 2; last 2026-10-05T10:00:00Z"));
+	assert.ok(text.includes("pr-review-opened [active] record on github.pull_request.opened; fired 7, skipped: rate 2; last 2026-10-05T10:00:00Z"));
 	assert.ok(text.includes("alerts [paused] wake on grafana.alert.*; fired 0; last never"));
 });
 
@@ -159,10 +159,10 @@ test("the model can read rules, sources and handlers, but a switch only becomes 
 	assert.ok(prompt.data.text.includes("pause rule qa-on-ticket"));
 	assert.deepEqual(prompt.data.reply_markup.inline_keyboard[0].map((k: any) => k.callback_data), [`ct:y:${asked.requestId}`, `ct:n:${asked.requestId}`]);
 
-	assert.equal(((await (await g.call("GET", `/v1/tasks/${asked.requestId}`)).json()) as any).status, "pending");
+	assert.equal(b.service.controlRequests!.get(asked.requestId)!.status, "pending");
 	await tap(b, `ct:y:${asked.requestId}`);
 	assert.deepEqual(b.domain.rulesPaused, ["qa-on-ticket"]);
-	assert.equal(((await (await g.call("GET", `/v1/tasks/${asked.requestId}`)).json()) as any).status, "approved");
+	assert.equal(b.service.controlRequests!.get(asked.requestId)!.status, "approved");
 	g.close();
 });
 

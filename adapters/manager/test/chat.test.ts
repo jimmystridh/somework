@@ -45,18 +45,12 @@ test("/ask sends a direct chat message to the right agent and says it is waiting
 	assert.deepEqual(b.chats.waiting().map((w) => w.agent), ["agent/reviewer"]);
 });
 
-test("/do sends the text as an instruction, once, and /ask leaves a text alone", async () => {
+test("/ask passes the text on as it is, and /do is gone: the agent decides what a message asks for", async () => {
 	const b = withChat();
-	await say(b, "/do qa verify ABC-123 on the test app");
-	await say(b, "/do reviewer instruct: look at PR 5");
-	await say(b, "/ask qa verify ABC-123");
-	assert.deepEqual(b.domain.sentMessages.map((m) => [m.to, m.text]), [
-		["agent/qa", "instruct: verify ABC-123 on the test app"],
-		["agent/reviewer", "instruct: look at PR 5"],
-		["agent/qa", "verify ABC-123"],
-	]);
-	await say(b, "/do qa");
-	assert.ok(b.telegram.texts().at(-1)!.includes("Usage: /do <agent>"));
+	await say(b, "/ask qa verify ABC-123 on the test app");
+	await say(b, "/do qa verify ABC-124");
+	assert.deepEqual(b.domain.sentMessages.map((m) => [m.to, m.text]), [["agent/qa", "verify ABC-123 on the test app"]]);
+	assert.equal(b.telegram.texts().at(-1), "Unknown command. Use /help.");
 });
 
 test("an unknown agent, no text and a stranger send nothing", async () => {
@@ -78,13 +72,12 @@ test("the agent's reply in that conversation reaches the owner once, titled, red
 	assert.ok(text.startsWith("agent/reviewer replied:\nI review pull requests."));
 	assert.ok(!/\s\/approve/.test(text) && !text.includes("ghp_abcdef"));
 	assert.equal(b.chats.waiting().length, 0);
-	assert.equal(b.domain.decisions.length, 0);
 });
 
-test("the old automatic notice is shown as such, and a long reply is split into titled parts", async () => {
+test("an automatic notice is shown as such, and a long reply is split into titled parts", async () => {
 	const b = withChat();
 	await say(b, "/ask qa hello");
-	await b.bridge.forwardMessage({ messageId: "n", from: "agent/qa", text: "I take tasks, not chat.", type: "chat.notice", conversationId: "conv_1", labels: { autoReply: "true" } });
+	await b.bridge.forwardMessage({ messageId: "n", from: "agent/qa", text: "This is an automatic notice.", type: "chat.notice", conversationId: "conv_1", labels: { autoReply: "true" } });
 	assert.ok(b.telegram.texts().at(-1)!.startsWith("agent/qa replied (automatic notice):"));
 	await b.bridge.forwardMessage(reply("agent/qa", "conv_1", `${"word ".repeat(1500)}end`));
 	const parts = b.telegram.texts().slice(-3);
@@ -155,7 +148,6 @@ test("the Manager never answers chat on its own: replies and notices cause no ou
 	}
 	assert.equal(b.domain.sentMessages.length, before);
 	assert.equal(b.rpcCalls.length, 0);
-	assert.equal(b.domain.submitted.length, 0);
 });
 
 test("the model's somework_ask tool goes through the same checks and its answer never comes back to the model", async () => {
@@ -179,13 +171,13 @@ test("the model's somework_ask tool goes through the same checks and its answer 
 	server.close();
 });
 
-test("an agent's approval question for an instruction reaches the owner, and only the owner's command answers it", async () => {
+test("an agent's approval question reaches the owner, and only the owner's command answers it", async () => {
 	const b = withChat();
-	await say(b, "/ask reviewer instruct: review the auth change");
-	const question = { messageId: "q1", from: "agent/reviewer", type: "chat.message", conversationId: "conv_1", text: "Approval needed for your instruction (reviewer): bash: git push\nAnswer with label chatApprovalDecision=0123456789ab and the text \"approve\"", labels: { chatReply: "true", chatApprovalRequest: "0123456789ab" } };
+	await say(b, "/ask reviewer review the auth change");
+	const question = { messageId: "q1", from: "agent/reviewer", type: "chat.message", conversationId: "conv_1", text: "Approval needed (agent/reviewer): bash: git push\nAnswer with label chatApprovalDecision=0123456789ab and the text \"approve\"", labels: { chatReply: "true", chatApprovalRequest: "0123456789ab" } };
 	assert.equal(await b.chats.route(question as any), true);
 	const told = b.telegram.texts().at(-1)!;
-	assert.match(told, /agent\/reviewer needs your approval for your instruction:\nApproval needed for your instruction \(reviewer\): bash: git push\nAnswer with \/chatapprove 0123456789ab or \/chatdeny 0123456789ab/);
+	assert.match(told, /agent\/reviewer asks for your approval of a step:\nApproval needed \(agent\/reviewer\): bash: git push\nAnswer with \/chatapprove 0123456789ab or \/chatdeny 0123456789ab/);
 	assert.ok(!told.includes("label chatApprovalDecision"), "the agent's own wording about labels is not passed on");
 	assert.equal(b.domain.sentMessages.length, 1, "nothing is answered by itself");
 
@@ -199,14 +191,23 @@ test("an agent's approval question for an instruction reaches the owner, and onl
 	assert.match(b.telegram.texts().at(-1)!, /No such question waits/);
 });
 
-test("a denial is sent as deny, and an approval question from the wrong agent, conversation or id is ignored", async () => {
+test("an approval question from an agent in a conversation the owner did not start reaches the owner too, and the answer goes back in that conversation", async () => {
 	const b = withChat();
-	await say(b, "/ask reviewer instruct: go");
+	const question = { messageId: "q2", from: "agent/qa", type: "chat.message", conversationId: "conv_by_someone_else", text: "Approval needed (agent/qa): run the migration", labels: { chatReply: "true", chatApprovalRequest: "ccccccccccc1" } };
+	await b.bridge.forwardMessage(question as any);
+	assert.match(b.telegram.texts().at(-1)!, /agent\/qa asks for your approval of a step:\nApproval needed \(agent\/qa\): run the migration\nAnswer with \/chatapprove ccccccccccc1/);
+	await say(b, "/chatdeny ccccccccccc1");
+	assert.deepEqual(b.domain.sentMessages.at(-1), { to: "agent/qa", text: "deny", conversationId: "conv_by_someone_else", labels: { chatApprovalDecision: "ccccccccccc1" } });
+});
+
+test("a denial is sent as deny, and an approval question with a bad id or no conversation is ignored", async () => {
+	const b = withChat();
+	await say(b, "/ask reviewer go");
 	const base = { type: "chat.message", text: "Approval needed", labels: { chatApprovalRequest: "aaaaaaaaaaaa" } };
-	assert.equal(await b.chats.route({ ...base, messageId: "a", from: "agent/qa", conversationId: "conv_1" } as any), false, "another agent is not part of the chat");
-	assert.equal(await b.chats.route({ ...base, messageId: "b", from: "agent/reviewer", conversationId: "conv_9" } as any), false, "not a conversation the owner started");
 	await b.chats.route({ ...base, messageId: "c", from: "agent/reviewer", conversationId: "conv_1", labels: { chatApprovalRequest: "../../x" } } as any);
-	assert.equal(Object.keys(b.state.chatApprovals ?? {}).length, 0);
+	assert.equal(Object.keys(b.state.chatApprovals ?? {}).length, 0, "an id that is not an approval id");
+	await b.chats.route({ ...base, messageId: "f", from: "agent/reviewer" } as any);
+	assert.equal(Object.keys(b.state.chatApprovals ?? {}).length, 0, "no conversation to answer in");
 	await b.chats.route({ ...base, messageId: "d", from: "agent/reviewer", conversationId: "conv_1" } as any);
 	await say(b, "/chatdeny aaaaaaaaaaaa");
 	assert.deepEqual([b.domain.sentMessages[1]?.text, b.domain.sentMessages[1]?.labels], ["deny", { chatApprovalDecision: "aaaaaaaaaaaa" }]);
@@ -215,7 +216,7 @@ test("a denial is sent as deny, and an approval question from the wrong agent, c
 test("an answer that comes after the agent gave up is not sent", async () => {
 	let now = Date.parse("2026-10-06T10:00:00Z");
 	const b = withChat({ now: () => now });
-	await say(b, "/ask reviewer instruct: go");
+	await say(b, "/ask reviewer go");
 	await b.chats.route({ messageId: "e", from: "agent/reviewer", type: "chat.message", text: "Approval needed", conversationId: "conv_1", labels: { chatApprovalRequest: "bbbbbbbbbbbb" } } as any);
 	now += 31 * 60_000;
 	await say(b, "/chatapprove bbbbbbbbbbbb");

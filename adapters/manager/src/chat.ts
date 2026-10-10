@@ -109,13 +109,13 @@ export class ChatSessions {
 
 	/** True when the message belongs to a conversation the owner started (it is then shown as a reply); other messages return false. */
 	async route(message: InboundMessage): Promise<boolean> {
-		const chat = message.conversationId ? this.#chats[message.conversationId] : undefined;
-		if (!chat || message.from !== chat.agent) return false;
 		const requestId = message.labels?.[CHAT_APPROVAL_REQUEST_LABEL];
 		if (requestId !== undefined) {
-			await this.#askOwner(message, chat.agent, requestId);
+			await this.#askOwner(message, message.from, requestId);
 			return true;
 		}
+		const chat = message.conversationId ? this.#chats[message.conversationId] : undefined;
+		if (!chat || message.from !== chat.agent) return false;
 		chat.awaitingSince = undefined;
 		chat.repliedAt = new Date(this.#now()).toISOString();
 		await this.#deps.save(this.#deps.state);
@@ -124,9 +124,9 @@ export class ChatSessions {
 	}
 
 	/**
-	 * An agent asks whether a step of the instruction the owner gave it may go ahead. Only the agent of a conversation the owner started can
-	 * ask, and only the owner's own command (`/chatapprove`, `/chatdeny`) answers: no tool of the model can, and nothing in the question's
-	 * text is ever acted on.
+	 * An agent asks whether a step of its work may go ahead, in whatever conversation the work came from: everyone in the domain is trusted to
+	 * ask. Only the owner's own command (`/chatapprove`, `/chatdeny`) or button answers: no tool of the model can, and nothing in the
+	 * question's text is ever acted on.
 	 */
 	async #askOwner(message: InboundMessage, agent: string, requestId: string): Promise<void> {
 		if (!APPROVAL_ID.test(requestId) || !message.conversationId) return;
@@ -136,7 +136,7 @@ export class ChatSessions {
 		for (const [id] of entries.slice(0, Math.max(0, entries.length - KEEP_APPROVALS))) delete approvals[id];
 		await this.#deps.save(this.#deps.state);
 		const question = defang(message.text.split("\n")[0] ?? "");
-		await this.#deps.owner.tell(`${defang(agent)} needs your approval for your instruction:\n${question.slice(0, 600)}\nAnswer with /chatapprove ${requestId} or /chatdeny ${requestId}. Without an answer it is denied.`);
+		await this.#deps.owner.tell(`${defang(agent)} asks for your approval of a step:\n${question.slice(0, 600)}\nAnswer with /chatapprove ${requestId} or /chatdeny ${requestId}. Without an answer it is denied.`);
 	}
 
 	/** The owner's answer to an agent's approval question. Sent once, in the same conversation, labelled so the agent can tell it from chat. */
@@ -168,7 +168,7 @@ export class ChatSessions {
 			if (!chat.awaitingSince || chat.timeoutNotified || now - Date.parse(chat.awaitingSince) < REPLY_TIMEOUT_MS) continue;
 			chat.timeoutNotified = true;
 			await this.#deps.save(this.#deps.state);
-			await this.#deps.owner.tell(`No reply from ${defang(chat.agent)} after 3 minutes. Agents take tasks more than they chat, and a reply may still come; I will show it if it does.`).catch(() => {});
+			await this.#deps.owner.tell(`No reply from ${defang(chat.agent)} after 3 minutes. A reply may still come; I will show it if it does.`).catch(() => {});
 		}
 	}
 

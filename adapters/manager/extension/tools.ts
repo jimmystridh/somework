@@ -19,7 +19,7 @@ async function callGateway(env: Env, fetchApi: typeof fetch, method: string, pat
 		signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
 	});
 	const text = await response.text();
-	// refusals are answers the model should read and act on (for example "waiting for approval"), not crashes
+	// refusals are answers the model should read and act on (for example "waiting for the owner"), not crashes
 	return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}... [truncated]` : text;
 }
 
@@ -30,9 +30,9 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	pi.registerTool({
 		name: "somework_catalog",
 		label: "Find Agents",
-		description: "Search the SomeWork catalog for agents and capabilities. Returns each capability's id, version, description, side effects (none/read/write/irreversible) and input schema.",
+		description: "Search the SomeWork catalog for agents and what they say they can do. A capability is an advertisement, not a contract or a button: it tells you what to ask an agent for in a message (its input schema shows what the agent understands). Returns each capability's id, version, description and input schema.",
 		promptSnippet: "Find other SomeWork agents and what they can do",
-		promptGuidelines: [untrusted, "Use the exact capability id and version from the catalog when submitting."],
+		promptGuidelines: [untrusted, "Then ask the agent in plain words with somework_ask; it decides what to do."],
 		parameters: Type.Object({ query: Type.String({ description: "what you need done, in plain words" }) }),
 		async execute(_id: string, params: { query: string }, signal?: AbortSignal) {
 			return reply(await callGateway(env, fetchApi, "GET", `/v1/catalog?query=${encodeURIComponent(params.query)}`, undefined, signal));
@@ -40,55 +40,12 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	});
 
 	pi.registerTool({
-		name: "somework_submit",
-		label: "Give Task To Agent",
-		description:
-			"Submit a task to a SomeWork capability. Capabilities without side effects run immediately and return a taskId. Anything that writes or is irreversible returns status awaiting_approval: the owner is asked on Telegram and nothing runs until they approve. Never claim such a task is running before it is approved.",
-		promptSnippet: "Hand a task to another agent (writes need the owner's approval)",
-		promptGuidelines: [untrusted, "After an awaiting_approval answer, tell the owner what you asked for and stop; they will be notified of the outcome automatically."],
-		parameters: Type.Object({
-			capabilityId: Type.String(),
-			capabilityVersion: Type.String(),
-			input: Type.Unknown({ description: "JSON object matching the capability's input schema" }),
-			targetAgentId: Type.Optional(Type.String({ description: "only when several agents offer the capability" })),
-		}),
-		async execute(_id: string, params: { capabilityId: string; capabilityVersion: string; input?: unknown; targetAgentId?: string }, signal?: AbortSignal) {
-			return reply(
-				await callGateway(env, fetchApi, "POST", "/v1/tasks", { capability: { id: params.capabilityId, version: params.capabilityVersion }, input: params.input, targetAgentId: params.targetAgentId }, signal),
-			);
-		},
-	});
-
-	pi.registerTool({
-		name: "somework_task",
-		label: "Check Task",
-		description: "Read a task's state and result by taskId, or the status of an approval by its approvalId. waitSeconds (max 30) waits briefly for a result.",
-		promptSnippet: "Check a task or an approval",
-		promptGuidelines: [untrusted],
-		parameters: Type.Object({ id: Type.String({ description: "taskId or approvalId" }), waitSeconds: Type.Optional(Type.Number()) }),
-		async execute(_id: string, params: { id: string; waitSeconds?: number }, signal?: AbortSignal) {
-			return reply(await callGateway(env, fetchApi, "GET", `/v1/tasks/${encodeURIComponent(params.id)}?wait=${Math.min(params.waitSeconds ?? 0, 30)}`, undefined, signal));
-		},
-	});
-
-	pi.registerTool({
-		name: "somework_cancel",
-		label: "Cancel Task",
-		description: "Cancel a task this Manager submitted.",
-		promptSnippet: "Cancel a task you submitted",
-		parameters: Type.Object({ taskId: Type.String(), reason: Type.Optional(Type.String()) }),
-		async execute(_id: string, params: { taskId: string; reason?: string }, signal?: AbortSignal) {
-			return reply(await callGateway(env, fetchApi, "POST", `/v1/tasks/${encodeURIComponent(params.taskId)}/cancel`, { reason: params.reason }, signal));
-		},
-	});
-
-	pi.registerTool({
 		name: "somework_ask",
 		label: "Ask Agent",
 		description:
-			"Chat with an agent for the owner: sends a direct chat message (max 2000 characters, 30 per hour) to an agent given by its id or a short name such as reviewer or aikido-fixer. The agent's answer is shown to the owner in Telegram, not returned to you. It is a conversation, not a task: use somework_submit to have work done. Sending has no side effects beyond the message.",
-		promptSnippet: "Ask another agent something on the owner's behalf",
-		promptGuidelines: ["After asking, tell the owner what you asked and stop; the answer reaches them directly and may not come."],
+			"Ask an agent for something on the owner's behalf: sends it a message (max 2000 characters, 30 per hour) to an agent given by its id or a short name such as reviewer or aikido-fixer. Ask in plain words, like a colleague: a question, or a request (\"verify SAD-123\", \"review PR 42\"). The agent decides what to do. Long work runs as its background job: its result is posted back as a message, and the owner is told when a job finishes. The agent's answer is shown to the owner in Telegram, not returned to you.",
+		promptSnippet: "Ask another agent something, or ask it to do something, on the owner's behalf",
+		promptGuidelines: ["After asking, tell the owner what you asked and stop; the answer reaches them directly and may take a while or not come."],
 		parameters: Type.Object({ agent: Type.String({ description: "agent id or short name" }), text: Type.String() }),
 		async execute(_id: string, params: { agent: string; text: string }, signal?: AbortSignal) {
 			return reply(await callGateway(env, fetchApi, "POST", "/v1/chat/ask", params, signal));
@@ -98,7 +55,7 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	pi.registerTool({
 		name: "somework_message",
 		label: "Message Agent",
-		description: "Send a chat message to another SomeWork agent by its exact id (for example agent/reviewer). Prefer somework_ask, which also routes the answer to the owner. It is a conversation, not a task: use somework_submit to have work done.",
+		description: "Send a message to another SomeWork agent by its exact id (for example agent/reviewer). Prefer somework_ask, which also routes the answer to the owner.",
 		promptSnippet: "Chat with another agent",
 		promptGuidelines: [untrusted],
 		parameters: Type.Object({ to: Type.String({ description: "agent id" }), text: Type.String(), conversationId: Type.Optional(Type.String()) }),
@@ -144,21 +101,10 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	});
 
 	pi.registerTool({
-		name: "somework_approvals",
-		label: "Pending Domain Approvals",
-		description: "Approvals the domain waits for (for example write-class tasks that event rules started). Read only: only the owner can decide them, in Telegram.",
-		promptSnippet: "See which approvals are waiting",
-		parameters: Type.Object({}),
-		async execute(_id: string, _params: unknown, signal?: AbortSignal) {
-			return reply(await callGateway(env, fetchApi, "GET", "/v1/control/approvals", undefined, signal));
-		},
-	});
-
-	pi.registerTool({
 		name: "somework_control",
 		label: "Ask To Pause, Switch Off Or Raise A Budget",
 		description:
-			"Ask the owner to pause or resume an event rule, pause or resume an event source, switch an agent's handler (or all) off or on, or give an agent more tokens for today (raise_budget with agent, pool and tokens; pool tasks is the whole daily limit, events and chat are their own pools; the raise ends tomorrow). This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. Creating rules is not possible.",
+			"Ask the owner to pause or resume an event rule, pause or resume an event source, switch an agent's handler (or all) off or on, or give an agent more tokens for today (raise_budget with agent, pool and tokens; pool tasks is the daily limit for jobs, events and chat are their own pools; the raise ends tomorrow). This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. Creating rules is not possible.",
 		promptSnippet: "Ask the owner to pause or resume a rule or source, switch a handler off, or raise an agent's token budget for today",
 		promptGuidelines: ["Tell the owner what you asked for and why, then stop; never say it has taken effect before they confirm."],
 		parameters: Type.Object({
@@ -179,7 +125,7 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	pi.registerTool({
 		name: "somework_inbox",
 		label: "Read Agent Messages",
-		description: "Read unread messages other agents sent to the Manager, or the messages of one conversation.",
+		description: "Read unread messages other agents sent to the Manager (replies, job results, approval questions), or the messages of one conversation.",
 		promptSnippet: "Read messages from other agents",
 		promptGuidelines: [untrusted],
 		parameters: Type.Object({ conversationId: Type.Optional(Type.String()), limit: Type.Optional(Type.Number()) }),

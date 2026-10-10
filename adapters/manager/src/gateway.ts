@@ -64,14 +64,6 @@ export function createGateway(options: GatewayOptions): Server {
 	async function route(method: string, url: URL, request: IncomingMessage): Promise<unknown> {
 		const path = url.pathname;
 		if (method === "GET" && path === "/v1/catalog") return service.catalog(url.searchParams.get("query") ?? "");
-		if (method === "POST" && path === "/v1/tasks") {
-			const body = await readJson(request);
-			return service.submit({ capability: body.capability ?? {}, input: body.input, targetAgentId: body.targetAgentId });
-		}
-		const task = /^\/v1\/tasks\/([^/]+)$/.exec(path);
-		if (method === "GET" && task) return service.task(decodeURIComponent(task[1]!), Number(url.searchParams.get("wait") ?? 0) || 0);
-		const cancel = /^\/v1\/tasks\/([^/]+)\/cancel$/.exec(path);
-		if (method === "POST" && cancel) return service.cancel(decodeURIComponent(cancel[1]!), (await readJson(request)).reason);
 		if (method === "POST" && path === "/v1/messages") {
 			const body = await readJson(request);
 			return service.message({ to: String(body.to ?? ""), text: String(body.text ?? ""), conversationId: body.conversationId });
@@ -86,7 +78,6 @@ export function createGateway(options: GatewayOptions): Server {
 		if (method === "GET" && path === "/v1/control/rules") return service.rules();
 		if (method === "GET" && path === "/v1/control/sources") return service.sources();
 		if (method === "GET" && path === "/v1/control/handlers") return service.handlers(url.searchParams.get("agent") ?? "");
-		if (method === "GET" && path === "/v1/control/approvals") return service.domainApprovals();
 		if (method === "POST" && path === "/v1/control/request") return service.controlRequest(await readJson(request));
 		throw new PolicyError(404, "not_found", "no such route");
 	}
@@ -114,6 +105,6 @@ export function createGateway(options: GatewayOptions): Server {
 			const { status: code, body } = errorAnswer(error);
 			status = send(response, code, body);
 		}
-		log("gateway_request", { route: `${method} ${url.pathname.replace(/\/(task_|a)[^/]+/, "/:id")}`, status, bytes });
+		log("gateway_request", { route: `${method} ${url.pathname.replace(/\/(job-|c)[^/]+/, "/:id")}`, status, bytes });
 	});
 }

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { SomeWorkError } from "@somework/sdk";
-import type { ApprovalDecision, DomainApi, DomainApproval, FeedEvent, InboundMessage, RuleFiring, RuleSummary } from "../src/domain.ts";
+import type { DomainApi, FeedEvent, InboundMessage, RuleSummary, Subscription } from "../src/domain.ts";
 import type { PiRpc } from "../src/rpc.ts";
 
 export const code = "a".repeat(32);
@@ -51,30 +51,22 @@ export function stubRpc(state: Record<string, unknown> = { isStreaming: false, m
 }
 
 export interface FakeCapability {
-	sideEffects: string;
 	description?: string;
 }
 
-/** A domain that remembers what was asked of it, so tests can assert that nothing reached it before an approval. */
+/** A domain that remembers what was asked of it, so tests can assert what reached it. */
 export class FakeDomain implements DomainApi {
 	selfId = "agent/manager";
-	capabilities: Record<string, FakeCapability> = { "code.review@2": { sideEffects: "read" }, "code.agent@1": { sideEffects: "write" } };
-	submitted: { request: any; key: string }[] = [];
-	tasks: Record<string, any> = {};
-	inputs: { taskId: string; data: unknown }[] = [];
-	canceled: string[] = [];
+	capabilities: Record<string, FakeCapability> = { "code.review@2": { description: "reviews a branch" } };
 	sentMessages: any[] = [];
 	unread: InboundMessage[] = [];
 	read: string[] = [];
-	approvals: DomainApproval[] = [];
-	decisions: { approvalId: string; decision: ApprovalDecision }[] = [];
-	decideError: Error | undefined;
 	rules: RuleSummary[] = [];
-	firings: Record<string, RuleFiring[]> = {};
 	rulesPaused: string[] = [];
 	rulesResumed: string[] = [];
 	feed: FeedEvent[] = [];
 	acked: number[] = [];
+	subscriptions: Subscription[] = [];
 
 	async searchCatalog(_query: string) {
 		return { matches: [{ agentId: "agent/reviewer", availability: "online", matchedCapabilities: [{ id: "code.review", version: "2" }] }] };
@@ -88,27 +80,6 @@ export class FakeDomain implements DomainApi {
 		const found = this.capabilities[`${id}@${version}`];
 		if (!found) throw new SomeWorkError(404, "not_found", "no such capability");
 		return { id, version, ...found };
-	}
-
-	async submitTask(request: any, key: string) {
-		const taskId = `task_${this.submitted.length + 1}`;
-		this.submitted.push({ request, key });
-		this.tasks[taskId] = { taskId, state: "queued" };
-		return { taskId, state: "queued" };
-	}
-
-	async getTask(taskId: string) {
-		return this.tasks[taskId];
-	}
-
-	async cancelTask(taskId: string) {
-		this.canceled.push(taskId);
-		return { taskId, state: "cancel_requested" };
-	}
-
-	async provideInput(taskId: string, data: unknown) {
-		this.inputs.push({ taskId, data });
-		return {};
 	}
 
 	async sendMessage(message: any) {
@@ -126,24 +97,6 @@ export class FakeDomain implements DomainApi {
 
 	async markRead(ids: string[]) {
 		this.read.push(...ids);
-	}
-
-	async listApprovals(status?: string) {
-		return this.approvals.filter((a) => !status || a.status === status);
-	}
-
-	async getApproval(id: string) {
-		const found = this.approvals.find((a) => a.approvalId === id);
-		if (!found) throw new SomeWorkError(404, "not_found", "no such approval");
-		return found;
-	}
-
-	async decideApproval(approvalId: string, decision: ApprovalDecision) {
-		if (this.decideError) throw this.decideError;
-		this.decisions.push({ approvalId, decision });
-		const found = this.approvals.find((a) => a.approvalId === approvalId)!;
-		found.status = decision.decision;
-		return { taskId: found.taskId };
 	}
 
 	async listRules() {
@@ -166,10 +119,6 @@ export class FakeDomain implements DomainApi {
 		return rule;
 	}
 
-	async ruleFirings(name: string) {
-		return this.firings[name] ?? [];
-	}
-
 	async events(after: number | undefined) {
 		const events = this.feed.filter((e) => e.seq > (after ?? 0));
 		return { events, cursor: events.at(-1)?.seq ?? after ?? 0 };
@@ -177,5 +126,13 @@ export class FakeDomain implements DomainApi {
 
 	async ackEvents(cursor: number) {
 		this.acked.push(cursor);
+	}
+
+	async listSubscriptions() {
+		return this.subscriptions;
+	}
+
+	async subscribeToTopic(selector: string, wakeOnMatch: boolean) {
+		this.subscriptions.push({ kind: "topic", selector, wakeOnMatch });
 	}
 }

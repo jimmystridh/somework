@@ -4,11 +4,11 @@ Nothing here has been deployed. The old bridge (`~/agent-cluster-pi/telegram-bri
 that rollback is one command. The new unit `Conflicts=` with it, because both start the container named `pi-demo`.
 
 The Manager reuses the paired Telegram owner, the bot token and the Pi session of the old bridge (`~/.config/agent-cluster-telegram/`:
-`bot-token`, `state.json`). The state file gains a `tasks` key; the old bridge ignores it.
+`bot-token`, `state.json`). The state file gains keys (`chats`, `chatApprovals`, `eventCursor`, `jobSubscription`); the old bridge ignores them, and the Manager ignores the `tasks` and `reactionApprovals` keys an older build left there.
 
 ## 1. Identity on the domain
-No capability card: the Manager is a requester and a chat participant, it claims no tasks. Other agents can message it by id; add a card
-later only if it should show up in the catalog.
+No capability card: the Manager is a conversation partner, it offers nothing to the catalog. Other agents can message it by id; add a card
+later only if it should show up there.
 
 Generate the key on VM102 so it never travels (outside `~/.pi/agent`, which is mounted into the Pi container):
 ```bash
@@ -21,28 +21,26 @@ Then on the domain host (VM105; `ops` as in the root `deploy/README.md`), with t
 ops admin --config /etc/somework/somework.toml enroll-agent --id agent/manager --public-key '<publicKey>' \
   --side-effects write --may-invoke 'code.*'
 ```
-`--side-effects write` lets it submit tasks for `write` capabilities (the gateway still asks the owner first). It cannot submit
-`irreversible` ones. `--may-invoke` takes capability id globs; start with `code.*` and widen with `set-agent-permissions` as needed.
+The `--side-effects` and `--may-invoke` flags belong to the domain builds that still have tasks; the Manager no longer submits any, so they
+matter only until the domain drops them.
 
-### Events, domain approvals and controls (additional permissions; apply once, by the operator)
-Write-class tasks that event rules start wait for a structured approval in the domain. The domain lets an agent decide an approval only
-when its permissions hold the action `approval.grant` and an `approves` pattern for the capability; it then reads rules and events with
-`ops.read` and pauses or resumes rules with `rules.control`. `rules.control` is the domain's narrow rule permission: it reads rules and
-pauses or resumes them, and the domain refuses `PUT` and `DELETE` for it, so the Manager's key can never create or delete a rule, even
-through the API. Do not grant it `rules.manage`. `PATCH` replaces the whole permission set, so list everything the Manager needs. The patterns in `approves` are the capabilities
-the owner may approve from Telegram (the requester can never approve its own task):
+### Events and controls (additional permissions; apply once, by the operator)
+The Manager reads rules and events with `ops.read`, pauses or resumes rules with `rules.control`, and subscribes itself to the job-finished
+events of the agents (`agent.*.job.finished`, a topic subscription, which needs `message.read`). `rules.control` is the domain's narrow rule
+permission: it reads rules and pauses or resumes them, and the domain refuses `PUT` and `DELETE` for it, so the Manager's key can never
+create or delete a rule, even through the API. Do not grant it `rules.manage`. `PATCH` replaces the whole permission set, so list everything
+the Manager needs. The Manager decides no approval in the domain: agents ask the owner in messages and the owner answers in Telegram.
 ```bash
-ops admin ... # run the PATCH with the operator key on the domain host; the current set is the default agent actions plus capabilities code.*
+ops admin ... # run the PATCH with the operator key on the domain host
 PATCH /v1/admin/principals/agent/agent%2Fmanager
-{"permissions": {"actions": ["catalog.read","catalog.register","message.send","message.read","task.submit","task.read","task.claim","task.update",
-                              "task.cancel","artifact.read","artifact.write","context.read","context.write",
-                              "approval.grant","ops.read","rules.control"],
-                 "capabilities": ["code.*"], "approves": ["qa.*","code.*"],
-                 "sideEffectsAtMost": "write", "classificationMax": "internal"}}
+{"permissions": {"actions": ["catalog.read","message.send","message.read","ops.read","rules.control"],
+                 "classificationMax": "internal"}}
 ```
-Check with `GET /v1/admin/whoami` as the Manager. Without these (the domain must be a build that knows `rules.control`), the Manager still works as before; the approval prompts for event rules,
-`/rules`, `/pause` and the digest then report a permission error in Telegram instead of data. The Manager also receives the events of the
-rules that wake it (`alert-grafana-to-manager`, `alert-datadog-to-manager`, `nightly-digest`: their `owner` is `agent/manager`).
+Check with `GET /v1/admin/whoami` as the Manager. Without `rules.control` (the domain must be a build that knows it) `/rules`, `/pause` and
+the digest report a permission error in Telegram instead of data; without `message.read` for topics the job-finished subscription fails
+(logged as `job_subscription_failed`, tried again at the next start) and the owner only hears about jobs in the conversations they started.
+The Manager also receives the events of the rules that wake it (`alert-grafana-to-manager`, `alert-datadog-to-manager`, `nightly-digest`: their
+`owner` is `agent/manager`).
 
 Optional hub and handler controls, in `manager.env`: `MANAGER_HUB_URL` (the hub's listener, for `/sources` and `/pausesource`),
 `MANAGER_HUB_TOKEN_FILE` (0600; the hub's admin token, derived from the hub secret:
@@ -89,8 +87,9 @@ Check, in this order:
    If not, the host firewall is the usual cause (ufw denies incoming by default). The one rule needed, scoped to the Pi compose
    network and the gateway address only: `sudo ufw allow from 172.18.0.0/16 to 172.18.0.1 port 7079 proto tcp comment 'Manager gateway: Pi compose network only'`.
 2. In Telegram: `/status`, `/agents` (lists the catalog), then ask "which agents can review code?" (uses `somework_catalog`: proves the extension loaded).
-3. Ask it to run something read-only, then something that writes: the approval prompt must arrive and nothing may exist in the domain
-   until `/approve`.
+3. `/ask reviewer what can you do?`: the answer must arrive in Telegram. Ask an agent for something that runs as a job (for example
+   `/ask qa verify ABC-123`): the result arrives in the same conversation when the job ends, and a job started by an event or another agent
+   produces the one-line "finished" message. A step that needs approval produces a question with `/chatapprove <id>` and `/chatdeny <id>`.
 4. `docker inspect pi-demo` must show no SomeWork key mounted; `ls ~/.pi/agent` must not contain `manager.key.json` or the gateway token.
 
 ## Rollback

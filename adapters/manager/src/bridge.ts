@@ -1,9 +1,8 @@
 import { PolicyError } from "./policy.ts";
 import type { InboundMessage } from "./domain.ts";
-import type { Notifications, TaskEvent, TaskTracker } from "./notifier.ts";
-import { CONTROL_REQUEST_ID, parseAction, type ControlAction, type Controls } from "./controls.ts";
+import type { Notifications } from "./notifier.ts";
+import { CONTROL_REQUEST_ID, describeAction, parseAction, type ControlAction, type Controls } from "./controls.ts";
 import { WindowedLimiter } from "./rate.ts";
-import { DOMAIN_APPROVAL_ID } from "./reaction-approvals.ts";
 import { defang, scrub } from "./redact.ts";
 import type { PiRpc } from "./rpc.ts";
 import type { ManagerService, Owner } from "./service.ts";
@@ -11,48 +10,17 @@ import type { ManagerState, SaveState } from "./state.ts";
 import { isPrivateUserMessage, textChunks, validPairing, type TelegramApi } from "./telegram.ts";
 
 const HELP = [
-	"Ordinary messages go to the Manager (Pi in /workspace). It can find and use the other agents, and asks you before anything that writes.",
-	"Chat with an agent: /ask <agent> <text> (the name may be short, like reviewer); its answer arrives here, and you are told if none comes in 3 minutes. 30 messages per hour, 2000 characters each. /do <agent> <text> is the same but makes the agent do the work (it sends instruct: for you).",
-	"Commands: /agents, /tasks, /pending, /approve <id>, /deny <id>, /approvals, /answer <taskId> <text>, /cancel <taskId>, /status, /stop, /workspace, /help.",
-	"Instructions: a message to an agent that starts with instruct: (/ask reviewer instruct: ...) makes it do work; when it needs your approval for a step you get a question here and answer with /chatapprove <id> or /chatdeny <id>.",
-	"Everything at once: /suspend [reason] pauses every rule and event source, switches off every agent's handlers, cancels the tasks in flight and stops the Manager's own work; approvals are refused until /unsuspend, which puts back exactly what /suspend changed.",
+	"Ordinary messages go to the Manager (Pi in /workspace). It can find the other agents and talk to them for you, like a colleague would.",
+	"Chat with an agent: /ask <agent> <text> (the name may be short, like reviewer). The agent decides what to do with it: answer, or start work in the background. Its answer arrives here, and you are told if none comes in 3 minutes. 30 messages per hour, 2000 characters each.",
+	"Commands: /agents, /pending, /approve <id>, /deny <id>, /status, /stop, /workspace, /help.",
+	"Approvals: when an agent needs your approval for a step you get a question here and answer with /chatapprove <id> or /chatdeny <id>. Switches the Manager asks for (pause a rule, raise a budget) wait for the Confirm button or /approve <id>.",
+	"Jobs: agents run long work in the background and tell you here when a job finishes (one line: the agent, the job, how it ended).",
+	"Everything at once: /suspend [reason] pauses every rule and event source and switches off every agent's handlers and the Manager's own work; approvals are refused until /unsuspend, which puts back exactly what /suspend changed.",
 	"Events: /rules, /pause <rule>, /resume <rule>, /sources, /pausesource <source>, /resumesource <source>, /handlers <agent>, /kill <agent> <handler|all> [reason], /unkill <agent> <handler|all>.",
-	"A reply to a question message answers that task: yes/no approves or denies, anything else is passed as the answer. Text only.",
+	"Text only.",
 ].join("\n");
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}...` : text);
-
-export function describeResult(view: any): string {
-	const result = view.result;
-	const lines: string[] = [];
-	if (result && typeof result === "object") {
-		if (result.prUrl) lines.push(`PR: ${result.prUrl}`);
-		else if (result.branch) lines.push(`Branch: ${result.branch}`);
-		if (typeof result.summary === "string") lines.push(clip(result.summary, 700));
-		else if (!result.prUrl) lines.push(clip(JSON.stringify(result), 700));
-		const usage = result.usage;
-		if (usage?.totalTokens) lines.push(`Used ${usage.totalTokens} tokens${usage.costUsd ? `, $${usage.costUsd}` : ""}`);
-	} else if (result !== undefined) {
-		lines.push(clip(String(result), 700));
-	}
-	return lines.join("\n");
-}
-
-export function describeQuestion(view: any): string {
-	const question = view.blocker?.question ?? view.pendingInput ?? view.question;
-	if (question === undefined) return "The agent is waiting for your input.";
-	const text = typeof question === "string" ? question : (question.question ?? question.prompt ?? JSON.stringify(question));
-	return clip(typeof text === "string" ? text : JSON.stringify(text), 900);
-}
-
-/** Free text answers: yes/no variants approve or deny, anything else goes through as an answer. */
-export function answerFrom(text: string): Record<string, unknown> {
-	const trimmed = text.trim();
-	if (/^(y|yes|approve|approved|ok|okay)\b/i.test(trimmed)) return { approved: true };
-	const denied = /^(n|no|deny|denied|reject)\b[\s,:-]*(.*)$/i.exec(trimmed);
-	if (denied) return { approved: false, ...(denied[2] ? { reason: denied[2] } : {}) };
-	return { answer: trimmed };
-}
 
 export interface BridgeDeps {
 	state: ManagerState;
@@ -60,7 +28,6 @@ export interface BridgeDeps {
 	rpc: PiRpc;
 	save: SaveState;
 	service?: ManagerService;
-	tracker?: TaskTracker;
 	notifications?: Notifications;
 	/** Notices and messages other agents send, per sender and hour, before the rest are only counted (default 10). */
 	noticesPerHour?: number;
@@ -81,7 +48,6 @@ export class TelegramBridge implements Owner {
 	readonly rpc: PiRpc;
 	readonly save: SaveState;
 	service: ManagerService | undefined;
-	tracker: TaskTracker | undefined;
 	readonly #notices: WindowedLimiter;
 
 	constructor(deps: BridgeDeps) {
@@ -91,9 +57,7 @@ export class TelegramBridge implements Owner {
 		this.rpc = deps.rpc;
 		this.save = deps.save;
 		this.service = deps.service;
-		this.tracker = deps.tracker;
 		deps.rpc.onEvent = (event) => this.onPiEvent(event);
-		deps.notifications?.onTaskEvent((event) => this.announceTask(event));
 		deps.notifications?.onMessage((message) => this.forwardMessage(message));
 	}
 
@@ -111,16 +75,6 @@ export class TelegramBridge implements Owner {
 	async tell(text: string, markup?: unknown): Promise<number | undefined> {
 		if (!this.state.chatId || !this.state.allowedUserId) throw new Error("owner not paired");
 		return this.reply(this.state.chatId, text, markup);
-	}
-
-	async announceTask(event: TaskEvent): Promise<number | undefined> {
-		const { task, view } = event;
-		if (event.kind === "input_required") {
-			return this.tell(`Task ${task.taskId} (${task.capability}) asks:\n${describeQuestion(view)}\nReply to this message, or /answer ${task.taskId} <text>.`);
-		}
-		const head = `Task ${task.taskId} (${task.capability}) ${view.state}`;
-		const detail = view.state === "succeeded" ? describeResult(view) : view.failure ? `${view.failure.code ?? "failed"}: ${clip(String(view.failure.message ?? ""), 500)}` : "";
-		return this.tell(scrub([head, detail].filter(Boolean).join("\n")));
 	}
 
 	/**
@@ -191,9 +145,6 @@ export class TelegramBridge implements Owner {
 		}
 		const chatId: number = message.chat.id;
 		if (text.startsWith("/")) return this.command(chatId, text);
-		const repliedTo = message.reply_to_message?.message_id;
-		const asked = repliedTo === undefined ? undefined : this.tracker?.tasks.find((task) => task.questionMessageId === repliedTo && task.state === "input_required");
-		if (asked) return this.answer(chatId, asked.taskId, text);
 		return this.prompt(chatId, text);
 	}
 
@@ -203,11 +154,10 @@ export class TelegramBridge implements Owner {
 		const chat = query?.message?.chat;
 		if (!owner || query?.from?.id !== owner || chat?.type !== "private" || chat.id !== this.state.chatId) return;
 		const answer = (text: string) => this.api("answerCallbackQuery", { callback_query_id: query.id, text: text.slice(0, 190) }).catch(() => {});
-		const match = /^(ap|ct):([yn]):([A-Za-z0-9_-]{1,70})$/.exec(String(query.data ?? ""));
+		const match = /^ct:([yn]):([A-Za-z0-9_-]{1,70})$/.exec(String(query.data ?? ""));
 		if (!match || !this.service) return void (await answer("That button does not work any more."));
-		const [, kind, choice, id] = match as unknown as [string, string, string, string];
-		const valid = kind === "ap" ? DOMAIN_APPROVAL_ID.test(id) : CONTROL_REQUEST_ID.test(id);
-		if (!valid) return void (await answer("That button does not work any more."));
+		const [, choice, id] = match as unknown as [string, string, string];
+		if (!CONTROL_REQUEST_ID.test(id)) return void (await answer("That button does not work any more."));
 		if (choice === "y" && this.isSuspended()) return void (await answer("Everything is suspended: /unsuspend first."));
 		try {
 			const result = choice === "y" ? await this.service.approve(id) : await this.service.denyAny(id);
@@ -234,9 +184,8 @@ export class TelegramBridge implements Owner {
 				return say("Current workspace: /workspace\nThe Manager is already in this directory; there is no need to switch. Send an ordinary message such as \"Which agents can review code?\".");
 			case "/status": {
 				const status = await this.rpc.command("get_state");
-				const waiting = this.service?.pending().length ?? 0;
-				const open = this.tracker?.activeIds().length ?? 0;
-				return say(`${this.state.suspended ? `SUSPENDED since ${this.state.suspended.at.slice(0, 16)}Z${this.state.suspended.reason ? ` (${this.state.suspended.reason})` : ""}\n` : this.isSuspended() ? "SUSPENDED (the processes are stopped; /unsuspend starts them)\n" : ""}Manager ${status.isStreaming ? "working" : "idle"}\nModel: ${status.model?.provider}/${status.model?.id}\nThinking: ${status.thinkingLevel}\nWorkspace: /workspace\nTasks in flight: ${open}, approvals waiting: ${waiting}`);
+				const waiting = (this.service?.pendingRequests() ?? 0) + Object.keys(this.state.chatApprovals ?? {}).length;
+				return say(`${this.state.suspended ? `SUSPENDED since ${this.state.suspended.at.slice(0, 16)}Z${this.state.suspended.reason ? ` (${this.state.suspended.reason})` : ""}\n` : this.isSuspended() ? "SUSPENDED (the processes are stopped; /unsuspend starts them)\n" : ""}Manager ${status.isStreaming ? "working" : "idle"}\nModel: ${status.model?.provider}/${status.model?.id}\nThinking: ${status.thinkingLevel}\nWorkspace: /workspace\nQuestions waiting for you: ${waiting}`);
 			}
 			case "/suspend":
 				return this.suspendEverything(say, argument);
@@ -251,32 +200,18 @@ export class TelegramBridge implements Owner {
 					const agents = await service.agents();
 					return say(agents.length ? agents.map((a) => `${a.agentId} [${a.availability ?? "?"}]: ${a.capabilities.join(", ") || "-"}`).join("\n") : "No agents in the catalog.");
 				});
-			case "/tasks":
-				return say(
-					this.tracker?.tasks.length
-						? this.tracker.tasks.slice(0, 10).map((t) => `${t.taskId} ${t.state} ${t.capability} (${t.submittedAt.slice(11, 16)}Z)`).join("\n")
-						: "No tasks submitted yet.",
-				);
 			case "/pending":
 				return this.needService(say, (service) => {
-					const pending = service.pending();
-					return say(pending.length ? pending.map((a) => `${a.id} ${a.capability.id}@${a.capability.version} (${a.sideEffects}) until ${new Date(a.expiresAt).toISOString().slice(11, 16)}Z`).join("\n") : "Nothing waits for approval.");
-				});
-			case "/approvals":
-				return this.needService(say, async (service) => {
-					const local = service.pending().map((a) => `${a.id} ${a.capability.id}@${a.capability.version} (${a.sideEffects}) until ${new Date(a.expiresAt).toISOString().slice(11, 16)}Z`);
-					const domain = service.reactionApprovals ? ((await service.domainApprovals()) as { approvals: any[] }).approvals.map((a) => `${a.approvalId} ${defang(a.action)} requested by ${defang(a.requestedBy)} until ${String(a.expiresAt).slice(11, 16)}Z`) : [];
-					return say([...local, ...domain].join("\n") || "Nothing waits for approval.");
+					const pending = service.controlRequests?.pending() ?? [];
+					const questions = Object.entries(this.state.chatApprovals ?? {}).map(([id, ask]) => `${id} ${defang(ask.agent)} asks for approval of a step (/chatapprove ${id} or /chatdeny ${id})`);
+					const requests = pending.map((request) => `${request.id} ${describeAction(request.action)} until ${new Date(request.expiresAt).toISOString().slice(11, 16)}Z`);
+					return say([...questions, ...requests].join("\n") || "Nothing waits for you.");
 				});
 			case "/approve":
 				return this.needService(say, async (service) => {
 					if (this.isSuspended()) return say("Everything is suspended: send /unsuspend before approving anything.");
 					if (!argument) return say("Usage: /approve <id>");
-					try {
-						return say((await service.approve(argument)).message);
-					} catch (error) {
-						return say(`Approved, but submitting failed: ${error instanceof Error ? clip(error.message, 300) : "error"}`);
-					}
+					return say((await service.approve(argument)).message);
 				});
 			case "/deny":
 				return this.needService(say, async (service) => (argument ? say((await service.denyAny(argument)).message) : say("Usage: /deny <id>")));
@@ -314,32 +249,14 @@ export class TelegramBridge implements Owner {
 					}
 				});
 			case "/ask":
-			case "/do":
 				return this.needService(say, async (service) => {
 					const [agent, ...words] = rest;
-					const work = name.toLowerCase() === "/do";
-					if (!agent || words.length === 0) return say(work ? "Usage: /do <agent> <what to do>, for example /do qa verify ABC-123" : "Usage: /ask <agent> <text>, for example /ask reviewer what can you do?");
+					if (!agent || words.length === 0) return say("Usage: /ask <agent> <text>, for example /ask reviewer what can you do?");
 					try {
-						// the service tells the owner "sent, waiting for a reply" itself, so the same text comes from /ask and from the tool; /do is /ask with the instruct: marker that makes the agent work instead of answer
-						const text = words.join(" ");
-						await service.ask({ agent, text: work && !/^instruct:/i.test(text) ? `instruct: ${text}` : text });
+						// the service tells the owner "sent, waiting for a reply" itself, so the same text comes from /ask and from the tool
+						await service.ask({ agent, text: words.join(" ") });
 					} catch (error) {
 						await say(error instanceof PolicyError ? error.message : `Could not send: ${error instanceof Error ? clip(defang(error.message), 200) : "error"}`);
-					}
-				});
-			case "/answer": {
-				const [taskId, ...words] = rest;
-				if (!taskId || words.length === 0) return say("Usage: /answer <taskId> <text>");
-				return this.answer(chatId, taskId, words.join(" "));
-			}
-			case "/cancel":
-				return this.needService(say, async (service) => {
-					if (!argument) return say("Usage: /cancel <taskId>");
-					try {
-						await service.cancel(argument, "canceled by the owner");
-						return say(`Cancel requested for ${argument}.`);
-					} catch (error) {
-						return say(error instanceof PolicyError ? error.message : "Cancel failed.");
 					}
 				});
 			default:
@@ -353,21 +270,10 @@ export class TelegramBridge implements Owner {
 		const lines: string[] = [];
 		await this.needService(say, async (service) => {
 			lines.push(await this.controlsOf(service).suspendAll(reason || undefined));
-			const open = this.tracker?.activeIds() ?? [];
-			let canceled = 0;
-			for (const taskId of open) {
-				try {
-					await service.cancel(taskId, "everything was suspended by the owner");
-					canceled += 1;
-				} catch {
-					lines.push(`Cancel of ${taskId}: failed`);
-				}
-			}
-			lines.push(`Tasks canceled: ${canceled} of ${open.length}`);
 		});
 		await this.rpc.command("clear_queue").catch(() => {});
 		await this.rpc.command("abort", {}, 60_000).catch(() => {});
-		lines.push("The Manager's own work is stopped. Agents that are running a job outside the platform's reach (a build, a browser run) stop when their task is canceled; to stop the machines themselves use scripts/fleet-suspend.sh.");
+		lines.push("The Manager's own work is stopped. Jobs the agents are running in the background are not cancelled from here: to stop the machines themselves use scripts/fleet-suspend.sh.");
 		return say(["SUSPENDED.", ...lines, "Send /unsuspend to put everything back."].join("\n"));
 	}
 
@@ -403,16 +309,6 @@ export class TelegramBridge implements Owner {
 		}
 	}
 
-	async answer(chatId: number, taskId: string, text: string): Promise<void> {
-		if (!this.service) return void (await this.reply(chatId, "The SomeWork gateway is not configured."));
-		try {
-			await this.service.answer(taskId, answerFrom(text));
-			await this.reply(chatId, `Answer sent to ${taskId}.`);
-		} catch (error) {
-			await this.reply(chatId, error instanceof PolicyError ? error.message : `Could not send the answer: ${error instanceof Error ? clip(scrub(error.message), 200) : "error"}`);
-		}
-	}
-
 	async prompt(chatId: number, text: string): Promise<void> {
 		if (this.active || (await this.rpc.command("get_state")).isStreaming) {
 			await this.reply(chatId, "The Manager is busy. Wait for its reply, or send /stop first.");
@@ -428,7 +324,7 @@ export class TelegramBridge implements Owner {
 			this.active = undefined;
 			clearInterval(this.typingTimer);
 			this.typingTimer = undefined;
-			await this.reply(chatId, "The Manager did not accept that task. Check /status before retrying.");
+			await this.reply(chatId, "The Manager did not accept that message. Check /status before retrying.");
 		}
 	}
 }

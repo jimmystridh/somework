@@ -5,7 +5,7 @@ import { call, type CallOptions, type CallResult } from "./http.ts";
 import { PolicyError } from "./policy.ts";
 import { clip, defang } from "./redact.ts";
 import type { HostControls } from "./host.ts";
-import type { ManagerState, SaveState, TrackedTask } from "./state.ts";
+import type { ManagerState, SaveState } from "./state.ts";
 
 export interface ControlsConfig {
 	/** Base URL of the event hub and the file with its admin bearer token; the CA verifies its TLS when it has one. */
@@ -147,9 +147,8 @@ export interface ControlsDeps {
 	config: ControlsConfig;
 	state: ManagerState;
 	save: SaveState;
-	tasks?: () => TrackedTask[];
-	localPendingApprovals?: () => number;
-	domainPendingApprovals?: () => Promise<number>;
+	/** Questions waiting for the owner: approvals agents asked for and switches the model asked for. */
+	pendingQuestions?: () => number;
 	http?: (url: string, options?: CallOptions) => Promise<CallResult>;
 	readToken?: (path: string) => Promise<string>;
 	/** The processes: the agent stacks on this machine and the Windows agents. Without it /suspend only reaches what the platform controls. */
@@ -178,7 +177,7 @@ export class Controls {
 		return rules
 			.map((r) => {
 				const skipped = Object.entries(r.counters?.skipped ?? {}).filter(([, n]) => n > 0).map(([why, n]) => `${why} ${n}`).join(", ");
-				return `${r.name} [${r.status}] ${r.reaction ? "reaction" : r.wake ? "wake" : "record"} on ${r.selector}; fired ${r.counters?.fired ?? 0}${skipped ? `, skipped: ${skipped}` : ""}; last ${r.lastFiredAt ?? "never"}`;
+				return `${r.name} [${r.status}] ${r.wake ? "wake" : "record"} on ${r.selector}; fired ${r.counters?.fired ?? 0}${skipped ? `, skipped: ${skipped}` : ""}; last ${r.lastFiredAt ?? "never"}`;
 			})
 			.join("\n");
 	}
@@ -413,12 +412,7 @@ export class Controls {
 	// ---- the digest ------------------------------------------------------------------------------------------------
 	async digest(): Promise<string> {
 		const lines = ["Daily digest"];
-		const tasks = this.#deps.tasks?.() ?? [];
-		const day = Date.now() - 86_400_000;
-		const recent = tasks.filter((t) => Date.parse(t.submittedAt) >= day);
-		lines.push(`Tasks: ${tasks.filter((t) => !["succeeded", "failed", "rejected", "canceled", "expired"].includes(t.state)).length} in flight, ${recent.length} submitted in the last day`);
-		const domainPending = await this.#deps.domainPendingApprovals?.().catch(() => undefined);
-		lines.push(`Approvals waiting: ${(this.#deps.localPendingApprovals?.() ?? 0) + (domainPending ?? 0)}`);
+		lines.push(`Questions waiting for you: ${this.#deps.pendingQuestions?.() ?? 0}`);
 		await this.rules()
 			.then((rules) => {
 				const active = rules.filter((r) => r.status === "active").length;

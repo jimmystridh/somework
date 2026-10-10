@@ -121,7 +121,7 @@ test("an idle agent gets the owner's text as a tagged prompt", async () => {
 	assert.equal(calls[1]!.fields.message, "[telegram] which agents review code?");
 });
 
-test("workspace and help explain the fixed directory without starting a task", async () => {
+test("workspace and help explain the fixed directory without starting a model request", async () => {
 	const { api, texts } = recordingApi();
 	const rpc = { onEvent: () => {}, onTelemetryEvent: () => {}, command: async () => assert.fail("Workspace/help must not start a model request") };
 	const bridge = new TelegramBridge({ state: owner(), api, rpc, save: async () => {} });
@@ -129,5 +129,6 @@ test("workspace and help explain the fixed directory without starting a task", a
 	await bridge.handleUpdate({ message: message("/help") });
 	assert.match(texts()[0]!, /Current workspace: \/workspace/);
 	assert.match(texts()[0]!, /ordinary message/);
-	assert.match(texts()[1]!, /Commands: \/agents, \/tasks, \/pending, \/approve/);
+	assert.match(texts()[1]!, /Commands: \/agents, \/pending, \/approve/);
+	assert.doesNotMatch(texts()[1]!, /instruct:|\/tasks|\/do /);
 });
