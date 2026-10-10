@@ -28,7 +28,7 @@ const input = (over: Partial<DescribeInput> = {}): DescribeInput => ({
 	concurrency: 2,
 	approvalPatterns: ["^terraform apply"],
 	git: { app: false, token: true, tokenHosts: ["github.com"], tokenExpires: "2026-11-05", draft: false },
-	chat: { mode: "model", askers: ["agent/manager"], instructors: ["agent/manager"] },
+	chat: { mode: "threads", approvers: ["agent/manager"] },
 	events: { enabled: true, notifyTo: "agent/manager" },
 	observe: { enabled: false },
 	includePrompt: true,

@@ -29,7 +29,7 @@ export interface AgentDescription {
 		mirror?: { repositories: string[]; refreshMinutes: number };
 	};
 	skills: string[];
-	chat: { mode: string; askers?: string[]; instructors?: string[] };
+	chat: { mode: string; approvers?: string[] };
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
@@ -47,7 +47,7 @@ export interface DescribeInput {
 	concurrency: number;
 	approvalPatterns: string[];
 	git: { app: boolean; token: boolean; tokenHosts: string[]; tokenExpires?: string; draft: boolean; identity?: string; mirror?: { repositories: string[]; refreshMinutes: number } };
-	chat: { mode: string; askers?: string[]; instructors?: string[] };
+	chat: { mode: string; approvers?: string[] };
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
