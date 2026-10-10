@@ -1,4 +1,4 @@
-import { silent, type AgentOutcome, type AgentRequest, type AgentRuntime, type Log, type RunHooks, type Usage } from "@somework/agent-kit";
+import { isJobRequest, silent, type AgentOutcome, type AgentRequest, type AgentRuntime, type Log, type RunHooks, type Usage } from "@somework/agent-kit";
 import { REFUSED } from "./commands.ts";
 import type { IssuedRefs } from "./datadog/tools.ts";
 import { repairInstruction } from "./prompt.ts";
@@ -71,6 +71,7 @@ export class TriageRuntime implements AgentRuntime {
 				return { approved: false, reason: approval.summary.startsWith(REFUSED) ? approval.summary.slice(0, 400) : `${approval.summary.slice(0, 200)}. ${NO_ONE_ANSWERS}` };
 			},
 		};
+		if (!isJobRequest(request.requestId)) return this.#inner.execute(request, guarded);
 		const first = await this.#inner.execute(request, guarded);
 		if (first.status !== "done") return first;
 

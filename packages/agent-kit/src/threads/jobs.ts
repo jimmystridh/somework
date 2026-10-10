@@ -84,6 +84,9 @@ export const newJobId = (): string => `${JOB_PREFIX}${Date.now().toString(36)}-$
 /** The request id of a job's model run: how its run is found again for steering and after a restart. */
 export const requestIdOf = (jobId: string): string => `somework:${jobId}`;
 
+/** Whether a model run belongs to a job (its answer is a structured result) and not to a conversation (its answer is a chat reply). */
+export const isJobRequest = (requestId: string): boolean => requestId.startsWith("somework:");
+
 /**
  * The jobs of an agent: work that takes a while and runs in the background while the agent keeps talking. A job waits for the singleton
  * resources it needs and for a free job slot, runs through the role's handler, and ends with one result message in its conversation. A message

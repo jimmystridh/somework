@@ -290,7 +290,7 @@ describe("repository skills", () => {
 		});
 		await runtime.start();
 		cleanups.push(() => runtime.close());
-		const outcome = await runtime.execute({ requestId: "r1", agentKey: "k", instruction: "review", workspace: root, budget: { maxTokens: 1_000_000, maxMinutes: 5 } }, { signal: new AbortController().signal, onProgress: () => {}, requestApproval: async () => ({ approved: false }) });
+		const outcome = await runtime.execute({ requestId: "somework:r1", agentKey: "k", instruction: "review", workspace: root, budget: { maxTokens: 1_000_000, maxMinutes: 5 } }, { signal: new AbortController().signal, onProgress: () => {}, requestApproval: async () => ({ approved: false }) });
 		assert.equal(outcome.status, "done");
 		const sent = JSON.stringify(contexts[0]);
 		assert.match(sent, /Always check encodings\./);

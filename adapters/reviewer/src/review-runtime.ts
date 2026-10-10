@@ -1,4 +1,4 @@
-import { silent, type AgentOutcome, type AgentRequest, type AgentRuntime, type Log, type RunHooks, type Usage } from "@somework/agent-kit";
+import { isJobRequest, silent, type AgentOutcome, type AgentRequest, type AgentRuntime, type Log, type RunHooks, type Usage } from "@somework/agent-kit";
 import { DENIED_REASON } from "./commands.ts";
 import { repairInstruction } from "./prompt.ts";
 import { parseReview, type Review } from "./result.ts";
@@ -58,6 +58,7 @@ export class ReviewRuntime implements AgentRuntime {
 			...hooks,
 			requestApproval: async (approval) => (approval.summary.startsWith(DENIED_REASON) ? { approved: false, reason: "this agent is read-only: that command changes something" } : hooks.requestApproval(approval)),
 		};
+		if (!isJobRequest(request.requestId)) return this.#inner.execute(request, guarded);
 		const first = await this.#inner.execute(request, guarded);
 		if (first.status !== "done") return first;
 

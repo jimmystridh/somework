@@ -1,4 +1,4 @@
-import { silent, type AgentOutcome, type AgentRequest, type AgentRuntime, type Log, type RunHooks, type Usage } from "@somework/agent-kit";
+import { isJobRequest, silent, type AgentOutcome, type AgentRequest, type AgentRuntime, type Log, type RunHooks, type Usage } from "@somework/agent-kit";
 import { repairInstruction } from "./prompt.ts";
 import { parseReport, type QaReport } from "./result.ts";
 
@@ -50,6 +50,7 @@ export class QaRuntime implements AgentRuntime {
 	}
 
 	async execute(request: AgentRequest, hooks: RunHooks): Promise<AgentOutcome> {
+		if (!isJobRequest(request.requestId)) return this.#inner.execute(request, hooks);
 		const first = await this.#inner.execute(request, hooks);
 		if (first.status !== "done") return first;
 		let parsed = parseReport(first.answer);

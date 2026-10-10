@@ -127,6 +127,15 @@ describe("TriageRuntime", () => {
 		assert.equal(runtime.take("somework:t1"), undefined, "handed out once");
 	});
 
+	it("passes a chat answer through as written: no repair turn and nothing kept for a result", async () => {
+		const seen: AgentRequest[] = [];
+		const runtime = new TriageRuntime(inner([done("Looks like a deploy, nothing else.")], seen), issued("call-1"));
+		const outcome = await runtime.execute(request({ requestId: "thread:msg_1" }), hooks());
+		assert.equal(outcome.status === "done" && outcome.answer, "Looks like a deploy, nothing else.");
+		assert.equal(seen.length, 1);
+		assert.equal(runtime.take("thread:msg_1"), undefined);
+	});
+
 	it("repairs once in the same conversation when a finding cites nothing, and adds up the usage", async () => {
 		const seen: AgentRequest[] = [];
 		const runtime = new TriageRuntime(inner([done(fenced(good({ evidence: [{ kind: "logs", finding: "x" }] })), 4000), done(fenced(good()), 1500)], seen), issued("call-1"));
