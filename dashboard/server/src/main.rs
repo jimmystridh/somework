@@ -3,6 +3,7 @@ mod auth;
 mod certs;
 mod events;
 mod history;
+mod jobs;
 mod prometheus;
 mod proxmox;
 mod setup;

@@ -1,7 +1,8 @@
 //! The SomeWork section of the dashboard: metadata about the agent-collaboration domain, never its content.
 //! Every field that the domain does not expose, or that could not be read in the last sample, is an `Option`/empty
-//! list so the UI can say "unknown" instead of inventing a value. Nothing here can carry a task input, a result,
-//! a message body or an artifact: the server only copies allowlisted, length-limited identifiers and numbers.
+//! list so the UI can say "unknown" instead of inventing a value. Nothing here can carry a job input, a result,
+//! a message body or an artifact: the server only copies allowlisted, length-limited identifiers and numbers, and the
+//! short plain-text wording an agent gives its own jobs (label, what it waits for, how it ended).
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -70,16 +71,9 @@ pub struct DomainHealth {
     pub object_store: Option<String>,
     pub audit: AuditStatus,
     pub outbox: Vec<OutboxSink>,
-    pub reconciliation_queue: Option<u64>,
-    pub pending_approvals: Option<u64>,
     pub denials_24h: Option<u64>,
     pub draft_catalog_entries: Option<u64>,
     pub online_runtimes: Option<u64>,
-    pub queue_depth: Option<u64>,
-    pub oldest_queued_age_seconds: Option<f64>,
-    pub lease_expiries_total: Option<u64>,
-    pub retries_total: Option<u64>,
-    pub reconciliations_total: Option<u64>,
     pub runtime_restarts_total: Option<u64>,
     pub jetstream_redeliveries_total: Option<u64>,
     pub policy_allow_total: Option<u64>,
@@ -175,87 +169,71 @@ pub struct CapabilityRef {
 pub struct SwAgent {
     pub id: String,
     pub display_name: Option<String>,
-    /// `provider` (has an approved card and runs a worker) or `requester` (only submits and reads).
+    /// `provider` (advertises capabilities in an approved card) or `requester` (only talks).
     pub role: String,
     pub capabilities: Vec<CapabilityRef>,
     pub approval: Option<String>,
     pub availability: Option<String>,
-    pub queue_depth: Option<u64>,
     pub liveness: Liveness,
     pub last_seen_at: Option<String>,
     pub active_runtimes: u64,
     pub total_runtimes: u64,
     pub sdk: Option<String>,
-    pub work_lag: Option<u64>,
     pub inbox_lag: Option<u64>,
+    /// Jobs of this agent that run now and jobs that wait, from the job events it publishes.
+    pub running_jobs: u64,
+    pub waiting_jobs: u64,
+    /// What the waiting jobs wait for, each once (`app-stack (held by verify SAD-1)`).
+    pub blocked_on: Vec<String>,
 }
 
+/// What the agents' job events say: the jobs that wait or run now, the ones that finished lately, and how many started and ended per hour.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Work {
-    pub by_state: BTreeMap<String, u64>,
-    pub submitted_total: Option<u64>,
-    pub terminal_total: Option<u64>,
-    pub waiting_input: Vec<Waiting>,
-    pub stuck: Vec<Stuck>,
-    pub lease_expiries_24h: u64,
-    pub failures_24h: Vec<FailureGroup>,
+    /// Waiting and running jobs, longest-lived first.
+    pub active: Vec<LiveJob>,
+    /// Newest first.
+    pub finished: Vec<LiveJob>,
+    pub completed_24h: u64,
+    pub failed_24h: u64,
+    pub cancelled_24h: u64,
     /// Oldest first, one bucket per hour for the last 24 hours.
     pub throughput: Vec<HourBucket>,
-    pub recent: Vec<RecentTask>,
     /// How far back the domain's event log reaches, so the 24 h numbers are not mistaken for more than they are.
     pub history_from: Option<String>,
 }
 
+/// One job as its agent's events tell it. `label` and `summary` are the agent's own short wording, shown as plain text.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct Waiting {
-    pub task: String,
+pub struct LiveJob {
+    pub id: String,
+    pub agent: String,
+    pub label: String,
     pub capability: Option<String>,
-    pub waiting_seconds: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Stuck {
-    pub task: String,
-    pub capability: Option<String>,
-    pub assignee: Option<String>,
-    pub reason: String,
-    pub seconds: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct FailureGroup {
-    pub capability: String,
-    pub code: String,
-    pub count: u64,
+    pub requested_by: Option<String>,
+    /// `waiting`, `running` or `finished`.
+    pub state: String,
+    /// What a waiting job waits for.
+    pub waiting_for: Option<String>,
+    /// When the job entered its present state.
+    pub since: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub seconds: Option<f64>,
+    /// `completed`, `failed` or `cancelled`, once finished.
+    pub result: Option<String>,
+    pub summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct HourBucket {
     pub hour_start: String,
-    pub submitted: u64,
-    pub succeeded: u64,
+    pub started: u64,
+    pub completed: u64,
     pub failed: u64,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct RecentTask {
-    /// Shortened identifier, enough to find the task in the domain without being a handle for it.
-    pub task: String,
-    pub capability: Option<String>,
-    pub requester: Option<String>,
-    pub assignee: Option<String>,
-    pub state: String,
-    pub submitted_at: Option<String>,
-    pub updated_at: Option<String>,
-    pub duration_seconds: Option<f64>,
-    pub attempts: u32,
-    pub failure_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,7 +246,7 @@ pub struct ConsumerLag {
     pub lag: u64,
 }
 
-/// The events and reactions part of the SomeWork view: rules, the counters of the pipeline, the hub that feeds it and what
+/// The events part of the SomeWork view: rules, the counters of the pipeline, the hub that feeds it and what
 /// the agents do with the events they are woken by. Metadata only: no event data, no handler source, no error text.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -292,13 +270,10 @@ pub struct RuleView {
     pub name: String,
     pub owner: String,
     pub selector: String,
-    /// `reaction` (submits a task) or `agent subscription` (wakes the owner).
-    pub kind: String,
-    pub capability: Option<String>,
     pub status: String,
     pub last_fired_at: Option<String>,
     pub fired: u64,
-    /// Skipped firings by reason (duplicate, depth, rate, denied, approval, error, paused).
+    /// Skipped firings by reason (duplicate, depth, rate, denied, error, paused).
     pub skipped: BTreeMap<String, u64>,
     /// Newest first.
     pub firings: Vec<Firing>,
@@ -316,8 +291,6 @@ pub struct Firing {
     /// `pending`, `fired` or `skipped`.
     pub status: String,
     pub reason: Option<String>,
-    /// Shortened task identifier.
-    pub task: Option<String>,
     pub at: Option<String>,
 }
 
@@ -326,9 +299,6 @@ pub struct Firing {
 pub struct Pipeline {
     pub events_published: Option<u64>,
     pub events_duplicate: Option<u64>,
-    pub reactions_fired: Option<u64>,
-    pub reactions_skipped: BTreeMap<String, u64>,
-    pub pending_approvals: Option<u64>,
 }
 
 /// `not configured` (no hub address), `unreachable` (configured, last read failed) or `ok`.
@@ -391,10 +361,8 @@ pub struct AgentEvents {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct JobView {
-    pub task: String,
+    pub job: String,
     pub capability: String,
-    /// `task` for a job from the domain, `chat` for an instruction given in chat.
-    pub source: String,
     /// `completed` or `failed`.
     pub state: String,
     pub outcome: Option<String>,
@@ -414,7 +382,7 @@ pub struct JobView {
     pub checks_failed: Option<u64>,
 }
 
-/// An agent's setup as it describes itself: prompt, tools, budgets, model, repository access, chat and event settings. Copied by name
+/// An agent's setup as it describes itself: prompt, tools, budgets, model, repository access, conversation and event settings. Copied by name
 /// from the agent's profile document, which holds no secret; text fields are length-limited and shown as plain text.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -448,8 +416,7 @@ pub struct AgentSetup {
     pub repository: RepositoryAccess,
     pub skills: Vec<String>,
     pub chat_mode: String,
-    pub chat_askers: Vec<String>,
-    pub chat_instructors: Vec<String>,
+    pub chat_approvers: Vec<String>,
     pub events_enabled: bool,
     pub events_notify_to: Option<String>,
     pub observe_enabled: bool,
@@ -499,8 +466,8 @@ pub struct HandlerView {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TokenPools {
-    pub tasks_used: u64,
-    pub tasks_limit: u64,
+    pub jobs_used: u64,
+    pub jobs_limit: u64,
     pub events_used: u64,
     pub events_limit: u64,
     pub throttled: bool,
@@ -512,7 +479,7 @@ pub struct TokenPools {
 pub struct EventAlert {
     /// `critical` or `warning`.
     pub severity: String,
-    /// `pool_stopped`, `handler_disabled`, `dead_letters`, `backlog`, `rule_skipped`, `hub_unreachable`, `agent_unreachable`.
+    /// `pool_stopped`, `pool_throttled`, `handler_disabled`, `dead_letters`, `backlog`, `hub_unreachable`, `agent_unreachable`.
     pub kind: String,
     pub subject: String,
     pub text: String,
@@ -565,7 +532,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_in_the_json_do_not_survive_a_round_trip() {
-        let value: SomeWork = serde_json::from_str(r#"{"serverTime":"x","domain":{"domainId":"d","taskInput":"PRIVATE"},"extra":"PRIVATE"}"#).unwrap();
+        let value: SomeWork = serde_json::from_str(r#"{"serverTime":"x","domain":{"domainId":"d","jobInput":"PRIVATE"},"extra":"PRIVATE"}"#).unwrap();
         assert!(!serde_json::to_string(&value).unwrap().contains("PRIVATE"));
     }
 }

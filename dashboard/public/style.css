@@ -47,3 +47,6 @@ svg.throughput{width:100%;height:auto;max-height:130px}.throughput line{stroke:v
 pre.summary-text{margin:0;padding:10px 12px;max-height:320px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:12px var(--mono);background:#fff;border:1px solid var(--line)}
 @media(max-width:760px){.machine-table.history tr.job-detail dl{grid-template-columns:1fr}}
 p.more{margin:12px 0 0}
+.status.completed{color:var(--green)}.status.cancelled{color:#5b665f;border-color:#cfd3c6;background:#eceee5}.status.cancelled .dot.pending{background:#8c9a90}.status.completed .dot.pending{background:var(--green)}
+.bar .fill.waiting{background:#c9a73a}.bar .fill.cancelled{background:#8c9a90}.bar .fill.completed,.bar .fill.running{background:var(--green)}
+td small.wrap{white-space:normal;max-width:56ch;line-height:1.5}

@@ -4,11 +4,9 @@ use crate::{
 };
 use dioxus::prelude::*;
 use fleet_shared::somework::{
-    AgentEvents, AgentSetup, ConsumerLag, DomainHealth, EventAlert, Events, FailureGroup, Firing, HourBucket, HubView, Liveness, Pipeline, RecentTask, RepositoryAccess, RuleView,
-    SomeWork, Stuck, SwAgent, Waiting, Work,
+    AgentEvents, AgentSetup, ConsumerLag, DomainHealth, EventAlert, Events, Firing, HourBucket, HubView, LiveJob, Liveness, RepositoryAccess, RuleView, SomeWork, SwAgent,
+    Work,
 };
-
-const STATES: [&str; 7] = ["queued", "running", "input_required", "succeeded", "failed", "canceled", "expired"];
 
 fn dash(value: Option<String>) -> String {
     value.filter(|text| !text.is_empty()).unwrap_or_else(|| "—".into())
@@ -23,11 +21,11 @@ pub fn SomeWorkSection(data: Option<SomeWork>, failed: bool, now: i64) -> Elemen
     let providers = data.agents.iter().filter(|agent| agent.role == "provider").count();
     let alive = data.agents.iter().filter(|agent| agent.role == "provider" && agent.liveness_at(now).healthy()).count();
     let providers_text = if providers == 0 { "—".to_string() } else { format!("{alive} / {providers}") };
-    let state = |name: &str| data.work.by_state.get(name).copied();
-    let active: u64 = ["queued", "running", "input_required"].iter().filter_map(|name| state(name)).sum();
-    let queued = count(state("queued"));
-    let running = count(state("running"));
-    let failures: u64 = data.work.failures_24h.iter().map(|group| group.count).sum();
+    let running = data.work.active.iter().filter(|job| job.state == "running").count();
+    let waiting = data.work.active.iter().filter(|job| job.state == "waiting").count();
+    let active = running + waiting;
+    let failures = data.work.failed_24h;
+    let completed = data.work.completed_24h;
     let audit = match data.domain.audit.intact {
         Some(true) => "intact",
         Some(false) => "BROKEN",
@@ -35,12 +33,9 @@ pub fn SomeWorkSection(data: Option<SomeWork>, failed: bool, now: i64) -> Elemen
     };
     let audit_class = if data.domain.audit.intact == Some(false) { "attention" } else { "" };
     let audit_checked = ago(data.domain.audit.checked_at.as_deref(), now);
-    let oldest = age(data.domain.oldest_queued_age_seconds);
-    let depth = count(data.domain.queue_depth);
-    let waiting_class = if data.work.waiting_input.is_empty() { "" } else { "attention" };
-    let waiting_count = data.work.waiting_input.len();
+    let waiting_class = if waiting > 0 { "attention" } else { "" };
     let failure_class = if failures > 0 { "attention" } else { "" };
-    let expiries = data.work.lease_expiries_24h;
+    let cancelled = data.work.cancelled_24h;
     let sampled = ago(data.observed_at.as_deref(), now);
     let notice = if failed { Some("Dashboard connection lost. SomeWork values are not current; retrying automatically.".to_string()) } else { data.error.clone() };
     rsx! {
@@ -49,10 +44,10 @@ pub fn SomeWorkSection(data: Option<SomeWork>, failed: bool, now: i64) -> Elemen
             if let Some(notice) = notice { div { class: "notice", role: "status", "{notice}" } }
             div { class: "summary six", "aria-label": "SomeWork summary",
                 div { span { class: "metric-label", "PROVIDERS ALIVE" }, strong { "{providers_text}" }, small { "Heartbeat within 90 s" } }
-                div { span { class: "metric-label", "ACTIVE TASKS" }, strong { "{active}" }, small { "{queued} queued · {running} running" } }
-                div { span { class: "metric-label", "WAITING FOR INPUT" }, strong { class: "{waiting_class}", "{waiting_count}" }, small { "Approvals and questions" } }
-                div { span { class: "metric-label", "FAILED, 24 H" }, strong { class: "{failure_class}", "{failures}" }, small { "{expiries} lease expiries" } }
-                div { span { class: "metric-label", "OLDEST QUEUED" }, strong { "{oldest}" }, small { "Queue depth {depth}" } }
+                div { span { class: "metric-label", "ACTIVE JOBS" }, strong { "{active}" }, small { "{running} running · {waiting} waiting" } }
+                div { span { class: "metric-label", "WAITING FOR A RESOURCE" }, strong { class: "{waiting_class}", "{waiting}" }, small { "One at a time: the next starts when it is free" } }
+                div { span { class: "metric-label", "FAILED, 24 H" }, strong { class: "{failure_class}", "{failures}" }, small { "{cancelled} cancelled" } }
+                div { span { class: "metric-label", "COMPLETED, 24 H" }, strong { "{completed}" }, small { "From the job events of the agents" } }
                 div { span { class: "metric-label", "AUDIT CHAIN" }, strong { class: "{audit_class}", "{audit}" }, small { "Checked {audit_checked}" } }
             }
             SwAgents { agents: data.agents.clone(), now }
@@ -69,7 +64,7 @@ fn SwAgents(agents: Vec<SwAgent>, now: i64) -> Element {
         h3 { class: "sub", "Agents" }
         div { class: "machine-table", table {
             caption { "Principals with a card or that have contacted the domain · liveness comes from runtime heartbeats" }
-            thead { tr { th { "Agent" }, th { "State" }, th { "Capabilities" }, th { "Runtimes" }, th { "Queue / JetStream lag" } } }
+            thead { tr { th { "Agent" }, th { "State" }, th { "Capabilities" }, th { "Runtimes" }, th { "Jobs / inbox lag" } } }
             tbody {
                 if agents.is_empty() { tr { td { colspan: "5", class: "empty", "No agents known to the domain yet." } } }
                 for agent in agents { SwAgentRow { key: "{agent.id}", agent, now } }
@@ -91,8 +86,9 @@ fn SwAgentRow(agent: SwAgent, now: i64) -> Element {
     };
     let runtimes = if provider { format!("{} active / {}", agent.active_runtimes, agent.total_runtimes) } else { "—".to_string() };
     let sdk = agent.sdk.clone().unwrap_or_default();
-    let lag = format!("work {} · inbox {}", count(agent.work_lag), count(agent.inbox_lag));
-    let queue = [agent.availability.clone(), agent.queue_depth.map(|n| format!("queue {n}"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    let jobs = format!("{} running · {} waiting", agent.running_jobs, agent.waiting_jobs);
+    let blocked = agent.blocked_on.join(" · ");
+    let queue = [agent.availability.clone(), Some(format!("inbox {}", count(agent.inbox_lag)))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
     let capabilities: Vec<(String, String)> = agent
         .capabilities
         .iter()
@@ -107,119 +103,115 @@ fn SwAgentRow(agent: SwAgent, now: i64) -> Element {
                 for (label, effects) in capabilities { span { key: "{label}", class: "chip {effects}", title: "side effects: {effects}", "{label}" } }
             } }
             td { span { class: "numeric", "{runtimes}" }, small { "{sdk}" } }
-            td { span { class: "numeric", "{lag}" }, small { "{queue}" } }
+            td { span { class: "numeric", "{jobs}" }, if !blocked.is_empty() { small { "waiting for {blocked}" } }, small { "{queue}" } }
         }
     }
 }
 
 #[component]
 fn WorkPanel(work: Work, now: i64) -> Element {
-    let known: u64 = work.by_state.values().sum();
-    let max = work.by_state.values().copied().max().unwrap_or(1).max(1) as f64;
-    let mut states: Vec<(String, u64)> = STATES.iter().map(|name| (name.to_string(), work.by_state.get(*name).copied().unwrap_or(0))).collect();
-    for (name, n) in work.by_state.iter() {
-        if !STATES.contains(&name.as_str()) {
-            states.push((name.clone(), *n));
-        }
-    }
-    let rows: Vec<(String, String, u64, String)> =
-        states.into_iter().map(|(name, n)| (name.clone(), name.replace('_', " "), n, format!("w{}", (n as f64 / max * 20.0).round() as u32))).collect();
+    let running = work.active.iter().filter(|job| job.state == "running").count() as u64;
+    let waiting: Vec<LiveJob> = work.active.iter().filter(|job| job.state == "waiting").cloned().collect();
+    let counts = [("running", running), ("waiting", waiting.len() as u64), ("completed", work.completed_24h), ("failed", work.failed_24h), ("cancelled", work.cancelled_24h)];
+    let max = counts.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1) as f64;
+    let rows: Vec<(String, u64, String)> = counts.into_iter().map(|(name, n)| (name.to_string(), n, format!("w{}", (n as f64 / max * 20.0).round() as u32))).collect();
     let since = ago(work.history_from.as_deref(), now);
-    let totals = format!("Submitted {} · finished {} since the domain started counting.", count(work.submitted_total), count(work.terminal_total));
-    let quiet = work.waiting_input.is_empty() && work.stuck.is_empty() && work.failures_24h.is_empty();
     rsx! {
-        h3 { class: "sub", "Work" }
+        h3 { class: "sub", "Jobs" }
         div { class: "work-grid",
             div { class: "platform-card",
-                h4 { "Tasks by state", small { "{known} in total" } }
-                for (name, label, n, width) in rows {
-                    div { key: "{name}", class: "bar-row", span { class: "bar-name", "{label}" }, div { class: "bar", i { class: "fill {name} {width}" } }, b { "{n}" } }
+                h4 { "Jobs", small { "now and the last 24 hours" } }
+                for (name, n, width) in rows {
+                    div { key: "{name}", class: "bar-row", span { class: "bar-name", "{name}" }, div { class: "bar", i { class: "fill {name} {width}" } }, b { "{n}" } }
                 }
-                p { "{totals}" }
+                p { "Running and waiting now; finished jobs counted over the last 24 hours." }
             }
             div { class: "platform-card",
                 h4 { "Throughput", small { "last 24 hours" } }
                 Throughput { buckets: work.throughput.clone() }
-                p { "Hourly buckets from the domain's event log (reaches back {since}). Outlined: submitted · green: succeeded · orange: failed." }
+                p { "Hourly buckets from the agents' job events (the domain's event log reaches back {since}). Outlined: started · green: completed · orange: failed." }
             }
             div { class: "platform-card",
-                h4 { "Needs attention" }
-                if quiet { p { class: "good", "Nothing is waiting, stuck or failing." } }
-                for item in work.waiting_input.iter() { WaitingRow { key: "w{item.task}", item: item.clone() } }
-                for item in work.stuck.iter() { StuckRow { key: "s{item.task}", item: item.clone() } }
-                for group in work.failures_24h.iter() { FailureRow { key: "f{group.capability}{group.code}", group: group.clone() } }
+                h4 { "Waiting for a resource" }
+                if waiting.is_empty() { p { class: "good", "No job is waiting." } }
+                for job in waiting { WaitingRow { key: "w{job.id}", job, now } }
             }
         }
         div { class: "machine-table", table {
-            caption { "Recent tasks · identifiers shortened, no task content" }
-            thead { tr { th { "Task" }, th { "Capability" }, th { "Requester → assignee" }, th { "State" }, th { "Age / duration" }, th { "Attempts" } } }
+            caption { "Active jobs · what the agents say about their own jobs, no job input" }
+            thead { tr { th { "Job" }, th { "Agent" }, th { "Requested by" }, th { "State" }, th { "For" } } }
             tbody {
-                if work.recent.is_empty() { tr { td { colspan: "6", class: "empty", "No task activity in the domain's event log." } } }
-                for task in work.recent { RecentRow { key: "{task.task}", task, now } }
+                if work.active.is_empty() { tr { td { colspan: "5", class: "empty", "No job is running or waiting." } } }
+                for job in work.active { ActiveRow { key: "{job.id}", job, now } }
+            }
+        } }
+        div { class: "machine-table", table {
+            caption { "Recently finished jobs · newest first" }
+            thead { tr { th { "Job" }, th { "Agent" }, th { "Result" }, th { "Took" }, th { "Finished" } } }
+            tbody {
+                if work.finished.is_empty() { tr { td { colspan: "5", class: "empty", "No job has finished since the event log began." } } }
+                for job in work.finished { FinishedRow { key: "{job.id}", job, now } }
             }
         } }
     }
 }
 
 #[component]
-fn WaitingRow(item: Waiting) -> Element {
-    let detail = format!("{} · waiting {}", item.capability.clone().unwrap_or_default(), age(Some(item.waiting_seconds as f64)));
-    rsx! { div { class: "attention-row", Status { value: "waiting".to_string() }, span { "{item.task}" }, small { "{detail}" } } }
+fn WaitingRow(job: LiveJob, now: i64) -> Element {
+    let detail = format!("{} · {} · waiting {}", job.agent, dash(job.waiting_for.clone()), ago(job.since.as_deref(), now));
+    rsx! { div { class: "attention-row", Status { value: "waiting".to_string() }, span { "{job.label}" }, small { "{detail}" } } }
 }
 
 #[component]
-fn StuckRow(item: Stuck) -> Element {
-    let detail = format!("{} · {} for {}", item.capability.clone().unwrap_or_default(), item.reason, age(Some(item.seconds as f64)));
-    rsx! { div { class: "attention-row", Status { value: "stuck".to_string() }, span { "{item.task}" }, small { "{detail}" } } }
-}
-
-#[component]
-fn FailureRow(group: FailureGroup) -> Element {
-    let title = format!("{} × {}", group.count, group.code);
-    let detail = format!("{} · last 24 h", group.capability);
-    rsx! { div { class: "attention-row", Status { value: "failed".to_string() }, span { "{title}" }, small { "{detail}" } } }
-}
-
-#[component]
-fn RecentRow(task: RecentTask, now: i64) -> Element {
-    let route = match (&task.requester, &task.assignee) {
-        (Some(from), Some(to)) => format!("{from} → {to}"),
-        (Some(from), None) => format!("{from} → —"),
-        (None, Some(to)) => format!("— → {to}"),
-        (None, None) => "—".into(),
-    };
-    let finished = task.duration_seconds.is_some();
-    let duration = task.duration_seconds.map(|seconds| age(Some(seconds))).unwrap_or_else(|| ago(task.updated_at.as_deref(), now));
-    let capability = dash(task.capability.clone());
-    let code = task.failure_code.clone().unwrap_or_default();
+fn ActiveRow(job: LiveJob, now: i64) -> Element {
+    let capability = dash(job.capability.clone());
+    let requested = dash(job.requested_by.clone());
+    let waiting_for = job.waiting_for.clone().unwrap_or_default();
+    let since = ago(job.since.as_deref(), now);
     rsx! {
         tr {
-            td { span { class: "numeric", "{task.task}" } }
-            td { "{capability}" }
-            td { "{route}" }
-            td { Status { value: task.state.clone() }, if !code.is_empty() { small { "{code}" } } }
-            td { span { class: "numeric", "{duration}" }, small { if finished { "took" } else { "last update" } } }
-            td { class: "numeric", "{task.attempts}" }
+            td { div { class: "machine-name", "{job.label}" }, small { "{job.id} · {capability}" } }
+            td { "{job.agent}" }
+            td { "{requested}" }
+            td { Status { value: job.state.clone() }, if !waiting_for.is_empty() { small { "{waiting_for}" } } }
+            td { span { class: "numeric", "{since}" } }
+        }
+    }
+}
+
+#[component]
+fn FinishedRow(job: LiveJob, now: i64) -> Element {
+    let result = job.result.clone().unwrap_or_else(|| "completed".into());
+    let summary = job.summary.clone().unwrap_or_default();
+    let took = job.seconds.map(|seconds| age(Some(seconds))).unwrap_or_else(|| "—".into());
+    let finished = ago(job.finished_at.as_deref(), now);
+    rsx! {
+        tr {
+            td { div { class: "machine-name", "{job.label}" }, small { "{job.id} · {dash(job.capability.clone())}" } }
+            td { "{job.agent}" }
+            td { Status { value: result }, if !summary.is_empty() { small { class: "wrap", "{summary}" } } }
+            td { span { class: "numeric", "{took}" } }
+            td { span { class: "numeric", "{finished}" } }
         }
     }
 }
 
 #[component]
 fn Throughput(buckets: Vec<HourBucket>) -> Element {
-    let max = buckets.iter().map(|b| b.submitted.max(b.succeeded + b.failed)).max().unwrap_or(0).max(1) as f64;
+    let max = buckets.iter().map(|b| b.started.max(b.completed + b.failed)).max().unwrap_or(0).max(1) as f64;
     let view_box = "0 0 432 96".to_string();
-    // x, submitted height, succeeded height, failed height
+    // x, started height, completed height, failed height
     let bars: Vec<(f64, f64, f64, f64)> = buckets
         .iter()
         .enumerate()
-        .map(|(i, b)| (i as f64 * 18.0 + 2.0, b.submitted as f64 / max * 80.0, b.succeeded as f64 / max * 80.0, b.failed as f64 / max * 80.0))
+        .map(|(i, b)| (i as f64 * 18.0 + 2.0, b.started as f64 / max * 80.0, b.completed as f64 / max * 80.0, b.failed as f64 / max * 80.0))
         .collect();
     rsx! {
-        svg { class: "throughput", view_box: "{view_box}", role: "img", "aria-label": "Tasks submitted and finished per hour, last 24 hours",
+        svg { class: "throughput", view_box: "{view_box}", role: "img", "aria-label": "Jobs started and finished per hour, last 24 hours",
             line { x1: "0", y1: "88", x2: "432", y2: "88" }
-            for (i, (x, submitted, ok, bad)) in bars.into_iter().enumerate() {
+            for (i, (x, started, ok, bad)) in bars.into_iter().enumerate() {
                 g { key: "{i}",
-                    rect { class: "submitted", x: "{x}", y: "{88.0 - submitted}", width: "14", height: "{submitted}" }
+                    rect { class: "submitted", x: "{x}", y: "{88.0 - started}", width: "14", height: "{started}" }
                     rect { class: "ok", x: "{x + 3.0}", y: "{88.0 - ok}", width: "8", height: "{ok}" }
                     rect { class: "bad", x: "{x + 3.0}", y: "{88.0 - ok - bad}", width: "8", height: "{bad}" }
                 }
@@ -255,12 +247,9 @@ fn DomainPanel(domain: DomainHealth, consumers: Vec<ConsumerLag>) -> Element {
     let requests = count(domain.requests_total);
     let errors = format!("{} / {}", count(domain.requests_server_errors), count(domain.requests_denied));
     let policy_counts = format!("{} / {}", count(domain.policy_allow_total), count(domain.policy_deny_total));
-    let retries = format!("{} · {}", count(domain.retries_total), count(domain.lease_expiries_total));
     let restarts = count(domain.runtime_restarts_total);
     let redeliveries = count(domain.jetstream_redeliveries_total);
     let uploads = format!("{} bytes", count(domain.artifact_upload_bytes));
-    let approvals = count(domain.pending_approvals);
-    let reconcile = count(domain.reconciliation_queue);
     let denials = count(domain.denials_24h);
     let drafts = count(domain.draft_catalog_entries);
     let online = count(domain.online_runtimes);
@@ -291,8 +280,6 @@ fn DomainPanel(domain: DomainHealth, consumers: Vec<ConsumerLag>) -> Element {
                 div { class: "platform-row", span { "Database and object store" }, Status { value: ready.to_string() } }
                 div { class: "platform-row", span { "Audit hash chain" }, Status { value: audit.to_string() } }
                 div { class: "platform-row", span { "Policy version" }, b { "{policy}" } }
-                div { class: "platform-row", span { "Pending approvals" }, b { "{approvals}" } }
-                div { class: "platform-row", span { "Reconciliation queue" }, b { "{reconcile}" } }
                 div { class: "platform-row", span { "Policy denials, 24 h" }, b { "{denials}" } }
                 div { class: "platform-row", span { "Draft catalog entries" }, b { "{drafts}" } }
                 div { class: "platform-row", span { "Online runtimes" }, b { "{online}" } }
@@ -312,7 +299,6 @@ fn DomainPanel(domain: DomainHealth, consumers: Vec<ConsumerLag>) -> Element {
                 div { class: "platform-row", span { "API requests" }, b { "{requests}" } }
                 div { class: "platform-row", span { "Server errors / denied" }, b { "{errors}" } }
                 div { class: "platform-row", span { "Policy allow / deny" }, b { "{policy_counts}" } }
-                div { class: "platform-row", span { "Retries · lease expiries" }, b { "{retries}" } }
                 div { class: "platform-row", span { "Runtime restarts" }, b { "{restarts}" } }
                 div { class: "platform-row", span { "JetStream redeliveries" }, b { "{redeliveries}" } }
                 div { class: "platform-row", span { "Artifact uploads" }, b { "{uploads}" } }
@@ -351,30 +337,33 @@ fn EventsPanel(events: Events, now: i64) -> Element {
     let paused = rules_total - active;
     let published = count(events.pipeline.events_published);
     let duplicates = count(events.pipeline.events_duplicate);
-    let fired = count(events.pipeline.reactions_fired);
-    let skipped_known = !events.pipeline.reactions_skipped.is_empty() || events.pipeline.reactions_fired.is_some();
-    let skipped_total: u64 = events.pipeline.reactions_skipped.values().sum();
-    let skipped = if skipped_known { skipped_total.to_string() } else { "—".into() };
-    let skipped_detail = reasons(&events.pipeline.reactions_skipped);
-    let approvals = count(events.pipeline.pending_approvals);
-    let approvals_class = if events.pipeline.pending_approvals.unwrap_or(0) > 0 { "attention" } else { "" };
+    let skipped_by_reason = events.rules.iter().fold(std::collections::BTreeMap::new(), |mut all, rule| {
+        for (reason, n) in &rule.skipped {
+            *all.entry(reason.clone()).or_insert(0) += n;
+        }
+        all
+    });
+    let skipped_total: u64 = skipped_by_reason.values().sum();
+    let fired_total: u64 = events.rules.iter().map(|rule| rule.fired).sum();
+    let skipped_detail = reasons(&skipped_by_reason);
     let alerts_class = if critical > 0 { "attention" } else { "" };
+    let reached = events.agents.iter().filter(|agent| agent.reachable).count();
     let dead = events.hub.dead_letters;
     let dead_class = if dead > 0 { "attention" } else { "" };
     let rules_note = if events.rules_known { String::new() } else { "The domain did not return rules (an older domain, or the dashboard identity may not read them).".to_string() };
     rsx! {
-        h3 { class: "sub", "Events and reactions" }
+        h3 { class: "sub", "Events and subscriptions" }
         if !rules_note.is_empty() { div { class: "notice", role: "status", "{rules_note}" } }
         div { class: "summary six", "aria-label": "Events summary",
             div { span { class: "metric-label", "ALERTS" }, strong { class: "{alerts_class}", "{events.alerts.len()}" }, small { "{critical} critical · {warnings} warnings" } }
             div { span { class: "metric-label", "RULES" }, strong { "{rules_total}" }, small { "{active} active · {paused} paused" } }
             div { span { class: "metric-label", "EVENTS PUBLISHED" }, strong { "{published}" }, small { "{duplicates} duplicates ignored" } }
-            div { span { class: "metric-label", "REACTIONS FIRED" }, strong { "{fired}" }, small { "{skipped} skipped" } }
-            div { span { class: "metric-label", "AWAITING APPROVAL" }, strong { class: "{approvals_class}", "{approvals}" }, small { "Write-class reactions" } }
+            div { span { class: "metric-label", "WAKES SENT" }, strong { "{fired_total}" }, small { "{skipped_total} skipped" } }
+            div { span { class: "metric-label", "AGENTS REACHED" }, strong { "{reached}" }, small { "of {events.agents_configured} configured" } }
             div { span { class: "metric-label", "DEAD LETTERS" }, strong { class: "{dead_class}", "{dead}" }, small { "Webhooks the hub gave up on" } }
         }
         EventAlerts { alerts: events.alerts.clone() }
-        RulesTable { rules: events.rules.clone(), pipeline: events.pipeline.clone(), skipped_detail, now }
+        RulesTable { rules: events.rules.clone(), skipped_detail, now }
         HubPanel { hub: events.hub.clone() }
         AgentsEvents { agents: events.agents.clone(), configured: events.agents_configured, grafana: events.grafana_url.clone() }
         AgentSetups { agents: events.agents.clone(), now, grafana: events.grafana_url.clone() }
@@ -385,7 +374,7 @@ fn EventsPanel(events: Events, now: i64) -> Element {
 fn EventAlerts(alerts: Vec<EventAlert>) -> Element {
     rsx! {
         div { class: "platform-card alerts",
-            h4 { "Needs attention", small { "stopped pools · disabled handlers · dead letters · backlog · idle rules" } }
+            h4 { "Needs attention", small { "stopped pools · disabled handlers · dead letters · backlog" } }
             if alerts.is_empty() { p { class: "good", "Nothing in the event pipeline needs attention." } }
             for alert in alerts { AlertRow { key: "{alert.kind}{alert.subject}", alert } }
         }
@@ -399,12 +388,12 @@ fn AlertRow(alert: EventAlert) -> Element {
 }
 
 #[component]
-fn RulesTable(rules: Vec<RuleView>, pipeline: Pipeline, skipped_detail: String, now: i64) -> Element {
-    let note = format!("Rules from git, applied to the domain · skipped by reason, all rules: {skipped_detail}");
+fn RulesTable(rules: Vec<RuleView>, skipped_detail: String, now: i64) -> Element {
+    let note = format!("Subscriptions: which events wake which agent · skipped by reason, all rules: {skipped_detail}");
     rsx! {
         div { class: "machine-table", table {
             caption { "{note}" }
-            thead { tr { th { "Rule" }, th { "Kind / owner" }, th { "Selector → capability" }, th { "State" }, th { "Fired / skipped" }, th { "Recent firings" } } }
+            thead { tr { th { "Rule" }, th { "Owner" }, th { "Selector" }, th { "State" }, th { "Woken / skipped" }, th { "Recent firings" } } }
             tbody {
                 if rules.is_empty() { tr { td { colspan: "6", class: "empty", "No rules are applied to the domain." } } }
                 for rule in rules { RuleRow { key: "{rule.name}", rule, now } }
@@ -415,19 +404,16 @@ fn RulesTable(rules: Vec<RuleView>, pipeline: Pipeline, skipped_detail: String, 
 
 #[component]
 fn RuleRow(rule: RuleView, now: i64) -> Element {
-    let target = match &rule.capability {
-        Some(capability) => format!("{} → {capability}", rule.selector),
-        None => rule.selector.clone(),
-    };
-    let kind = format!("{} · {}", rule.kind, rule.owner);
+    let target = rule.selector.clone();
+    let owner = rule.owner.clone();
     let last = ago(rule.last_fired_at.as_deref(), now);
     let skipped = reasons(&rule.skipped);
-    let counts = format!("{} fired / {} skipped", rule.fired, rule.skipped_total());
+    let counts = format!("{} woken / {} skipped", rule.fired, rule.skipped_total());
     let firings: Vec<(String, String)> = rule.firings.iter().map(firing_chip).collect();
     rsx! {
         tr {
             td { div { class: "machine-name", "{rule.name}" }, small { if rule.last_fired_at.is_some() { "last fired {last}" } else { "never fired" } } }
-            td { small { "{kind}" } }
+            td { small { "{owner}" } }
             td { span { class: "numeric target", "{target}" } }
             td { Status { value: rule.status.clone() } }
             td { span { class: "numeric", "{counts}" }, small { "{skipped}" } }
@@ -440,10 +426,9 @@ fn RuleRow(rule: RuleView, now: i64) -> Element {
 }
 
 fn firing_chip(firing: &Firing) -> (String, String) {
-    let label = match (&firing.reason, &firing.task) {
-        (Some(reason), _) => format!("{} · {reason}", firing.status),
-        (None, Some(task)) => format!("{} · {task}", firing.status),
-        (None, None) => firing.status.clone(),
+    let label = match &firing.reason {
+        Some(reason) => format!("{} · {reason}", firing.status),
+        None => firing.status.clone(),
     };
     let class = match firing.status.as_str() {
         "fired" => "read",
@@ -634,8 +619,7 @@ fn AgentSetupCard(agent: AgentEvents, now: i64, grafana: Option<String>) -> Elem
     let capabilities = setup.capabilities.join(", ");
     let models = setup.allowed_models.join(", ");
     let skills = setup.skills.join(", ");
-    let askers = setup.chat_askers.join(", ");
-    let instructors = setup.chat_instructors.join(", ");
+    let approvers = setup.chat_approvers.join(", ");
     let tool_approvals = setup.tool_approvals.join(", ");
     let events = if setup.events_enabled { format!("on · results to {}", setup.events_notify_to.clone().unwrap_or_else(|| "—".into())) } else { "off".to_string() };
     let observe = if setup.observe_enabled { format!("on · {} scope", setup.observe_scope.clone().unwrap_or_else(|| "own".into())) } else { "off".to_string() };
@@ -658,7 +642,7 @@ fn AgentSetupCard(agent: AgentEvents, now: i64, grafana: Option<String>) -> Elem
                 dt { "Repository" } dd { "{access}", small { " · {credential}" }, if !hosts.is_empty() { small { " · credential only sent to {hosts}" } } }
                 if !mirror.is_empty() { dt { "Mirror" } dd { "{mirror}" } }
                 if !skills.is_empty() { dt { "Skills" } dd { "{skills}" } }
-                dt { "Chat" } dd { "{setup.chat_mode}", if !askers.is_empty() { small { " · may ask: {askers}" } }, if !instructors.is_empty() { small { " · may instruct: {instructors}" } } }
+                dt { "Conversations" } dd { "{setup.chat_mode}", if !approvers.is_empty() { small { " · approvals decided by: {approvers}" } } }
                 dt { "Events" } dd { "{events}" }
                 dt { "Observe tools" } dd { "{observe}" }
                 if let Some(changed_at) = setup.changed_at.clone() { dt { "Setup changed" } dd { "{changed_at}" } }
@@ -706,11 +690,11 @@ fn AgentEventsRow(agent: AgentEvents, grafana: Option<String>) -> Element {
                         let width = width_class(pool.events_used, pool.events_limit);
                         let flag = if pool.stopped { "stopped" } else if pool.throttled { "throttled" } else { "" };
                         let text = format!("{} / {} tokens", pool.events_used, pool.events_limit);
-                        let tasks = format!("tasks {} / {}", pool.tasks_used, pool.tasks_limit);
+                        let jobs = format!("jobs {} / {}", pool.jobs_used, pool.jobs_limit);
                         rsx! {
                             span { class: "numeric", "{text}" }
                             div { class: "bar", i { class: "fill pool {flag} {width}" } }
-                            small { "{tasks}", if !flag.is_empty() { " · {flag}" } }
+                            small { "{jobs}", if !flag.is_empty() { " · {flag}" } }
                         }
                     }
                 } else { small { "—" } }
@@ -740,16 +724,16 @@ mod tests {
         let mut map = std::collections::BTreeMap::new();
         assert_eq!(reasons(&map), "—");
         map.insert("rate".to_string(), 2);
-        map.insert("approval".to_string(), 1);
-        assert_eq!(reasons(&map), "approval 1 · rate 2");
+        map.insert("duplicate".to_string(), 1);
+        assert_eq!(reasons(&map), "duplicate 1 · rate 2");
     }
 
     #[test]
     fn firing_chips_prefer_the_reason_and_colour_by_outcome() {
-        let skipped = Firing { status: "skipped".into(), reason: Some("depth".into()), task: Some("…ABCDEFGH".into()), at: None };
+        let skipped = Firing { status: "skipped".into(), reason: Some("depth".into()), at: None };
         assert_eq!(firing_chip(&skipped), ("skipped · depth".to_string(), "write".to_string()));
-        let fired = Firing { status: "fired".into(), reason: None, task: Some("…ABCDEFGH".into()), at: None };
-        assert_eq!(firing_chip(&fired), ("fired · …ABCDEFGH".to_string(), "read".to_string()));
+        let fired = Firing { status: "fired".into(), reason: None, at: None };
+        assert_eq!(firing_chip(&fired), ("fired".to_string(), "read".to_string()));
     }
 
     fn setup() -> AgentSetup {

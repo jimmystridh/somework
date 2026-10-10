@@ -4,7 +4,7 @@ use fleet_shared::{Machine, Sample, Storage};
 
 #[component]
 pub fn Status(value: String) -> Element {
-    let online = matches!(value.as_str(), "running" | "online" | "working" | "idle" | "alive" | "ready" | "intact" | "succeeded" | "active");
+    let online = matches!(value.as_str(), "running" | "online" | "working" | "idle" | "alive" | "ready" | "intact" | "succeeded" | "completed" | "active");
     rsx! { span { class: "status {value}", span { class: if online { "dot" } else { "dot pending" } }, "{value}" } }
 }
 

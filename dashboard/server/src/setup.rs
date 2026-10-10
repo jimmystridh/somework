@@ -128,8 +128,7 @@ pub fn setup(profile: &Value) -> Option<AgentSetup> {
         },
         skills: identifiers(profile.get("skills")),
         chat_mode: identifier(chat.and_then(|c| c.get("mode"))).unwrap_or_else(|| "unknown".into()),
-        chat_askers: identifiers(chat.and_then(|c| c.get("askers"))),
-        chat_instructors: identifiers(chat.and_then(|c| c.get("instructors"))),
+        chat_approvers: identifiers(chat.and_then(|c| c.get("approvers"))),
         events_enabled: flag(events.and_then(|e| e.get("enabled"))),
         events_notify_to: identifier(events.and_then(|e| e.get("notifyTo"))),
         observe_enabled: flag(observe.and_then(|o| o.get("enabled"))),
@@ -156,7 +155,7 @@ mod tests {
                            "tokenHosts": ["github.com"], "tokenExpires": "2026-11-05", "draftPullRequests": false,
                            "mirror": {"repositories": ["https://github.com/o/r.git"], "refreshMinutes": 30}},
             "skills": ["review"],
-            "chat": {"mode": "model", "askers": ["agent/manager"], "instructors": ["agent/manager"]},
+            "chat": {"mode": "threads", "approvers": ["agent/manager"]},
             "events": {"enabled": true, "notifyTo": "agent/manager"},
             "observe": {"enabled": false}
         })
@@ -178,7 +177,7 @@ mod tests {
         assert_eq!(setup.repository.github_identity.as_deref(), Some("somework-developer[bot]"));
         assert_eq!(setup.repository.token_expires.as_deref(), Some("2026-11-05"));
         assert_eq!(setup.repository.mirror_repositories, vec!["https://github.com/o/r.git"]);
-        assert_eq!(setup.chat_instructors, vec!["agent/manager"]);
+        assert_eq!(setup.chat_approvers, vec!["agent/manager"]);
         assert!(setup.events_enabled && !setup.observe_enabled);
     }
 

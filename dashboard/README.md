@@ -1,12 +1,16 @@
 # Fleet dashboard ("Agent operations")
 
-The dashboard of the agent cluster: hypervisor machines, the SomeWork section (agents, work, approvals, events, rules, hub, token pools) and, per agent, how it is set up. A Rust workspace of its own (`shared`, `server`, `ui`; Dioxus web UI, axum server), kept outside the root workspace. The design and the data it may show are in `docs/FLEET_DASHBOARD.md`: metadata only, every value is picked by name through a restricted reader.
+The dashboard of the agent cluster: hypervisor machines, the SomeWork section (agents, jobs, events, subscriptions, hub, token pools) and, per agent, how it is set up. A Rust workspace of its own (`shared`, `server`, `ui`; Dioxus web UI, axum server), kept outside the root workspace. The design and the data it may show are in `docs/FLEET_DASHBOARD.md`: metadata only, every value is picked by name through a restricted reader.
 
 ## Agent setup
 
-Each agent serves `/profile` next to `/status` on its health port (`packages/agent-kit/README.md`, "/profile"). The dashboard reads it for every entry of `agents-health.json` whose address ends in `/status`, passes it through `server/src/setup.rs` (names, restricted alphabets, length limits; unread fields never reach the page) and shows one card per agent under "Agent setup": role, image tag, setup hash and when it last changed, capabilities, model, budgets, tools and approval patterns, repository access (credential kind, GitHub identity, token expiry note), skills, chat and event settings, and the system prompt text with its hash. The prompt is operator wording: the page is only reachable through the private gateway.
+Each agent serves `/profile` next to `/status` on its health port (`packages/agent-kit/README.md`, "/profile"). The dashboard reads it for every entry of `agents-health.json` whose address ends in `/status`, passes it through `server/src/setup.rs` (names, restricted alphabets, length limits; unread fields never reach the page) and shows one card per agent under "Agent setup": role, image tag, setup hash and when it last changed, capabilities, model, budgets, tools and approval patterns, repository access (credential kind, GitHub identity, token expiry note), skills, conversation and event settings, and the system prompt text with its hash. The prompt is operator wording: the page is only reachable through the private gateway.
 
 `agents-health.json` entries may carry `"logs": "{container=\"somework-pi-agent-1\"}"` (a stream selector of one to three matchers); with `GRAFANA_URL` set (plain https, no path) the page links each agent to its logs in Grafana Explore. Only plain selectors and addresses are accepted.
+
+## Jobs
+
+Agents publish `agent.<slug>.job.started`, `.waiting` and `.finished` for every job (`packages/agent-kit/src/threads/reporter.ts`). The server reads them from the domain's admin event log (`server/src/jobs.rs`, `JobBook`) and shows, per agent, the jobs that run and wait and what the waiting ones wait for, an active-jobs table with how long each has been in its state, the recently finished jobs with their result and the agent's own short summary, and the hourly throughput. Labels and summaries are the agents' own wording, cut and shown as plain text; job input, results and message content are never read.
 
 ## Work history and model usage
 

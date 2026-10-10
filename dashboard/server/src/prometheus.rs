@@ -109,10 +109,10 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"# HELP x
-# TYPE somework_tasks_queued gauge
-somework_tasks_queued 3
-somework_api_requests_total{route="GET /v1/tasks/{id}",status="200"} 281
-somework_api_requests_total{route="POST /v1/tasks",status="500"} 2
+# TYPE somework_runtimes_online gauge
+somework_runtimes_online 3
+somework_api_requests_total{route="GET /v1/messages/{id}",status="200"} 281
+somework_api_requests_total{route="POST /v1/messages",status="500"} 2
 somework_jetstream_consumer_lag{consumer="inbox_agent~2fmanager",stream="SOMEWORK_INBOX"} 7
 odd{label="has } brace and \"quote\""} 1.5 1790000000000
 "#;
@@ -120,7 +120,7 @@ odd{label="has } brace and \"quote\""} 1.5 1790000000000
     #[test]
     fn reads_plain_labelled_and_awkward_series() {
         let metrics = Metrics::parse(SAMPLE);
-        assert_eq!(metrics.count("somework_tasks_queued"), Some(3));
+        assert_eq!(metrics.count("somework_runtimes_online"), Some(3));
         assert_eq!(metrics.sum("somework_api_requests_total"), Some(283.0));
         let lag: Vec<_> = metrics.with_label("somework_jetstream_consumer_lag").collect();
         assert_eq!(lag[0].labels["consumer"], "inbox_agent~2fmanager");

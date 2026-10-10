@@ -146,15 +146,15 @@ pub fn WorkHistory(data: Option<SomeWork>, now: i64) -> Element {
                 }
             }
             div { class: "machine-table history", table {
-                caption { "Newest first · click a job for its details · only what the agent's job record holds, not the task input" }
+                caption { "Newest first · click a job for its details · only what the agent's job record holds, not the job input" }
                 thead { tr { th { "Ended" }, th { "About" }, th { "Outcome" }, th { "Duration" }, th { "Tokens in / out" }, th { "Cost" } } }
                 tbody {
                     if shown.is_empty() { tr { td { colspan: "6", class: "empty", "No jobs recorded for this agent yet." } } }
-                    for job in shown { JobRows { key: "{job.task}{job.ended_at:?}", job, now } }
+                    for job in shown { JobRows { key: "{job.job}{job.ended_at:?}", job, now } }
                 }
             } }
             if hidden > 0 { p { class: "more", button { class: "tab", onclick: move |_| limit.set(limit() + PAGE), "Show {hidden.min(PAGE)} more · {hidden} not shown" } } }
-            p { class: "footnote", "The job record keeps the latest 500 jobs per agent and starts with the jobs this version records; older work is in the logs. Jobs from the domain and from chat instructions are both listed." }
+            p { class: "footnote", "The job record keeps the latest 500 jobs per agent and starts with the jobs this version records; older work is in the logs. Jobs started by a message and by an event are listed together; records from before jobs existed are shown as they were written." }
         }
     }
 }
@@ -176,7 +176,7 @@ fn JobRows(job: JobView, now: i64) -> Element {
         _ => None,
     };
     let marker = if open() { "▾" } else { "▸" };
-    let kind = if job.source == "chat" { format!("{} · chat", job.capability) } else { job.capability.clone() };
+    let kind = job.capability.clone();
     rsx! {
         tr { class: "job", onclick: move |_| open.set(!open()),
             td { span { class: "numeric", "{marker} {ended}" } }
@@ -190,7 +190,7 @@ fn JobRows(job: JobView, now: i64) -> Element {
             tr { class: "job-detail",
                 td { colspan: "6",
                     dl {
-                        dt { "Task" } dd { "{job.task}" }
+                        dt { "Job" } dd { "{job.job}" }
                         if let Some(start) = job.started_at.clone() { dt { "Started" } dd { "{start}" } }
                         if let Some(end) = job.ended_at.clone() { dt { "Ended" } dd { "{end}" } }
                         dt { "State" } dd { "{job.state}", if let Some(raw) = job.outcome.clone() { small { " · outcome {raw}" } } }
@@ -274,7 +274,7 @@ mod tests {
     use super::*;
 
     fn job(outcome: Option<&str>, state: &str) -> JobView {
-        JobView { task: "t".into(), capability: "c@1".into(), source: "task".into(), state: state.into(), outcome: outcome.map(Into::into), ..Default::default() }
+        JobView { job: "t".into(), capability: "c@1".into(), state: state.into(), outcome: outcome.map(Into::into), ..Default::default() }
     }
 
     #[test]

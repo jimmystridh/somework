@@ -53,12 +53,11 @@ fn job(entry: &Value) -> Option<JobView> {
         "failed" => "failed",
         _ => return None,
     };
-    let source = if entry.get("source").and_then(Value::as_str) == Some("chat") { "chat" } else { "task" };
     let checks = entry.get("checks");
     Some(JobView {
-        task: short(&identifier(entry.get("taskId"))?),
+        // the journal of an agent has always named the id of the work `taskId`; for a job it is the job's id
+        job: short(&identifier(entry.get("taskId"))?),
         capability: identifier(entry.get("capability"))?,
-        source: source.into(),
         state: state.into(),
         outcome: identifier(entry.get("outcome")),
         subject: subject(entry.get("subject")),
@@ -90,14 +89,14 @@ mod tests {
     #[test]
     fn a_qa_verdict_and_an_aikido_fix_are_read_by_name() {
         let doc = json!({"jobs": [
-            {"taskId": "task_01M4DHV0PE75CDMQNPG7H74Y2S", "capability": "qa.verify@1", "source": "task", "state": "completed", "at": "2026-10-08T11:06:28.475Z", "startedAt": "2026-10-08T10:58:45.418Z",
+            {"taskId": "task_01M4DHV0PE75CDMQNPG7H74Y2S", "capability": "qa.verify@1", "state": "completed", "at": "2026-10-08T11:06:28.475Z", "startedAt": "2026-10-08T10:58:45.418Z",
              "ms": 463057, "outcome": "not_fixed", "subject": "SAD-2512", "summary": "the grid still shows the old value", "checks": {"passed": 1, "failed": 2}, "tokens": 234926, "inputTokens": 200000, "outputTokens": 34926, "costUsd": 1.25},
-            {"taskId": "task_B", "capability": "code.fix@1", "source": "task", "state": "completed", "at": "2026-10-08T12:00:00Z", "ms": 1000, "outcome": "pr_opened", "subject": "Aikido #50177726",
+            {"taskId": "task_B", "capability": "code.fix@1", "state": "completed", "at": "2026-10-08T12:00:00Z", "ms": 1000, "outcome": "pr_opened", "subject": "Aikido #50177726",
              "prUrl": "https://github.com/Visma-Administration/visma.administration/pull/5264", "branch": "agent/aikido-50177726-b6e2e3fd"}]});
         let out = jobs(&doc);
         assert_eq!(out.len(), 2);
         let qa = &out[0];
-        assert_eq!((qa.task.as_str(), qa.capability.as_str(), qa.outcome.as_deref(), qa.subject.as_deref()), ("…G7H74Y2S", "qa.verify@1", Some("not_fixed"), Some("SAD-2512")));
+        assert_eq!((qa.job.as_str(), qa.capability.as_str(), qa.outcome.as_deref(), qa.subject.as_deref()), ("…G7H74Y2S", "qa.verify@1", Some("not_fixed"), Some("SAD-2512")));
         assert_eq!((qa.checks_passed, qa.checks_failed, qa.tokens, qa.input_tokens, qa.output_tokens), (Some(1), Some(2), Some(234926), Some(200000), Some(34926)));
         assert_eq!(qa.seconds.map(|s| s.round() as i64), Some(463));
         assert_eq!(qa.cost_usd, Some(1.25));

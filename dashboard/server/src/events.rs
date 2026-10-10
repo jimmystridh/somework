@@ -1,4 +1,4 @@
-//! The events and reactions part of the SomeWork section: rules and their firings (domain, `ops.read`), the pipeline counters
+//! The events part of the SomeWork section: rules and their firings (domain, `ops.read`), the pipeline counters
 //! (domain `/metrics` and the overview), the hub and receiver (hub `/metrics`, optional `/admin/stats`) and the handlers and token
 //! pools reported by each agent's status endpoint.
 //!
@@ -7,7 +7,7 @@
 
 use crate::{
     prometheus::Metrics,
-    somework::{count, identifier, iso, short, time_ms},
+    somework::{count, identifier, iso, time_ms},
 };
 use fleet_shared::somework::{
     AgentEvents, EventAlert, Events, Firing, HandlerView, HubSchedule, HubSource, HubView, Pipeline, RuleView, TokenPools,
@@ -21,7 +21,6 @@ use std::{
 pub const MAX_RULES: usize = 60;
 const FIRINGS_PER_RULE: usize = 5;
 const BACKLOG_WARN_SECONDS: f64 = 300.0;
-const SKIPPED_ALARM_MIN_FIRINGS: usize = 3;
 
 /// A selector glob: topic characters plus `*`.
 fn selector(value: Option<&Value>) -> Option<String> {
@@ -84,7 +83,6 @@ fn firings(body: Option<&Value>) -> Vec<Firing> {
                 .map(|firing| Firing {
                     status: identifier(firing.get("status")).unwrap_or_else(|| "unknown".into()),
                     reason: identifier(firing.get("reason")),
-                    task: identifier(firing.get("taskId")).map(|id| short(&id)),
                     at: time_ms(firing.get("decidedAt")).or_else(|| time_ms(firing.get("createdAt"))).and_then(iso),
                 })
                 .collect()
@@ -100,20 +98,10 @@ fn rules(body: Option<&Value>, recent: &BTreeMap<String, Value>) -> Vec<RuleView
                 .take(MAX_RULES)
                 .filter_map(|rule| {
                     let name = rule_name(rule.get("name"))?;
-                    let reaction = rule.get("reaction").filter(|value| value.is_object());
-                    let capability = reaction.and_then(|r| r.get("capability")).and_then(|c| {
-                        let id = identifier(c.get("id"))?;
-                        Some(match c.get("version").map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())) {
-                            Some(version) => identifier(Some(&Value::String(format!("{id}@{version}")))).unwrap_or(id),
-                            None => id,
-                        })
-                    });
                     let (fired, skipped) = counters(rule);
                     Some(RuleView {
                         owner: identifier(rule.get("owner")).unwrap_or_default(),
                         selector: selector(rule.get("selector")).unwrap_or_default(),
-                        kind: if reaction.is_some() { "reaction" } else { "agent subscription" }.into(),
-                        capability,
                         status: identifier(rule.get("status")).unwrap_or_else(|| "unknown".into()),
                         last_fired_at: time_ms(rule.get("lastFiredAt")).and_then(iso),
                         fired,
@@ -264,10 +252,11 @@ fn handlers(status: &Value) -> Vec<HandlerView> {
 
 fn pools(status: &Value) -> Option<TokenPools> {
     let pools = status.get("tokenPools")?;
+    // the ledger of an agent still names the pool of its jobs `tasks`
     let (tasks, events) = (pools.get("tasks")?, pools.get("events")?);
     Some(TokenPools {
-        tasks_used: count(tasks.get("used")).unwrap_or(0),
-        tasks_limit: count(tasks.get("limit")).unwrap_or(0),
+        jobs_used: count(tasks.get("used")).unwrap_or(0),
+        jobs_limit: count(tasks.get("limit")).unwrap_or(0),
         events_used: count(events.get("used")).unwrap_or(0),
         events_limit: count(events.get("limit")).unwrap_or(0),
         throttled: events.get("throttled").and_then(Value::as_bool).unwrap_or(false),
@@ -294,24 +283,10 @@ fn agents(reads: &[AgentRead]) -> Vec<AgentEvents> {
 
 // ---------------------------------------------------------------- pipeline and alerts
 
-fn pipeline(domain_metrics: Option<&Metrics>, pending_approvals: Option<u64>) -> Pipeline {
-    let skipped = domain_metrics
-        .map(|metrics| {
-            let mut by_reason = BTreeMap::new();
-            for series in metrics.with_label("somework_reactions_skipped_total") {
-                if let Some(reason) = label(series, "reason") {
-                    *by_reason.entry(reason).or_insert(0) += series.value.max(0.0) as u64;
-                }
-            }
-            by_reason
-        })
-        .unwrap_or_default();
+fn pipeline(domain_metrics: Option<&Metrics>) -> Pipeline {
     Pipeline {
         events_published: domain_metrics.and_then(|m| m.count("somework_events_published_total")),
         events_duplicate: domain_metrics.and_then(|m| m.count("somework_events_duplicate_total")),
-        reactions_fired: domain_metrics.and_then(|m| m.count("somework_reactions_fired_total")),
-        reactions_skipped: skipped,
-        pending_approvals,
     }
 }
 
@@ -324,7 +299,7 @@ fn span(seconds: f64) -> String {
     if seconds < 60 { format!("{seconds} s") } else { format!("{} min", seconds / 60) }
 }
 
-pub fn alerts(rules: &[RuleView], hub: &HubView, agents: &[AgentEvents], agents_expected: bool) -> Vec<EventAlert> {
+pub fn alerts(hub: &HubView, agents: &[AgentEvents], agents_expected: bool) -> Vec<EventAlert> {
     let mut out = Vec::new();
     for agent in agents {
         if !agent.reachable {
@@ -358,13 +333,6 @@ pub fn alerts(rules: &[RuleView], hub: &HubView, agents: &[AgentEvents], agents_
     if let Some(age) = hub.receiver_oldest_age_seconds.filter(|age| *age > BACKLOG_WARN_SECONDS) {
         out.push(alert("warning", "backlog", "receiver", format!("oldest queued webhook is {} old", span(age))));
     }
-    for rule in rules.iter().filter(|rule| rule.kind == "reaction" && rule.status == "active") {
-        let decided: Vec<&Firing> = rule.firings.iter().filter(|firing| firing.status == "fired" || firing.status == "skipped").collect();
-        if decided.len() >= SKIPPED_ALARM_MIN_FIRINGS && decided.iter().all(|firing| firing.status == "skipped") {
-            let reason = decided.iter().find_map(|firing| firing.reason.clone()).unwrap_or_else(|| "unknown".into());
-            out.push(alert("warning", "rule_skipped", &rule.name, format!("the last {} firings were all skipped ({reason})", decided.len())));
-        }
-    }
     out.sort_by(|a, b| (a.severity != "critical").cmp(&(b.severity != "critical")).then_with(|| a.kind.cmp(&b.kind)).then_with(|| a.subject.cmp(&b.subject)));
     out
 }
@@ -382,15 +350,15 @@ pub struct EventInputs {
     pub grafana_url: Option<String>,
 }
 
-pub fn assemble(inputs: &EventInputs, domain_metrics: Option<&Metrics>, pending_approvals: Option<u64>, now_ms: i64) -> Events {
+pub fn assemble(inputs: &EventInputs, domain_metrics: Option<&Metrics>, now_ms: i64) -> Events {
     let rules = rules(inputs.rules.as_ref(), &inputs.firings);
     let hub = hub(&inputs.hub, now_ms);
     let agents = agents(&inputs.agents);
-    let alerts = alerts(&rules, &hub, &agents, inputs.agents_configured > 0);
+    let alerts = alerts(&hub, &agents, inputs.agents_configured > 0);
     Events {
         rules_known: inputs.rules.is_some(),
         rules,
-        pipeline: pipeline(domain_metrics, pending_approvals),
+        pipeline: pipeline(domain_metrics),
         hub,
         agents,
         agents_configured: inputs.agents_configured,
@@ -569,7 +537,7 @@ mod tests {
     fn firings_body(statuses: &[(&str, Option<&str>)]) -> Value {
         json!({"firings": statuses.iter().enumerate().map(|(i, (status, reason))| json!({
             "rule": "pr-review-opened", "eventId": format!("evt_PRIVATE{i}"), "status": status, "reason": reason,
-            "detail": "PRIVATE DETAIL error: password=hunter2", "taskId": format!("tsk_01ABCDEFGH{i}"), "approvalId": "apr_x",
+            "detail": "PRIVATE DETAIL error: password=hunter2", "approvalId": "apr_x",
             "createdAt": "2026-10-05T09:00:00Z", "decidedAt": "2026-10-05T09:00:01Z", "data": "PRIVATE EVENT DATA"
         })).collect::<Vec<_>>()})
     }
@@ -609,21 +577,19 @@ hub_inbox_size 0
     fn rules_show_counters_and_recent_firings_without_content() {
         let mut inputs = EventInputs { rules: Some(domain_rules()), ..Default::default() };
         inputs.firings.insert("pr-review-opened".into(), firings_body(&[("fired", None), ("skipped", Some("duplicate"))]));
-        let events = assemble(&inputs, None, None, NOW);
+        let events = assemble(&inputs, None, NOW);
         assert!(events.rules_known);
         assert_eq!(events.rules.len(), 2, "a rule with an unusable name is left out");
         let review = &events.rules[0];
-        assert_eq!((review.kind.as_str(), review.status.as_str()), ("reaction", "active"));
-        assert_eq!(review.capability.as_deref(), Some("code.review@3"));
+        assert_eq!(review.status.as_str(), "active");
         assert_eq!(review.fired, 4);
         assert_eq!(review.skipped.get("duplicate"), Some(&2));
         assert!(!review.skipped.contains_key("rate"), "zero counters are not listed");
         assert_eq!(review.skipped_total(), 3);
         assert_eq!(review.firings.len(), 2);
         assert_eq!(review.firings[1].reason.as_deref(), Some("duplicate"));
-        assert!(review.firings[0].task.as_deref().is_some_and(|task| task.starts_with('…') || task.len() <= 8));
         let manager = &events.rules[1];
-        assert_eq!((manager.kind.as_str(), manager.status.as_str(), manager.selector.as_str()), ("agent subscription", "paused", "grafana.alert.*"));
+        assert_eq!((manager.status.as_str(), manager.selector.as_str()), ("paused", "grafana.alert.*"));
     }
 
     #[test]
@@ -639,26 +605,21 @@ hub_inbox_size 0
             agents_configured: 1,
             ..Default::default()
         };
-        let domain_metrics = metrics("somework_events_published_total 7\nsomework_reactions_skipped_total{reason=\"rate\"} 2\nsomework_reactions_skipped_total{reason=\"PRIVATE REASON WITH SPACES\"} 1\n");
+        let domain_metrics = metrics("somework_events_published_total 7\nsomework_events_duplicate_total 1\n");
         inputs.firings.insert("pr-review-opened".into(), firings_body(&[("skipped", Some("error")), ("fired", None)]));
-        let output = serde_json::to_string(&assemble(&inputs, Some(&domain_metrics), Some(2), NOW)).unwrap();
+        let output = serde_json::to_string(&assemble(&inputs, Some(&domain_metrics), NOW)).unwrap();
         assert!(!output.contains("PRIVATE"), "leaked: {output}");
         assert!(!output.contains("hunter2"), "leaked: {output}");
         assert!(!output.contains("<b>") && !output.contains("<script>"), "markup survived: {output}");
-        assert!(output.contains("triage") && output.contains("code.review@3"), "allowlisted identities do show");
+        assert!(output.contains("triage") && output.contains("pr-review-opened"), "allowlisted identities do show");
     }
 
     #[test]
     fn pipeline_counters_come_from_the_domain_metrics_and_stay_unknown_without_them() {
-        let known = pipeline(
-            Some(&metrics("somework_events_published_total 20\nsomework_events_duplicate_total 3\nsomework_reactions_fired_total 8\nsomework_reactions_skipped_total{reason=\"depth\"} 1\nsomework_reactions_skipped_total{reason=\"approval\"} 2\n")),
-            Some(1),
-        );
-        assert_eq!((known.events_published, known.events_duplicate, known.reactions_fired, known.pending_approvals), (Some(20), Some(3), Some(8), Some(1)));
-        assert_eq!(known.reactions_skipped.get("approval"), Some(&2));
-        let unknown = pipeline(None, None);
-        assert_eq!((unknown.events_published, unknown.reactions_fired), (None, None));
-        assert!(unknown.reactions_skipped.is_empty());
+        let known = pipeline(Some(&metrics("somework_events_published_total 20\nsomework_events_duplicate_total 3\n")));
+        assert_eq!((known.events_published, known.events_duplicate), (Some(20), Some(3)));
+        let unknown = pipeline(None);
+        assert_eq!((unknown.events_published, unknown.events_duplicate), (None, None));
     }
 
     #[test]
@@ -703,13 +664,13 @@ hub_inbox_size 0
         assert_eq!((busy.enabled, busy.has_error, busy.wakes, busy.drops, busy.version), (true, true, 9, 30, 3));
         assert_eq!(busy.disabled_reason, None);
         let pools = triage.pools.clone().unwrap();
-        assert_eq!((pools.events_used, pools.events_limit, pools.throttled, pools.stopped, pools.tasks_limit), (250, 300, true, false, 700));
+        assert_eq!((pools.events_used, pools.events_limit, pools.throttled, pools.stopped, pools.jobs_limit), (250, 300, true, false, 700));
         let down = agents.iter().find(|a| a.id == "agent/down").unwrap();
         assert!(!down.reachable && down.pools.is_none() && down.handlers.is_empty());
     }
 
     #[test]
-    fn alerts_cover_stopped_pools_disabled_handlers_dead_letters_backlog_and_idle_rules() {
+    fn alerts_cover_stopped_pools_disabled_handlers_dead_letters_and_backlog() {
         let mut inputs = EventInputs {
             rules: Some(domain_rules()),
             hub: HubRead::Read { metrics: metrics(HUB_METRICS), stats: None },
@@ -717,14 +678,13 @@ hub_inbox_size 0
             agents_configured: 1,
             ..Default::default()
         };
-        inputs.firings.insert("pr-review-opened".into(), firings_body(&[("skipped", Some("approval")), ("skipped", Some("approval")), ("skipped", Some("rate"))]));
-        let alerts = assemble(&inputs, None, None, NOW).alerts;
+        inputs.firings.insert("pr-review-opened".into(), firings_body(&[("skipped", Some("duplicate")), ("skipped", Some("duplicate")), ("skipped", Some("rate"))]));
+        let alerts = assemble(&inputs, None, NOW).alerts;
         let kinds: Vec<(&str, &str)> = alerts.iter().map(|a| (a.severity.as_str(), a.kind.as_str())).collect();
         assert!(kinds.contains(&("critical", "pool_stopped")), "{kinds:?}");
         assert!(kinds.contains(&("critical", "dead_letters")), "{kinds:?}");
         assert!(kinds.contains(&("warning", "handler_disabled")), "{kinds:?}");
         assert!(kinds.contains(&("warning", "backlog")), "420 s is above the 5 minute line: {kinds:?}");
-        assert!(kinds.contains(&("warning", "rule_skipped")), "{kinds:?}");
         assert_eq!(alerts[0].severity, "critical", "critical alerts sort first");
         assert!(alerts.iter().all(|a| !a.text.contains("PRIVATE")));
     }
@@ -739,12 +699,12 @@ hub_inbox_size 0
             ..Default::default()
         };
         inputs.firings.insert("pr-review-opened".into(), firings_body(&[("fired", None), ("skipped", Some("duplicate")), ("fired", None)]));
-        assert_eq!(assemble(&inputs, None, None, NOW).alerts, Vec::<EventAlert>::new());
+        assert_eq!(assemble(&inputs, None, NOW).alerts, Vec::<EventAlert>::new());
     }
 
     #[test]
     fn a_domain_without_rules_leaves_the_rules_unknown() {
-        let events = assemble(&EventInputs::default(), None, None, NOW);
+        let events = assemble(&EventInputs::default(), None, NOW);
         assert!(!events.rules_known);
         assert!(events.rules.is_empty());
         assert_eq!(events.hub.state, "not configured");
@@ -783,7 +743,7 @@ hub_inbox_size 0
         let HubRead::Read { metrics, stats } = client.read().await else { panic!("the hub answered") };
         assert!(stats.is_some());
         let reads = read_agents(&agent_http_client().unwrap(), &[AgentTarget { id: "agent/triage".into(), url: format!("{base}/status"), logs: None }, AgentTarget { id: "agent/gone".into(), url: "http://127.0.0.1:9/status".into(), logs: None }]).await;
-        let events = assemble(&EventInputs { hub: HubRead::Read { metrics, stats }, agents: reads, agents_configured: 2, ..Default::default() }, None, None, NOW);
+        let events = assemble(&EventInputs { hub: HubRead::Read { metrics, stats }, agents: reads, agents_configured: 2, ..Default::default() }, None, NOW);
         assert_eq!(events.agents.iter().filter(|a| a.reachable).count(), 1);
         assert!(events.alerts.iter().any(|a| a.kind == "agent_unreachable" && a.subject == "agent/gone"));
         assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE"));
@@ -806,7 +766,7 @@ hub_inbox_size 0
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let reads = read_agents(&agent_http_client().unwrap(), &[AgentTarget { id: "agent/qa".into(), url: format!("{base}/status"), logs: None }]).await;
-        let events = assemble(&EventInputs { agents: reads, agents_configured: 1, ..Default::default() }, None, None, NOW);
+        let events = assemble(&EventInputs { agents: reads, agents_configured: 1, ..Default::default() }, None, NOW);
         let jobs = &events.agents[0].jobs;
         assert_eq!((jobs.len(), jobs[0].subject.as_deref(), jobs[0].outcome.as_deref()), (1, Some("SAD-1"), Some("verified")));
         assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE"));
