@@ -53,6 +53,9 @@ export class FakeJira {
 	ignoreAssign = false;
 	/** Called before each request is handled: lets a test change the issue between two calls of the tool. */
 	beforeRequest?: (method: string, path: string) => void;
+	/** The next requests are not answered at all (`hang`) or answered with a 503 (`fail`), the way an overloaded ticket system behaves. */
+	hang = 0;
+	fail = 0;
 	url = "";
 	#server!: Server;
 
@@ -93,6 +96,14 @@ export class FakeJira {
 			};
 			this.requests.push({ method: req.method!, path: url.pathname + url.search, body: (req.headers["content-type"] ?? "").startsWith("multipart") ? `<${body.length} bytes>` : body.toString("utf8") });
 			if (req.headers.authorization !== `Bearer ${PAT}`) return reply(401, { errorMessages: ["bad token"] });
+			if (this.hang > 0) {
+				this.hang -= 1;
+				return;
+			}
+			if (this.fail > 0) {
+				this.fail -= 1;
+				return reply(503, { errorMessages: ["service unavailable"] });
+			}
 			this.beforeRequest?.(req.method!, url.pathname);
 			const parts = url.pathname.split("/").filter(Boolean); // rest api 2 issue KEY ...
 			if (url.pathname.startsWith("/secure/attachment/")) {

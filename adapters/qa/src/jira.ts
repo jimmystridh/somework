@@ -22,7 +22,12 @@ export interface JiraClientOptions {
 	passphrase?: string;
 	/** PEM of a private CA that signed the host's certificate. */
 	ca?: string;
+	/** How long a write or any other call that is not repeated may take (default 30 s). */
 	timeoutMs?: number;
+	/** How long one try of a read may take before it is given up and tried again (default 10 s): the ticket system has been seen to answer in 0.2 s or not at all. */
+	readTimeoutMs?: number;
+	/** How many times a read is tried when the ticket system does not answer or fails on its side (default 4). */
+	readAttempts?: number;
 }
 
 export interface Issue {
@@ -73,11 +78,15 @@ export class JiraClient {
 	readonly #token: string;
 	readonly #agent: Agent;
 	readonly #timeout: number;
+	readonly #readTimeout: number;
+	readonly #readAttempts: number;
 
 	constructor(options: JiraClientOptions) {
 		this.#base = new URL(options.baseUrl);
 		this.#token = options.token;
 		this.#timeout = options.timeoutMs ?? 30_000;
+		this.#readTimeout = options.readTimeoutMs ?? 10_000;
+		this.#readAttempts = options.readAttempts ?? 4;
 		this.#agent = new Agent({ pfx: options.pfx, passphrase: options.passphrase, ca: options.ca, keepAlive: true, maxSockets: 4 });
 	}
 
@@ -89,7 +98,30 @@ export class JiraClient {
 		return this.#token ? text.replaceAll(this.#token, "***") : text;
 	}
 
+	/**
+	 * One call. A read (GET) or a write that gives the same result when repeated (PUT, DELETE) is tried again when the ticket system does not
+	 * answer in time or fails on its side; a comment, a transition or an upload is sent once, because a try that was lost after it was sent may
+	 * have been applied.
+	 */
 	async #call(method: string, path: string, options: { json?: unknown; body?: Buffer; headers?: Record<string, string> } = {}): Promise<{ status: number; body: string }> {
+		const repeatable = method === "GET" || method === "PUT" || method === "DELETE";
+		const attempts = repeatable ? this.#readAttempts : 1;
+		for (let attempt = 1; ; attempt++) {
+			try {
+				const response = await this.#send(method, path, options, repeatable ? this.#readTimeout : this.#timeout);
+				if (response.status >= 500 && attempt < attempts) {
+					await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+					continue;
+				}
+				return response;
+			} catch (error) {
+				if (attempt >= attempts || !isUnreachable(error)) throw error;
+				await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+			}
+		}
+	}
+
+	async #send(method: string, path: string, options: { json?: unknown; body?: Buffer; headers?: Record<string, string> }, timeoutMs: number): Promise<{ status: number; body: string }> {
 		const payload = options.body ?? (options.json === undefined ? undefined : Buffer.from(JSON.stringify(options.json)));
 		const url = new URL(path, `${this.#base.origin}/`);
 		return new Promise((resolve, reject) => {
@@ -109,11 +141,11 @@ export class JiraClient {
 				(response) => {
 					const chunks: Buffer[] = [];
 					response.on("data", (chunk: Buffer) => chunks.push(chunk));
-					response.on("error", reject);
+					response.on("error", (error) => reject(new JiraError(0, this.#scrub(`cannot reach the ticket system: ${error.message}`))));
 					response.on("end", () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
 				},
 			);
-			req.setTimeout(this.#timeout, () => req.destroy(new Error("request timed out")));
+			req.setTimeout(timeoutMs, () => req.destroy(new Error("request timed out")));
 			req.on("error", (error) => reject(new JiraError(0, this.#scrub(`cannot reach the ticket system: ${error.message}`))));
 			if (payload) req.write(payload);
 			req.end();
@@ -136,7 +168,18 @@ export class JiraClient {
 	}
 
 	/** The bytes of an attachment, from the address Jira gave for it: this ticket system only, no redirect, at most `maxBytes`. */
-	download(contentUrl: string, maxBytes: number): Promise<Buffer> {
+	async download(contentUrl: string, maxBytes: number): Promise<Buffer> {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await this.#downloadOnce(contentUrl, maxBytes);
+			} catch (error) {
+				if (attempt >= 3 || !isUnreachable(error)) throw error;
+				await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+			}
+		}
+	}
+
+	#downloadOnce(contentUrl: string, maxBytes: number): Promise<Buffer> {
 		const url = new URL(contentUrl, `${this.#base.origin}/`);
 		if (url.origin !== this.#base.origin) return Promise.reject(new JiraError(0, "refusing to download from another host"));
 		return new Promise((resolve, reject) => {

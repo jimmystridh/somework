@@ -26,6 +26,48 @@ describe("what counts as an outage of the ticket system", () => {
 	});
 });
 
+describe("a ticket system that answers fast or not at all", () => {
+	let tls: TestTls;
+	let jira: FakeJira;
+	const clientFor = (extra: Record<string, unknown> = {}) => new JiraClient({ baseUrl: jira.url, token: PAT, pfx: tls.clientPfx, passphrase: tls.clientPassphrase, ca: tls.ca, readTimeoutMs: 300, timeoutMs: 600, ...extra });
+	before(async () => {
+		tls = makeTls(mkdtempSync(join(tmpdir(), "qa-retry-tls-")));
+		jira = await FakeJira.start(tls);
+		jira.issues.set("QA-1", testIssue("QA-1"));
+	});
+	after(async () => {
+		await jira.close();
+	});
+
+	it("gives up on a read that hangs and asks again, so a flaky answer costs a moment instead of a failed verification", async () => {
+		const client = clientFor();
+		jira.hang = 2;
+		const started = Date.now();
+		assert.equal((await client.getIssue("QA-1")).key, "QA-1");
+		assert.equal(jira.requests.filter((request) => request.path.includes("/issue/QA-1")).length >= 3, true);
+		assert.equal(Date.now() - started < 3000, true);
+		client.close();
+	});
+
+	it("tries a read again after a 503 and reports the outage once the tries are used up", async () => {
+		const client = clientFor({ readAttempts: 3 });
+		jira.fail = 2;
+		assert.equal((await client.getIssue("QA-1")).key, "QA-1");
+		jira.fail = 3;
+		await assert.rejects(client.getIssue("QA-1"), (error: unknown) => isUnreachable(error));
+		client.close();
+	});
+
+	it("sends a comment only once: a try that was lost may have been applied", async () => {
+		const client = clientFor();
+		jira.hang = 1;
+		const before = jira.requests.filter((request) => request.method === "POST").length;
+		await assert.rejects(client.addComment("QA-1", "hello"), (error: unknown) => isUnreachable(error));
+		assert.equal(jira.requests.filter((request) => request.method === "POST").length - before, 1);
+		client.close();
+	});
+});
+
 describe("a verification while the ticket system is down", () => {
 	let tls: TestTls;
 	let jira: FakeJira;
