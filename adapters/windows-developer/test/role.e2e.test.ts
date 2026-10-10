@@ -5,9 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { createHandler, approvalPolicy, InvalidInput, Metrics, PiDurableRuntime } from "@somework/agent-kit";
 import { scriptedModels } from "@somework/agent-kit/providers/faux";
-import { FakeHost, makeRemote, sh } from "@somework/agent-kit/testing";
-import { Worker, type SomeWorkClient } from "@somework/sdk";
-import { startDomain, type Domain } from "../../../sdk/typescript/test/harness.ts";
+import { FakeHost, makeRemote, runHandler, sh } from "@somework/agent-kit/testing";
 import { localEnvFactory } from "@somework/agent-kit/windows";
 import { profile } from "../src/profile.ts";
 import { parseProfiles } from "../src/profiles.ts";
@@ -33,21 +31,27 @@ const PROFILES = {
 	encoding: { legacyGlobs: ["**/*.cpp"], blockPush: true },
 };
 
+interface Stored {
+	artifactId: string;
+	filename: string;
+	bytes: Buffer;
+}
+
+interface Run {
+	taskId: string;
+	task: { state: "succeeded" | "failed"; result?: any; failure?: any; resultArtifacts: any[] };
+}
+
 interface Stack {
-	domain: Domain;
 	remote: string;
 	seed: string;
 	host: FakeHost;
-	author: SomeWorkClient;
-	submit(input?: Record<string, unknown>): Promise<string>;
-	terminal(taskId: string): Promise<any>;
+	stored: Stored[];
+	run(input?: Record<string, unknown>): Promise<Run>;
 	pushed(taskId: string): boolean;
-	startWorker(): void;
 }
 
 async function stack(plan: string[], seedLegacy = false, profilesRaw: unknown = PROFILES): Promise<Stack> {
-	const domain = await startDomain({ cardFile: join(here, "../card.json") });
-	cleanups.push(() => domain.close());
 	const { dir: remoteDir, remote } = makeRemote();
 	const seed = join(remoteDir, "seed");
 	if (seedLegacy) {
@@ -62,32 +66,32 @@ async function stack(plan: string[], seedLegacy = false, profilesRaw: unknown = 
 	const host = new FakeHost();
 	const profiles = parseProfiles(profilesRaw);
 	const envFor = localEnvFactory({ root, baseEnv: { PATH: process.env.PATH ?? "", HOME: root }, flavour: "posix" });
-	const client = domain.worker();
+	const stored: Stored[] = [];
+	const client = {
+		uploadArtifact: async (options: { filename: string; mediaType: string; bytes: Uint8Array | string }) => {
+			const artifactId = `art_${stored.length + 1}`;
+			stored.push({ artifactId, filename: options.filename, bytes: Buffer.from(options.bytes) });
+			return { artifactId, filename: options.filename, mediaType: options.mediaType, sizeBytes: stored.at(-1)!.bytes.length };
+		},
+	} as never;
 	const runtime = new PiDurableRuntime({ storagePath: join(dir, "pi.sqlite"), models: fake.models, model: fake.model, env: envFor, policy: approvalPolicy([], profile.approvalPatterns) });
 	await runtime.start();
 	cleanups.push(() => runtime.close());
 	const role = createRole({ profiles });
 	const handler = createHandler({ runtime, envFor, session: { env: envFor(root), identity: { name: "Win", email: "win@test.invalid" } }, host, workspaceRoot: root, client, limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 }, metrics: new Metrics(), profile, hooks: role.hooks });
-	const author = domain.author;
+	let runs = 0;
 	return {
-		domain,
 		remote,
 		seed,
 		host,
-		author,
-		startWorker() {
-			const abort = new AbortController();
-			const finished = new Worker(domain.worker(), { handler, leaseSeconds: 2, shutdownGraceMs: 5000 }).run(abort.signal);
-			cleanups.push(async () => {
-				abort.abort();
-				await finished;
-			});
+		stored,
+		async run(input = {}) {
+			const taskId = `job-win${(runs += 1)}`;
+			const outcome = await runHandler(handler, { taskId, capability: { id: "code.windows", version: "1" }, input: { repository: { url: remote, ref: "main" }, instruction: "add a feature", budget: { maxTokens: 1_000_000, maxMinutes: 5 }, ...input } });
+			if (outcome.type === "detach") assert.fail("the job detached");
+			const task = outcome.type === "completed" ? { state: "succeeded" as const, result: outcome.result as any, resultArtifacts: outcome.artifacts ?? [] } : { state: "failed" as const, failure: outcome.failure as any, resultArtifacts: [] };
+			return { taskId, task };
 		},
-		async submit(input = {}) {
-			const task = await author.submitTask({ capability: { id: "code.windows", version: "1" }, input: { repository: { url: remote, ref: "main" }, instruction: "add a feature", budget: { maxTokens: 1_000_000, maxMinutes: 5 }, ...input } });
-			return task.taskId as string;
-		},
-		terminal: (taskId) => author.waitTerminal(taskId, 60_000),
 		pushed(taskId) {
 			try {
 				sh(remote, "rev-parse", "--verify", "--quiet", `refs/heads/agent/${taskId}`);
@@ -111,9 +115,7 @@ describe("Windows developer role end to end", () => {
 
 	it("builds and tests after the model finished, then pushes: logs are artifacts, results are in the output", async () => {
 		const s = await stack(["write:feature.txt:new feature", "final:added feature.txt"]);
-		s.startWorker();
-		const taskId = await s.submit({ build: { name: "ok" }, tests: ["unit"] });
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run({ build: { name: "ok" }, tests: ["unit"] });
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.status, "completed");
 		assert.equal(task.result.branch, `agent/${taskId}`);
@@ -129,9 +131,7 @@ describe("Windows developer role end to end", () => {
 
 	it("a failing build blocks the push and the result says why; the log is redacted", async () => {
 		const s = await stack(["write:feature.txt:new feature", "final:added feature.txt"]);
-		s.startWorker();
-		const taskId = await s.submit({ build: { name: "broken" }, tests: ["unit"] });
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run({ build: { name: "broken" }, tests: ["unit"] });
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.status, "blocked");
 		assert.equal(task.result.branch, undefined);
@@ -143,8 +143,7 @@ describe("Windows developer role end to end", () => {
 		assert.equal(s.pushed(taskId), false, "nothing reached the remote");
 		assert.equal(s.host.created.length, 0, "no pull request");
 		assert.equal(task.resultArtifacts.length, 1, "the build log");
-		const grant = await s.author.post(`/v1/artifacts/${task.result.build.logArtifact}/1/download-grants`, {});
-		const log = await (await fetch(grant.url, { headers: grant.headers ?? {} })).text();
+		const log = s.stored.find((item) => item.artifactId === task.result.build.logArtifact)!.bytes.toString("utf8");
 		assert.match(log, /about to fail/);
 		assert.match(log, /exit code 3/);
 		assert.ok(!log.includes("ghp_abcdefghijklmnopqrstuvwxyz"), "the token-like text is redacted in the stored log");
@@ -153,9 +152,7 @@ describe("Windows developer role end to end", () => {
 
 	it("a failing check whose profile does not block still pushes, and reports the failure", async () => {
 		const s = await stack(["write:feature.txt:new feature", "final:done"]);
-		s.startWorker();
-		const taskId = await s.submit({ build: { name: "advisory" }, tests: ["flaky"] });
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run({ build: { name: "advisory" }, tests: ["flaky"] });
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.status, "completed");
 		assert.equal(task.result.build.ok, false);
@@ -163,20 +160,20 @@ describe("Windows developer role end to end", () => {
 		assert.equal(s.pushed(taskId), true);
 	});
 
-	it("refuses an arbitrary build command: the contract rejects it, and the role would anyway", async () => {
+	it("refuses an arbitrary build command: the role only runs pre-configured profiles", async () => {
 		const s = await stack(["final:ok"]);
-		s.startWorker();
-		await assert.rejects(() => s.submit({ build: { name: "ok", command: "del /s /q C:\\" } }), /./, "the domain refuses input outside the card's schema");
-		await assert.rejects(() => s.submit({ build: { command: "whoami" } }), /./);
+		for (const build of [{ name: "ok", command: "del /s /q C:\\" }, { command: "whoami" }]) {
+			const { task } = await s.run({ build });
+			assert.equal(task.state, "failed");
+			assert.equal(task.failure.code, "invalid_input");
+		}
 		const role = createRole({ profiles: parseProfiles(PROFILES) });
 		assert.throws(() => role.hooks.instruction!({ instruction: "x", repository: { url: "u", ref: "main" }, build: { name: "ok", command: "whoami" } }, { taskId: "t" }), (error: Error) => error instanceof InvalidInput && /only pre-configured/.test(error.message));
 	});
 
-	it("an unknown profile name fails the task as invalid input, before any work", async () => {
+	it("an unknown profile name fails the job as invalid input, before any work", async () => {
 		const s = await stack(["write:feature.txt:x", "final:ok"]);
-		s.startWorker();
-		const taskId = await s.submit({ build: { name: "does-not-exist" } });
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run({ build: { name: "does-not-exist" } });
 		assert.equal(task.state, "failed");
 		assert.equal(task.failure.code, "invalid_input");
 		assert.match(task.failure.message, /unknown build profile "does-not-exist"; configured: ok, broken, advisory/);
@@ -185,9 +182,7 @@ describe("Windows developer role end to end", () => {
 
 	it("blocks the push when a legacy source file was silently rewritten as UTF-8", async () => {
 		const s = await stack([`bash:printf 'Vi s\\xc3\\xa4ger\\r\\n' > legacy.cpp`, "final:rewrote legacy.cpp"], true);
-		s.startWorker();
-		const taskId = await s.submit();
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.status, "blocked");
 		assert.equal(task.result.encoding.ok, false);
@@ -199,9 +194,7 @@ describe("Windows developer role end to end", () => {
 
 	it("pushes an edit that keeps the legacy encoding and CRLF intact", async () => {
 		const s = await stack([`bash:printf '// added\\r\\n' >> legacy.cpp`, "final:appended"], true);
-		s.startWorker();
-		const taskId = await s.submit();
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.status, "completed");
 		assert.deepEqual([task.result.encoding.ok, task.result.encoding.checked], [true, 1]);
@@ -212,9 +205,7 @@ describe("Windows developer role end to end", () => {
 
 	it("an encoding policy that does not block still reports the damage and pushes", async () => {
 		const s = await stack([`bash:printf 'Vi s\\xc3\\xa4ger\\r\\n' > legacy.cpp`, "final:rewrote"], true, { ...PROFILES, encoding: { legacyGlobs: ["**/*.cpp"], blockPush: false } });
-		s.startWorker();
-		const taskId = await s.submit();
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run();
 		assert.equal(task.result.status, "completed");
 		assert.equal(task.result.encoding.ok, false);
 		assert.equal(s.pushed(taskId), true);
@@ -222,9 +213,7 @@ describe("Windows developer role end to end", () => {
 
 	it("without a selection it behaves like the developer role and still checks encodings", async () => {
 		const s = await stack(["write:feature.txt:new feature", "final:added"]);
-		s.startWorker();
-		const taskId = await s.submit();
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run();
 		assert.equal(task.result.status, "completed");
 		assert.equal(task.result.build, undefined);
 		assert.equal(task.result.encoding.ok, true);

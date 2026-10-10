@@ -175,8 +175,8 @@ describe("the rule", () => {
 		assert.doesNotMatch(rule, /reaction:/);
 	});
 
-	it("passes the rules validator with --strict against the cards", () => {
-		const out = execFileSync("node", [join(root, "packages/rules-cli/src/main.ts"), "validate", "--dir", join(root, "rules"), "--card", join(root, "adapters"), "--strict"], { encoding: "utf8" });
+	it("passes the rules validator with --strict", () => {
+		const out = execFileSync("node", [join(root, "packages/rules-cli/src/main.ts"), "validate", "--dir", join(root, "rules"), "--strict"], { encoding: "utf8" });
 		assert.match(out, /rule file\(s\) valid/);
 	});
 });

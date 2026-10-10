@@ -80,7 +80,7 @@ schtasks /Run /TN SomeworkStartAgent
 Get-Content C:\somework\logs\supervisor.log -Tail 5
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8081/ready | Select-Object -ExpandProperty Content
 ```
-and submit a small `code.windows` task against a scratch repository: the SDK's `submitTask({ capability: { id: "code.windows", version: "1" }, input })` with the input described in `README.md` (`build: {name}` and `tests` optional).
+and ask the agent in a message to make a small change in a scratch repository: the model starts the job with `windows_develop` (`repository`, `instruction`, and optionally a `build` profile name and `tests`, see `README.md`).
 
 ## Operations
 * **Logs**: `C:\somework\logs\supervisor.log`, per run `agent-<stamp>.jsonl` (the agent's JSON log, stderr) and `.out.log`; kept two weeks.

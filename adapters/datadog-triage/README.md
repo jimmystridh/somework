@@ -6,7 +6,7 @@ An agent that listens to Datadog monitor alerts, investigates each one through *
 Datadog ──webhook──► receiver ─► hub ─► event datadog.monitor.alert|warn|recovered ─► (rule datadog-triage: wake) ─► this agent
                                                     │ handlers/datadog.mjs decides: drop · deliver · submit
                                                     ▼
-                                    ops.triage task for this same agent (causedByEvent)
+                                    ops.triage job for this same agent
                                                     │
   service: read the monitor (host side) ─► eligibility (priority, list, tags) ─► cool-down and daily cap on the host
                                                     │
@@ -38,7 +38,7 @@ Output: `{ outcome, monitorId, monitorUrl, severity, summary, suspectedCause?, c
 
 ## How it works
 
-1. **Event to task.** The rule `datadog-triage` (`rules/datadog-triage.yaml`) wakes the agent for every `datadog.monitor.*` event. The shipped handler `handlers/datadog.mjs` (installed into the agent's handler directory on first start, versioned like any handler) **drops** recoveries and resolved states, alerts below `DD_MIN_PRIORITY` (an alert with no priority passes), monitors outside `DD_MONITOR_IDS` and monitors without one of `DD_TAG_FILTER`'s tags, a delivery it has seen, and a monitor triaged within `DD_COOLDOWN_MINUTES`; it **delivers** (a note for a person) an event without a numeric monitor id or when `DD_DAILY_CAP` is reached; otherwise it **submits** one `ops.triage` task to this same agent. Only the monitor id, a clipped name and the state go into the task.
+1. **Event to job.** The rule `datadog-triage` (`rules/datadog-triage.yaml`) wakes the agent for every `datadog.monitor.*` event. The shipped handler `handlers/datadog.mjs` (installed into the agent's handler directory on first start, versioned like any handler) **drops** recoveries and resolved states, alerts below `DD_MIN_PRIORITY` (an alert with no priority passes), monitors outside `DD_MONITOR_IDS` and monitors without one of `DD_TAG_FILTER`'s tags, a delivery it has seen, and a monitor triaged within `DD_COOLDOWN_MINUTES`; it **delivers** (a note for a person) an event without a numeric monitor id or when `DD_DAILY_CAP` is reached; otherwise it **submits** one `ops.triage` task to this same agent. Only the monitor id, a clipped name and the state go into the task.
 2. **Authoritative limits on the host.** The handler's counters live in the sandbox, so they are only an early filter. `prepareInput` reads the monitor from Datadog on the service host, applies the same priority, list and tag rules to what Datadog says (not to what the event said) and counts the triage against the cool-down and the daily cap in `datadog-triage.json` in the state volume. A task is counted once however often it is retried. A monitor that does not exist ends `invalid_input`.
 3. **Work.** The model gets the six Datadog tools plus `read`, `write`, `edit` and `bash`, a budget of 150 000 tokens and 10 minutes by default (hard cap 300 000 and 20) and orders to find the cause, cite its sources and say "inconclusive" when the evidence does not carry a cause. It works in an empty scratch directory: this role has no repository (`profile.noRepository`).
 4. **Answer.** One fenced json block. The service checks its shape and that **every finding cites a tool call it really made** (the `ref:` line every tool answer starts with) **or is marked `inference`**. If something is wrong there is exactly one repair turn in the same conversation. Findings that still cite nothing real after it are kept, labelled `inference`, with a warning in the result; an answer with no usable shape fails `invalid_triage_output` and keeps the raw answer as an artifact.
@@ -107,7 +107,7 @@ Every message sent to the agent is read by its model in a run of its own; it ans
 * **Notice, not a result for the manager to relay.** The notice is built by the service from the checked result so it cannot be talked into saying something else. The model's own text still reaches it (summary, cause, actions), which is why links are removed and secrets stripped; the monitor name in it is Datadog's own text, clipped.
 * **Evidence is checked mechanically, not for truth.** The service can tell that a finding cites a call that happened, not that the finding is right. `inference` findings are labelled as such in the result.
 * **Handler is operator-managed.** `handler_save`, `handler_enable` and `handler_disable` need an approval, which this agent always refuses. Change the handler with `DD_RESEED_HANDLER=1`, the manager's `/kill` and `/unkill`, or the files in the state volume.
-* **A skipped task is cheap.** The monitor is read, no model call is made, no notice is sent.
+* **A skipped job is cheap.** The monitor is read, no model call is made, no notice is sent.
 * **Datadog's webhook is whatever the operator wrote.** The hub's mapping needs `id` (or `alert_id`), the transition or status and a date; priority and tags are used when the webhook template carries them (`docs/EVENTS.md`). Without a priority every alert passes the priority filter.
 
 ## Files
@@ -133,7 +133,6 @@ src/chat.ts              conversations: instructions, facts, the triage_monitor 
 handlers/datadog.mjs     the event handler template
 Dockerfile               targets agent and sandbox (the developer sandbox plus python3 and jq)
 deploy/                  compose.yaml, .env.example, README.md (runbook), (the rule itself is `rules/datadog-triage.yaml` in the repository root)
-examples/request.ts      submit a triage by hand
 test/                    command policy table, client, tools and save mode, handler, ledger, notice, chat, profile and deploy files, end to end (domain + faux model + fake Datadog + real python3) and a real service process
 ```
 

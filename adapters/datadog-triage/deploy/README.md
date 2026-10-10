@@ -15,11 +15,11 @@ mkdir -p keys && chmod 700 keys && chown 10001:10001 keys
 docker run --rm -u 10001:10001 -v $PWD/keys:/keys --entrypoint somework-sidecar somework-worker:<tag> keygen --id agent/datadog-triage --key-out /keys/agent.key.json
 
 # on the domain host (`ops` as in the root deploy README)
-ops admin --config /etc/somework/somework.toml enroll-agent --id agent/datadog-triage --public-key '<publicKey>' --side-effects read --may-invoke 'ops.triage'
+ops admin --config /etc/somework/somework.toml enroll-agent --id agent/datadog-triage --public-key '<publicKey>' --side-effects read
 cp card.json cards/datadog-triage.json                             # adapters/datadog-triage/card.json, copied to the host's ./cards directory
 ops admin --config /etc/somework/somework.toml register-card --card /cards/datadog-triage.json --approve
 ```
-`--side-effects read` because the capability changes nothing. **`--may-invoke 'ops.triage'` is deliberate**: the shipped handler submits the triage task to this same agent, and an agent may only submit what it is allowed to invoke. Nothing else may invoke it unless its own enrolment says so (the manager needs `--may-invoke 'ops.triage'` to start a triage by hand; `examples/request.ts` needs the same for its requester key).
+`--side-effects read` because the capability changes nothing. Capabilities are advertisements: nobody needs a permission to ask the agent for a triage, in a message or through an event. The agent needs the permission `events.publish:agent.datadog_triage.` for its job events.
 
 **The NATS broker reloads itself** (a watcher inside the broker's container, see the root deploy README). On a deployment from before 2026-10-06 that still has the separate `nats-reloader` container, send `SIGHUP` by hand: Right after `enroll-agent`, send `SIGHUP` to the broker process (`docker kill -s HUP somework-domain-nats-1` on the domain host). Its reloader prints "reloaded" but does not load the new user; without this the agent polls over HTTP only. Check `GET /v1/connection` as the agent first.
 
@@ -96,11 +96,8 @@ docker compose exec -T sandbox python3 -c "import urllib.request; urllib.request
 Add `8084` to `HEALTH_PORTS` in `/etc/default/agent-health-firewall` and restart `agent-health-firewall.service` when `HEALTH_BIND` is the host's private address: Docker bypasses ufw and the health port would otherwise be readable from the private network.
 
 ## 5. Smoke test
-1. **Without Datadog or a model.** `PI_PROVIDER=faux` with the plan in `.env.example`, `DD_ALLOW_BASE_OVERRIDE=1` and `DD_API_BASE` pointing at a stand-in for the monitor read, then a task by hand (needs a requester with `--may-invoke ops.triage`):
-   ```bash
-   node adapters/datadog-triage/examples/request.ts --url "$SOMEWORK_URL" --key requester.key.json --ca ca.pem --monitor <id>
-   ```
-   Expect `succeeded` with the scripted diagnosis, one notice to the manager, and no files left in the workspace volume.
+1. **Without Datadog or a model.** `PI_PROVIDER=faux` with the plan in `.env.example`, `DD_ALLOW_BASE_OVERRIDE=1` and `DD_API_BASE` pointing at a stand-in for the monitor read, then ask the agent in a message (for example from the manager: "please triage monitor <id>"); the model starts the job with `triage_monitor`.
+   Expect a completed job with the scripted diagnosis in the result message, one notice to the manager, and no files left in the workspace volume.
 2. **Real Datadog, real model, one real alert.** Pick a monitor that is in the Alert state or has been recently. Run the same command. Expect `outcome: diagnosed` or `inconclusive`, a `monitorUrl`, evidence with `refs`, and one message to the owner that ends with the monitor link. Check in Datadog's audit trail (*Organization Settings → Audit*) that nothing but reads came from the key; the logs show `datadog_saved` lines when the model used save mode.
 3. **The event path.** Wait for (or publish, through a throwaway producer limited to `datadog.*`) a `datadog.monitor.alert` event with a numeric `monitorId`: `GET /v1/rules/datadog-triage` shows it firing (agent subscription), the agent log shows `handler_decision` with action `submit`, an `ops.triage` task appears with origin kind `event`. Send the same event again: the second is dropped (`already handled`); a `datadog.monitor.recovered` event is dropped (`the monitor recovered`); an event with no numeric id ends `deliver` and creates no task.
 4. **The guards.** A monitor of priority P4 or P5 ends `skipped` without a model call and without a notice; a second triage of the same monitor within the cool-down ends `skipped`; a monitor id that does not exist fails `invalid_input`.

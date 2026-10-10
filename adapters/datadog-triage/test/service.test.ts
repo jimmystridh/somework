@@ -7,9 +7,8 @@ import { pathToFileURL } from "node:url";
 import { after, afterEach, before, describe, it } from "node:test";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { Worker } from "@somework/sdk";
 import { approvalPolicy, createHandler, Metrics, PiDurableRuntime } from "@somework/agent-kit";
-import { startDomain, type Domain } from "../../../sdk/typescript/test/harness.ts";
+import { jobRig, runHandler } from "@somework/agent-kit/testing";
 import { DatadogClient } from "../src/datadog/client.ts";
 import { createDatadogTools } from "../src/datadog/tools.ts";
 import { createTriageHooks } from "../src/hooks.ts";
@@ -113,9 +112,8 @@ const diagnosis = (refs: { monitor: string; logs: string }, extra: Record<string
 	})}\n\`\`\``;
 
 async function stack(model: ReturnType<typeof scriptedModel>, env: Record<string, string> = {}) {
-	const domain: Domain = await startDomain({ cardFile: join(here, "../card.json"), mayInvoke: "ops.*" });
-	cleanups.push(() => domain.stop());
 	const dir = mkdtempSync(join(tmpdir(), "dd-svc-"));
+	const rig = jobRig({ stateDir: dir });
 	const workspaceRoot = join(dir, "workspaces");
 	const envFor = (cwd?: string) => new NodeExecutionEnv({ cwd: cwd ?? workspaceRoot });
 	mkdirSync(workspaceRoot);
@@ -140,18 +138,17 @@ async function stack(model: ReturnType<typeof scriptedModel>, env: Record<string
 		session: { env: envFor(), identity: { name: "SomeWork Datadog triage", email: "datadog-triage@somework.invalid" } },
 		host: { findPullRequest: async () => undefined, createPullRequest: async () => assert.fail("no pull request") } as never,
 		workspaceRoot,
-		client: domain.worker(),
+		client: rig.client,
 		limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 },
 		metrics: new Metrics(),
 		profile,
 		hooks,
 	});
-	const abort = new AbortController();
-	const finished = new Worker(domain.worker(), { handler, leaseSeconds: 2, shutdownGraceMs: 5000 }).run(abort.signal);
-	cleanups.push(async () => {
-		abort.abort();
-		await finished;
-	});
+	const asTask = (outcome: Awaited<ReturnType<typeof runHandler>>) => {
+		if (outcome.type === "completed") return { state: "succeeded" as const, result: outcome.result as any, failure: undefined as any };
+		if (outcome.type === "failed") return { state: "failed" as const, result: undefined as any, failure: outcome.failure as any };
+		return assert.fail("the job detached");
+	};
 
 	/** What the shipped handler decides for a Datadog event, run the way the sandbox runs it. */
 	const decide = async (data: Record<string, unknown>, now = new Date().toISOString()) => {
@@ -162,15 +159,14 @@ async function stack(model: ReturnType<typeof scriptedModel>, env: Record<string
 		const module = await import(pathToFileURL(file).href);
 		return module.default({ event: { id: "evt_1", seq: 1, topic: "datadog.monitor.alert", source: "datadog", key: `k${Math.random()}`, data, classification: "internal", verified: true, depth: 0, untrusted: true }, agent: {}, now }, {});
 	};
-	const submit = async (input: Record<string, unknown>) => {
-		const task = await domain.author.submitTask({ capability: { id: "ops.triage", version: "1" }, input: { budget: { maxTokens: 100_000, maxMinutes: 5 }, ...input } });
-		return domain.author.waitTerminal(task.taskId as string, 90_000);
-	};
+	// not a `job-` id: a job's own result message replaces the notice the hook sends for work that is not a job
+	let runs = 0;
+	const nextId = () => `triage-${(runs += 1)}`;
+	const submit = async (input: Record<string, unknown>) => asTask(await runHandler(handler, { taskId: nextId(), capability: { id: "ops.triage", version: "1" }, input: { budget: { maxTokens: 100_000, maxMinutes: 5 }, ...input } }));
 	const fromEvent = async (data: Record<string, unknown>) => {
 		const decision = await decide(data);
 		assert.equal(decision.action, "submit", JSON.stringify(decision));
-		const task = await domain.author.submitTask({ capability: decision.task.capability, input: { ...decision.task.input, budget: decision.task.budget } });
-		return domain.author.waitTerminal(task.taskId as string, 90_000);
+		return asTask(await runHandler(handler, { taskId: nextId(), capability: decision.task.capability, input: { ...decision.task.input, budget: decision.task.budget } }));
 	};
 	return { notices, submit, fromEvent, workspaceRoot, ledger, dir };
 }
@@ -326,13 +322,15 @@ describe("Datadog triage end to end", () => {
 		assert.match(capped.result.summary, /daily cap of 2 triages is reached/);
 	});
 
-	it("fails a task for a monitor that does not exist as invalid input, and one that is not a number before any request", async () => {
+	it("fails a job for a monitor that does not exist as invalid input, and one that is not a number before any request", async () => {
 		const s = await stack(scriptedModel([final(() => "never")]));
 		const missing = await s.submit({ monitor: { id: 404404 } });
 		assert.equal(missing.state, "failed");
 		assert.equal(missing.failure.code, "invalid_input");
 		datadogRequests = [];
-		await assert.rejects(() => s.submit({ monitor: { id: "12; DROP" } }), /schema_violation/);
+		const notANumber = await s.submit({ monitor: { id: "12; DROP" } });
+		assert.equal(notANumber.state, "failed");
+		assert.equal(notANumber.failure.code, "invalid_input");
 		assert.equal(datadogRequests.length, 0);
 	});
 

@@ -54,7 +54,7 @@ allowlisted host works. Edit `EGRESS_ALLOW` (compose `.env`) to widen the list.
 
 ## 4. Smoke test without credentials
 `PI_PROVIDER=faux PI_FAUX_PLAN='["write:smoke.txt:hello","final:ok"]'` in `.env`, a bare repository inside the sandbox volume as the
-remote, then `node adapters/pi/examples/request.ts ... --repo /workspace/remotes/demo.git`.
+remote, then send the agent a message asking for a change in that repository (`/workspace/remotes/demo.git`); it starts a `code_agent` job and posts the result to the conversation.
 
 ## 5. Drills (run on 2026-10-05, all passed)
 | Drill | Result |

@@ -22,7 +22,7 @@ runtime itself is `@somework/agent-kit` (`packages/agent-kit`, see its README fo
 * `sandbox/`: the sandbox daemon (wraps Pi's own `NodeExecutionEnv`) and `RemoteExecutionEnv`, Pi's `ExecutionEnv` over HTTP.
   `egress/`: the allowlist proxy that is the sandbox network's only exit.
 * `policy`: commands that wait for a human (sudo, pipe-to-shell, `rm -rf` outside the workspace, `git push`, publish, ...).
-  The model's call blocks, the task shows `input_required`, and the requester answers `{approved, reason?}`.
+  The model's call blocks and the question goes to the approver in the conversation (a message labelled `chatApprovalRequest`); the decision is `{approved, reason?}`.
 * `shards`, `ledger`, `metrics`, `log`, `credentials`, `config`, `skills`.
 
 **Repository skills** are opt-in: `SKILLS_ALLOW=name,name` (and `SKILLS_OVERLAY_DIR`) make the agent read those skills and `AGENTS.md` from the

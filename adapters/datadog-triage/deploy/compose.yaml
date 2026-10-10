@@ -69,7 +69,7 @@ services:
       BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-300000}
       BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-20}
       DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-2000000}
-      EVENTS_ENABLED: "1"                                    # the shipped handler is how monitor events become triage tasks (docs/EVENTS.md)
+      EVENTS_ENABLED: "1"                                    # the shipped handler is how monitor events become triage jobs (docs/EVENTS.md)
       EVENTS_NOTIFY_TO: ${EVENTS_NOTIFY_TO:-agent/manager}   # who gets the one notice per finished triage
       EVENTS_CONTROLLERS: ${EVENTS_CONTROLLERS:-agent/manager}
       EVENTS_TOKEN_SHARE: ${EVENTS_TOKEN_SHARE:-0.3}

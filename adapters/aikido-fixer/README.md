@@ -86,8 +86,8 @@ The outcome of every task is also written to the host ledger (`aikido-attempts.j
 ## Decisions and limits
 
 * **Gate handler is operator-managed.** The event handler tools would let a prompt-injected run rewrite the gate that starts fix tasks, so `handler_save`, `handler_enable` and `handler_disable` need an approval, which this agent always refuses. Operators change the handler with `AIKIDO_RESEED_HANDLER=1`, the manager's `/kill` and `/unkill`, or the files in the state volume.
-* **Approvals are refused, not queued.** A task started by an event has a requester that is the agent itself; waiting for an answer would only burn the lease.
-* **A skipped task still clones.** Eligibility is decided after the workspace is prepared (the kit prepares the workspace before the role's `beforeRun`); with the mirror that costs seconds, and no model call is made.
+* **Approvals are refused, not queued.** A job started by an event has no person waiting in a conversation; waiting for an answer would only hold the job open.
+* **A skipped job still clones.** Eligibility is decided after the workspace is prepared (the kit prepares the workspace before the role's `beforeRun`); with the mirror that costs seconds, and no model call is made.
 * **Aikido's payload is not fully known.** The hub's `aikido` mapping is a first cut (`packages/events-hub/README.md`, "Refining a mapping"). The handler needs a numeric `issueId`; events without one are recorded for a person, and a wrong id ends as `invalid_input` without a token spent.
 * **The sandbox runs repository code** (a dependency bump may run install scripts and tests) as a non-root user with no credentials, no route out except the allow-listed proxy and a read-only root file system. Treat it as a build agent for that repository.
 * **Package registries.** Bumping a dependency to a version that was just released can conflict with a package minimum-age policy; the agent then reports `no_fix` or `blocked`, it does not weaken the policy.
@@ -106,7 +106,6 @@ src/prompt.ts            standing orders, instruction, answer parsing, pull requ
 src/aikido/{client,issue,tool}.ts   OAuth2 client, summarising and eligibility, the aikido_issue tool
 src/seed.ts, handlers/aikido.mjs    the shipped event handler and its installation
 deploy/                  compose.yaml, .env.example, checks.example.json, README.md (runbook)
-examples/request.ts      submit a fix by hand
-test/                    unit tests and an end-to-end test with a real domain, a faux model and a local repository
+test/                    unit tests and an end-to-end test of the handler with a faux model and a local repository
 ```
 Kit additions this role relies on (`packages/agent-kit`): the persistent mirror (`GitSession.mirrorDir`, `refreshMirror`, `startMirrorRefresh`), `RoleHooks.branchName`, a commit message from `RoleHooks.pullRequest`, `repository.ref: "HEAD"`, and the handler reading the prepared input.
