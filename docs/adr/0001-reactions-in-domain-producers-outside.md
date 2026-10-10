@@ -1,6 +1,6 @@
 # Reactions live in the domain; producers and the hub live outside
 
-Status: accepted (2026-10-05)
+Status: accepted (2026-10-05); the reaction half is superseded by ADR 0003 (agents decide for themselves what to do with an event)
 
 Events from the outside world and from SomeWork itself start work in two ways: a **reaction** (a subscription action that submits a task under an automation principal) and an **agent subscription** (the agent is woken and decides for itself, optionally through its own handler code). The domain gains exactly one new primitive, the `submitTask` reaction, executed from the outbox so exactly-once task creation is a unique key on (subscription, event id) and loop protection reuses the domain's hop and depth counters. Everything that touches the outside (clock, webhook receiver, pollers, payload mapping) stays outside the domain as producers with their own principals, each limited to its own topic prefix.
 
