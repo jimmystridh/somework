@@ -211,6 +211,12 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 			if (!reported) return { failure: { code: "job_error", message: "the run finished without a report", retryable: true } };
 			if (!reported.ok) return invalidReport(context, reported.reason, reported.raw, options.client, scrub, log);
 
+			if (job && job.jiraUnreachable.count > 0 && !jira.commented && !jira.labelled && !jira.transitioned) {
+				const outage = `the ticket system could not be reached (${job.jiraUnreachable.count} call${job.jiraUnreachable.count === 1 ? "" : "s"} failed, the last: ${job.jiraUnreachable.last ?? "no answer"}), so nothing was written to ${ticket}`;
+				log("warn", "ticket_system_unreachable", { taskId: context.taskId, ticket, calls: job.jiraUnreachable.count });
+				return { failure: { code: "ticket_system_unreachable", message: outage, retryable: true, details: { ticket, verdict: reported.report.verdict, notes: scrub(reported.report.notes ?? "").slice(0, 1500) } } };
+			}
+
 			const dir = evidenceDirFor(options.root, context.taskId);
 			const evidence = await collectEvidence(dir, context.taskId, options.client, log);
 			const hasVideo = evidence.some((item) => item.kind === "video");

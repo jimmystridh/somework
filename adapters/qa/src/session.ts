@@ -10,13 +10,15 @@ export interface QaJob {
 	verdict?: Verdict;
 	/** What happened in the ticket system during this job. */
 	jira: { commented: boolean; attachedVideo: boolean; labelled: boolean; transitioned: boolean; skippedReason?: string };
+	/** Calls of this job that failed because the ticket system could not be reached (no answer, a timeout or a 5xx), not because it said no. */
+	jiraUnreachable: { count: number; last?: string };
 }
 
 export class QaSession {
 	#job: QaJob | undefined;
 
 	start(job: Pick<QaJob, "taskId" | "ticket" | "evidenceDir">): QaJob {
-		this.#job = { ...job, jira: { commented: false, attachedVideo: false, labelled: false, transitioned: false } };
+		this.#job = { ...job, jira: { commented: false, attachedVideo: false, labelled: false, transitioned: false }, jiraUnreachable: { count: 0 } };
 		return this.#job;
 	}
 

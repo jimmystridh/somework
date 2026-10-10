@@ -9,6 +9,9 @@ export class JiraError extends Error {
 	}
 }
 
+/** The ticket system did not answer (a network error or a timeout) or failed on its side: an outage, as opposed to an answer that says no. */
+export const isUnreachable = (error: unknown): boolean => error instanceof JiraError && ((error.status === 0 && error.message.startsWith("cannot reach the ticket system")) || error.status >= 500);
+
 export interface JiraClientOptions {
 	/** `https://jira.example.com`, no trailing slash. */
 	baseUrl: string;

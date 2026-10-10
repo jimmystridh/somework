@@ -4,7 +4,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { silent, type AgentProfile, type Log } from "@somework/agent-kit";
 import { ConfinementError, nativeFlavour, resolveInside } from "@somework/agent-kit/windows";
-import { handBackTarget, isDoneStatus, JiraError, previousAssignee, type Comment, type Issue, type JiraClient } from "./jira.ts";
+import { handBackTarget, isDoneStatus, isUnreachable, JiraError, previousAssignee, type Comment, type Issue, type JiraClient } from "./jira.ts";
 import type { QaJob, QaSession } from "./session.ts";
 import type { Verdict } from "./result.ts";
 
@@ -76,7 +76,11 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		} catch (error) {
 			if (error instanceof Refusal) return failure(`refused: ${error.message}`);
 			if (error instanceof ConfinementError) return failure(`refused: ${error.message}`);
-			if (error instanceof JiraError) return failure(`the ticket system answered with an error: ${error.message}`);
+			if (error instanceof JiraError) {
+				const current = options.session.job;
+				if (current && isUnreachable(error)) current.jiraUnreachable = { count: current.jiraUnreachable.count + 1, last: error.message.slice(0, 300) };
+				return failure(`the ticket system answered with an error: ${error.message}`);
+			}
 			throw error;
 		}
 	};
