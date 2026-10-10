@@ -6,7 +6,7 @@ import { after, afterEach, before, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { approvalPolicy, createHandler, Metrics, PiDurableRuntime } from "@somework/agent-kit";
 import { scriptedModels } from "@somework/agent-kit/providers/faux";
-import { chatInstructionRig, FakeHost, makeRemote } from "@somework/agent-kit/testing";
+import { FakeHost, jobRig, makeRemote } from "@somework/agent-kit/testing";
 import { fixerChat } from "../src/chat.ts";
 import { createFixerHooks } from "../src/hooks.ts";
 import { FIXER_APPROVAL_PATTERNS, profile } from "../src/profile.ts";
@@ -32,8 +32,8 @@ after(() => {
 const group = { id: 12, title: "Prototype pollution in lodash", type: "open_source", severity: "high", group_status: "new", how_to_fix: "Upgrade lodash to 4.17.21" };
 const issue = { id: 99, group_id: 12, status: "open", affected_package: "lodash", installed_version: "4.17.20", patched_versions: ["4.17.21"], code_repo_name: "Acme/Shop" };
 
-describe("a fix given as an instruction in chat, in a domain that has no task for it", () => {
-	it("opens the pull request, keeps the patch on the host, records the outcome and makes no task-bound call", async () => {
+describe("a fix run as a job, in a domain that has no task for it", () => {
+	it("opens the pull request, uploads the patch, records the outcome and makes no task-bound call", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "aikido-chat-job-"));
 		const workspaceRoot = join(dir, "workspaces");
 		const envFor = (cwd?: string) => new NodeExecutionEnv({ cwd: cwd ?? workspaceRoot });
@@ -44,17 +44,19 @@ describe("a fix given as an instruction in chat, in a domain that has no task fo
 		const runtime = new PiDurableRuntime({ storagePath: join(dir, "pi.sqlite"), models: fake.models, model: fake.model, env: envFor, policy: approvalPolicy([], FIXER_APPROVAL_PATTERNS, profile.toolApprovals), allowedTools: profile.allowedTools, extensions: hooks.extensions });
 		await runtime.start();
 		cleanups.push(() => runtime.close());
-		const chat = chatInstructionRig({ stateDir: dir });
+		const chat = jobRig({ stateDir: dir });
 		const host = new FakeHost();
-		const handler = createHandler({ runtime: hooks.wrapRuntime!(runtime), envFor, session: { env: envFor(), identity: { name: "Fixer", email: "fixer@test.invalid" }, mirrorDir: join(workspaceRoot, ".mirrors") }, host, workspaceRoot, client: chat.client, limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 }, metrics: new Metrics(), profile, hooks, source: "chat" });
+		const handler = createHandler({ runtime: hooks.wrapRuntime!(runtime), envFor, session: { env: envFor(), identity: { name: "Fixer", email: "fixer@test.invalid" }, mirrorDir: join(workspaceRoot, ".mirrors") }, host, workspaceRoot, client: chat.client, limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 }, metrics: new Metrics(), profile, hooks, source: "job" });
 		const roleChat = fixerChat({ settings, aikido, stateDir: dir });
-		const reply = await chat.responderFor(handler, roleChat.instructInput!, roleChat.describeResult).instruct("fix issue 12");
-		assert.match(reply, /^Done \(pr_opened\)/);
-		assert.match(reply, /Pull request: https:\/\/example.test\/pr\/agent\/aikido-12-/);
-		assert.match(reply, /Attachments were not uploaded to the domain/);
-		assert.match(reply, /chat-m1\.diff \(text\/x-diff/);
-		assert.match(reply, /\+patched/);
-		assert.deepEqual(chat.domain.calls, []);
+		const [fix] = roleChat.jobTools!;
+		const plan = (await fix!.plan({ issue: "12" })) as { capability: any; input: any; label: string };
+		const run = await chat.run(handler, plan, roleChat.describeResult);
+		assert.equal(run.entry.end?.kind, "completed");
+		assert.match(run.text, /^fix Aikido issue 12 \(job-[a-z0-9-]+\): done \(pr_opened\)/);
+		assert.match(run.text, /Pull request: https:\/\/example.test\/pr\/agent\/aikido-12-/);
+		assert.ok(chat.domain.uploaded.some((name) => name.endsWith(".diff")), "the patch went to the domain");
+		assert.ok(run.artifacts.length >= 1, "the result message carries it");
+		assert.ok(!chat.domain.calls.some((call) => /tasks\/job-|for job-/.test(call)), `no call is bound to the job's task: ${chat.domain.calls.join(", ")}`);
 		assert.equal(host.created.length, 1);
 		assert.match(await roleChat.context!(), /- issue 12: pr_opened at \S+, branch agent\/aikido-12-\w+, https:\/\/example.test\/pr\//, "the outcome is in the host ledger the chat reports from");
 	});

@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { askToolNames, instructToolNames, type ResultContext } from "@somework/agent-kit";
+import { type ResultContext } from "@somework/agent-kit";
 import { AikidoError } from "../src/aikido/client.ts";
 import { createAikidoLookupTools } from "../src/aikido/tool.ts";
 import { AttemptLedger } from "../src/attempts.ts";
@@ -32,16 +32,21 @@ const run = async (chat: ReturnType<typeof setup>["chat"], name: string, args: o
 	return (await tool.execute(args, {}, {})).content[0].text;
 };
 
-describe("the fixer in chat", () => {
-	it("answers questions with read, agent_status, fixer_status and aikido_lookup: nothing that writes, and not the task's own aikido_issue", () => {
+describe("the fixer in conversations", () => {
+	const tool = (chat: ReturnType<typeof setup>["chat"], name: string) => chat.jobTools!.find((candidate) => candidate.name === name)!;
+
+	it("reads with fixer_status and aikido_lookup next to the kit's tools: nothing that writes, and not the job's own aikido_issue", () => {
 		const { chat } = setup();
-		const tools = askToolNames(profile.chat, chat);
-		assert.deepEqual(tools, ["read", "agent_status", "fixer_status", "aikido_lookup"]);
-		assert.ok(!tools.some((name) => ["bash", "write", "edit", "aikido_issue"].includes(name)));
-		assert.deepEqual((chat.extension!.tools as any[]).map((tool) => tool.name).sort(), ["aikido_lookup", "fixer_status"]);
+		assert.deepEqual(chat.toolNames, ["fixer_status", "aikido_lookup"]);
+		assert.ok(!chat.toolNames!.some((name) => ["bash", "write", "edit", "aikido_issue"].includes(name)));
+		assert.deepEqual((chat.extension!.tools as any[]).map((candidate) => candidate.name).sort(), ["aikido_lookup", "fixer_status"]);
 	});
 
-	describe("an instruction about its own pull request", () => {
+	it("offers the two jobs as tools", () => {
+		assert.deepEqual(setup().chat.jobTools!.map((candidate) => candidate.name), ["fix_issue", "follow_up_pull_request"]);
+	});
+
+	describe("follow_up_pull_request", () => {
 		const opened = (ledger: AttemptLedger, taskId: string, groupId: string, number: number, at: string, clock: { now: Date }) => {
 			clock.now = new Date(at);
 			ledger.recordOutcome(taskId, { groupId, outcome: "pr_opened", branch: `agent/aikido-${groupId}-abc12345`, prUrl: `https://github.com/Acme/Shop/pull/${number}` });
@@ -53,90 +58,62 @@ describe("the fixer in chat", () => {
 			opened(ledger, "t2", "12", 42, "2026-10-06T09:00:00Z", s.clock);
 			return s;
 		};
-		const followUp = (number: number, groupId: string) => ({ capability: { id: "code.fix.followup", version: "1" }, input: { issue: { id: groupId }, repository: { url: REPO, ref: `agent/aikido-${groupId}-abc12345` }, followUp: { pullRequest: `https://github.com/Acme/Shop/pull/${number}`, branch: `agent/aikido-${groupId}-abc12345`, round: 1 } } });
+		const followUp = (number: number, groupId: string) => ({ capability: { id: "code.fix.followup", version: "1" }, input: { issue: { id: groupId }, repository: { url: REPO, ref: `agent/aikido-${groupId}-abc12345` }, followUp: { pullRequest: `https://github.com/Acme/Shop/pull/${number}`, branch: `agent/aikido-${groupId}-abc12345`, round: 1 } }, label: `follow up on pull request #${number}` });
 
-		it("follows up on the latest pull request it opened when none is named", () => {
+		it("follows up on the latest pull request it opened when none is named", async () => {
 			const { chat } = withPullRequests();
-			for (const text of ["go through the review comments on the last PR you created and fix the issues raised there", "follow up on your pull request", "handle the feedback"]) assert.deepEqual(chat.instructInput!(text), followUp(42, "12"), text);
+			assert.deepEqual(await tool(chat, "follow_up_pull_request").plan({}), followUp(42, "12"));
 		});
 
-		it("follows up on the one named by address, number or hash, when it is one of its own", () => {
+		it("follows up on the one named by address, number or hash, when it is one of its own", async () => {
 			const { chat } = withPullRequests();
-			assert.deepEqual(chat.instructInput!("check https://github.com/Acme/Shop/pull/41 for comments"), followUp(41, "11"));
-			assert.deepEqual(chat.instructInput!("follow up on PR 41"), followUp(41, "11"));
-			assert.deepEqual(chat.instructInput!("review feedback on #41"), followUp(41, "11"));
-			assert.match((chat.instructInput!("follow up on PR 99") as any).refuse, /#99 is not one of them/);
+			const plan = (pullRequest: string) => tool(chat, "follow_up_pull_request").plan({ pullRequest });
+			assert.deepEqual(await plan("https://github.com/Acme/Shop/pull/41"), followUp(41, "11"));
+			assert.deepEqual(await plan("41"), followUp(41, "11"));
+			assert.deepEqual(await plan("#41"), followUp(41, "11"));
+			assert.match(((await plan("99")) as any).refuse, /#99 is not one of them/);
+			assert.match(((await plan("the big one")) as any).refuse, /number or its address/);
 		});
 
-		it("takes a plain message that plainly asks for a follow-up, and leaves questions and unknown pull requests to the open tier", () => {
+		it("passes on what the asker said is wrong, as their own words, and not a bare request", async () => {
 			const { chat } = withPullRequests();
-			assert.deepEqual(chat.plainInstruct!("fix the feedback on PR 41"), followUp(41, "11"));
-			assert.deepEqual(chat.plainInstruct!("go through the review comments on your last PR"), followUp(42, "12"));
-			assert.equal(chat.plainInstruct!("what is the state of PR 41?"), undefined);
-			assert.equal(chat.plainInstruct!("fix the feedback on PR 5229"), undefined, "not one of its own");
-			assert.equal(chat.plainInstruct!("fix issue 1234"), undefined, "an issue fix needs the instruct: prefix");
-			assert.equal(setup().chat.plainInstruct!("fix the feedback on your last PR"), undefined, "no pull request on record");
-		});
-
-		it("passes on what the asker said is wrong, as their own words, and not a bare request", () => {
-			const { chat } = withPullRequests();
-			const planned = chat.plainInstruct!("fix the feedback on PR 41: CI fails because bun.lock is stale after the override, run bun install and commit it") as any;
+			const planned = (await tool(chat, "follow_up_pull_request").plan({ pullRequest: "41", hint: "CI fails because bun.lock is stale after the override, run bun install and commit it" })) as any;
 			assert.match(planned.input.hint, /bun\.lock is stale/);
-			assert.equal((chat.plainInstruct!("fix the feedback on PR 41") as any).input.hint, undefined);
+			assert.equal(((await tool(chat, "follow_up_pull_request").plan({ pullRequest: "41", hint: "please" })) as any).input.hint, undefined);
 		});
 
-		it("says so when it has no pull request on record", () => {
-			assert.match((setup().chat.instructInput!("check the comments on your last PR") as any).refuse, /no pull request of my own on record/);
+		it("says so when it has no pull request on record", async () => {
+			assert.match(((await tool(setup().chat, "follow_up_pull_request").plan({})) as any).refuse, /no pull request of my own on record/);
 		});
-
-		it("still treats a number that is not a pull request's as an Aikido issue to fix", () => {
-			const { chat } = withPullRequests();
-			assert.equal((chat.instructInput!("fix 1234 and open a pull request") as any).capability.id, "code.fix");
-			assert.equal((chat.instructInput!("fix issue 1234") as any).capability.id, "code.fix");
-			assert.equal((chat.instructInput!("fix #77") as any).capability.id, "code.fix");
-		});
-	});
-
-	it("takes instructions with the fixer's own tools, the same as for a task", () => {
-		assert.deepEqual(instructToolNames(profile.chat, profile.allowedTools), ["read", "write", "edit", "bash", "aikido_issue"]);
 	});
 
 	it("reads a checkout of the configured repository", () => {
 		assert.deepEqual(setup().chat.checkout!(), { repoUrl: REPO });
 	});
 
-	describe("instructions", () => {
-		it("becomes a code.fix task on the configured repository", () => {
+	describe("fix_issue", () => {
+		it("becomes a code.fix job on the configured repository", async () => {
 			const { chat } = setup();
-			assert.deepEqual(chat.instructInput!("fix issue 1234"), { capability: { id: "code.fix", version: "1" }, input: { issue: { id: "1234" }, repository: { url: REPO } } });
-			assert.deepEqual((chat.instructInput!("fix #77") as any).input.issue, { id: "77" });
-			assert.deepEqual((chat.instructInput!("42") as any).input.issue, { id: "42" });
+			assert.deepEqual(await tool(chat, "fix_issue").plan({ issue: "1234" }), { capability: { id: "code.fix", version: "1" }, input: { issue: { id: "1234" }, repository: { url: REPO } }, label: "fix Aikido issue 1234" });
+			assert.deepEqual(((await tool(chat, "fix_issue").plan({ issue: "#77" })) as any).input.issue, { id: "77" });
 		});
 
-		it("passes the rest of the sentence as a hint, which the role frames as the requester's", () => {
-			const planned = setup().chat.instructInput!("please fix aikido issue 1234, prefer the minimal bump") as any;
+		it("passes the hint on, which the role frames as the requester's", async () => {
+			const planned = (await tool(setup().chat, "fix_issue").plan({ issue: "1234", hint: "prefer the minimal bump" })) as any;
 			assert.equal(planned.input.issue.id, "1234");
 			assert.match(planned.input.hint, /prefer the minimal bump/);
-			assert.ok(!/1234/.test(planned.input.hint), planned.input.hint);
 		});
 
-		it("refuses no issue number and more than one", () => {
+		it("refuses anything that is not one whole issue number", async () => {
 			const { chat } = setup();
-			assert.match((chat.instructInput!("fix the security problems") as any).refuse, /exactly one Aikido issue/);
-			assert.match((chat.instructInput!("fix 12 and 13") as any).refuse, /exactly one Aikido issue/);
-			assert.deepEqual(Object.keys(chat.instructInput!("fix 12 12") as object), ["capability", "input"], "the same number twice is one issue");
+			for (const issue of ["", "the security problems", "12 and 13", "https://app.aikido.dev/queue/99", "v4.17.21"]) assert.match(((await tool(chat, "fix_issue").plan({ issue })) as any).refuse, /exactly one Aikido issue/, issue);
 		});
 
-		it("does not take a number from a URL, a path or a version as the issue", () => {
-			const { chat } = setup();
-			assert.deepEqual((chat.instructInput!("fix 55 and bump to v4.17.21 see https://app.aikido.dev/queue/99") as any).input.issue, { id: "55" });
-		});
-
-		it("only fixes the repository it is configured for", () => {
+		it("only fixes the repository it is configured for", async () => {
 			const { chat } = setup({ AIKIDO_ALLOWED_REPOSITORIES: `${REPO},https://github.com/Acme/Other.git` });
-			assert.equal((chat.instructInput!("repo: https://github.com/acme/other\nfix 5") as any).input.repository.url, "https://github.com/Acme/Other.git");
-			assert.match((chat.instructInput!("repo: https://github.com/evil/repo\nfix 5") as any).refuse, /configured for/);
-			assert.match((setup().chat.instructInput!("repo: https://github.com/Acme/Other\nfix 5") as any).refuse, /configured for/);
+			assert.equal(((await tool(chat, "fix_issue").plan({ issue: "5", repository: "https://github.com/acme/other" })) as any).input.repository.url, "https://github.com/Acme/Other.git");
+			assert.match(((await tool(chat, "fix_issue").plan({ issue: "5", repository: "https://github.com/evil/repo" })) as any).refuse, /configured for/);
+			assert.match(((await tool(setup().chat, "fix_issue").plan({ issue: "5", repository: "https://github.com/Acme/Other" })) as any).refuse, /configured for/);
 		});
 	});
 
