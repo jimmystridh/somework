@@ -49,7 +49,7 @@ export interface Comment {
 
 export interface History {
 	created?: string;
-	author?: { displayName?: string; name?: string };
+	author?: { displayName?: string; name?: string; key?: string };
 	items: { field: string; fromString?: string | null; toString?: string | null; from?: string | null; to?: string | null }[];
 }
 
@@ -171,6 +171,19 @@ export class JiraClient {
 		await this.#json("POST", `/rest/api/2/issue/${encodeURIComponent(key)}/transitions`, { json: { transition: { id } } });
 	}
 
+	/** A user by the key or name the changelog recorded: the user name to assign and to mention, and whether the account is active. */
+	async user(ref: string): Promise<{ name: string; key?: string; displayName?: string; active: boolean } | undefined> {
+		for (const parameter of ["key", "username"]) {
+			try {
+				const user = await this.#json<{ name?: string; key?: string; displayName?: string; active?: boolean }>("GET", `/rest/api/2/user?${parameter}=${encodeURIComponent(ref)}`);
+				if (user?.name) return { name: user.name, ...(user.key ? { key: user.key } : {}), ...(user.displayName ? { displayName: user.displayName } : {}), active: user.active !== false };
+			} catch (error) {
+				if (!(error instanceof JiraError) || (error.status !== 404 && error.status !== 400)) throw error;
+			}
+		}
+		return undefined;
+	}
+
 	/** `user` is what the changelog recorded: a user key (`JIRAUSER123`) or a user name. */
 	async assign(key: string, user: string): Promise<void> {
 		await this.#json("PUT", `/rest/api/2/issue/${encodeURIComponent(key)}/assignee`, { json: /^JIRAUSER[0-9]+$/.test(user) ? { key: user } : { name: user } });
@@ -205,6 +218,28 @@ export function previousAssignee(histories: readonly History[] | undefined): { n
 			// `from` is the user key/name the ticket had before this change; empty when it had none
 			if (item.from) return { name: item.from, ...(item.fromString ? { displayName: item.fromString } : {}) };
 		}
+	}
+	return undefined;
+}
+
+export interface HandBackTarget {
+	/** The user key or name as the changelog recorded it. */
+	ref: string;
+	displayName?: string;
+	/** How the agent knows this person is the one to give the ticket back to. */
+	why: "was assigned to it before it went to testing" | "moved it to testing";
+}
+
+/** The person a rejected ticket goes back to: whoever had it before it became unassigned, else whoever moved it into the testing status. */
+export function handBackTarget(histories: readonly History[] | undefined, testStatus: string): HandBackTarget | undefined {
+	const before = previousAssignee(histories);
+	if (before) return { ref: before.name, ...(before.displayName ? { displayName: before.displayName } : {}), why: "was assigned to it before it went to testing" };
+	const ordered = [...(histories ?? [])].sort((a, b) => String(b.created ?? "").localeCompare(String(a.created ?? "")));
+	for (const history of ordered) {
+		if (!history.items.some((item) => item.field === "status" && String(item.toString ?? "").toLowerCase() === testStatus.toLowerCase())) continue;
+		const author = history.author;
+		const ref = author?.name ?? author?.key;
+		if (ref) return { ref, ...(author?.displayName ? { displayName: author.displayName } : {}), why: "moved it to testing" };
 	}
 	return undefined;
 }

@@ -9,7 +9,8 @@ import type { BrowserBackend } from "./browser/backend.ts";
 import { BrowserDaemon } from "./browser/daemon.ts";
 import { buildBrief, evidenceDirFor, wrapperFor } from "./prompt.ts";
 import { QaRuntime } from "./qa-runtime.ts";
-import { pullRequestInText, saysNotMerged } from "./revision.ts";
+import type { PullFinder } from "./github-pulls.ts";
+import { chooseRevision, pullRequestInText, pullRequestsInText, saysNotMerged } from "./revision.ts";
 import type { QaReport } from "./result.ts";
 import type { QaSession } from "./session.ts";
 
@@ -31,6 +32,8 @@ export interface QaHooksOptions {
 	hasTicketSystem: boolean;
 	/** The ticket's description and comments, oldest first, to find the pull request that holds the fix. */
 	ticketText?: (ticket: string) => Promise<string>;
+	/** The repository's pull requests, to tell which ones belong to the ticket (without it the last pull request the ticket's text names is taken). */
+	pulls?: PullFinder;
 	verifiedLabel: string;
 	client: Pick<SomeWorkClient, "uploadArtifact">;
 	log?: Log;
@@ -107,6 +110,25 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 		} catch (error) {
 			log("warn", "ticket_text_failed", { ticket: input.ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
 			return input;
+		}
+		const ticket = input.ticket.trim();
+		const repoUrl = input.repository?.url;
+		const numbers = pullRequestsInText(text).slice(0, 8);
+		if (options.pulls && typeof repoUrl === "string") {
+			try {
+				const [found, mentioned] = await Promise.all([options.pulls.forTicket(repoUrl, ticket), Promise.all(numbers.map((number) => options.pulls!.get(repoUrl, number).catch(() => undefined)))]);
+				const choice = chooseRevision(ticket, found, mentioned.filter((pull): pull is NonNullable<typeof pull> => pull !== undefined));
+				if (choice && "none" in choice) {
+					log("info", "revision_none", { ticket, named: numbers, found: found.map((pull) => pull.number) });
+					return { ...input, [UNTESTABLE_KEY]: choice.none };
+				}
+				if (choice) {
+					log("info", "revision_from_ticket", { ticket, pullRequest: choice.pullRequest, source: choice.source, ref: choice.ref });
+					return { ...input, repository: { ...input.repository, ref: choice.ref }, ...(choice.pullRequest ? { testedPullRequest: choice.pullRequest } : {}), revisionNote: choice.note, revisionSource: choice.source };
+				}
+			} catch (error) {
+				log("warn", "pull_requests_failed", { ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
+			}
 		}
 		const pullRequest = pullRequestInText(text);
 		if (pullRequest) {
@@ -202,7 +224,7 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 				result: {
 					verdict: report.verdict,
 					ticket,
-					revision: { frontendSha: context.baseSha, ...(active?.backendRevision ?? report.backendRevision ? { backendRevision: active?.backendRevision ?? report.backendRevision } : {}) },
+					revision: { frontendSha: context.baseSha, ...(active?.backendRevision ?? report.backendRevision ? { backendRevision: active?.backendRevision ?? report.backendRevision } : {}), ...(typeof context.input?.revisionNote === "string" ? { note: context.input.revisionNote } : {}) },
 					acceptanceChecks: report.acceptanceChecks,
 					fixtures: report.fixtures,
 					evidence: evidence.map(({ artifactId, kind, filename }) => ({ artifactId, kind, filename })),

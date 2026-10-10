@@ -231,9 +231,46 @@ describe("the hand-back of a ticket that is not fixed", () => {
 	it("only comments when no previous assignee is known, and leaves the ticket where it is", async () => {
 		jira.issues.get("QA-1")!.histories = [];
 		await run("qa_record_verdict", { verdict: "not_fixed" });
-		assert.match((await handBack()).text, /no previous assignee.*stays in "Test" unassigned/);
+		assert.match((await handBack()).text, /nobody could be found.*stays in "Test" unassigned/);
 		const issue = jira.issues.get("QA-1")!;
 		assert.deepEqual([issue.status.name, issue.assignee, issue.comments.length], ["Test", null, 1]);
+	});
+
+	it("gives the ticket to the one who moved it to testing when nobody was assigned before, and mentions them in the comment", async () => {
+		jira.issues.get("QA-1")!.histories = [{ created: "2026-10-02T09:00:00.000+0200", author: { displayName: "Mia Mover", name: "mia" } as never, items: [{ field: "status", fromString: "In Code Review", toString: "Test" }] }];
+		await run("qa_record_verdict", { verdict: "not_fixed" });
+		const result = await handBack();
+		assert.match(result.text, /mentioning Mia Mover.*moved to "In Progress"; reassigned to Mia Mover/);
+		const issue = jira.issues.get("QA-1")!;
+		assert.equal(issue.assignee?.name, "mia");
+		assert.match(issue.comments[0]!.body, /\[~mia\] the ticket is handed back to you \(you moved it to testing\)/);
+	});
+
+	it("looks the person up by the recorded key and assigns the user name Jira knows, mentioning that name", async () => {
+		jira.users.set("JIRAUSER11800", { name: "jonas.s", key: "JIRAUSER11800", displayName: "Jonas S", active: true });
+		jira.issues.get("QA-1")!.histories = [{ created: "2026-10-01T10:00:00.000+0200", author: { displayName: "Dana Dev" }, items: [{ field: "assignee", from: "JIRAUSER11800", fromString: "Jonas S", to: null, toString: null }] }];
+		await run("qa_record_verdict", { verdict: "not_fixed" });
+		assert.match((await handBack()).text, /reassigned to Jonas S/);
+		assert.equal(jira.issues.get("QA-1")!.assignee?.name, "jonas.s");
+		assert.match(jira.issues.get("QA-1")!.comments[0]!.body, /\[~jonas\.s\] the ticket is handed back to you \(it was yours before testing\)/);
+	});
+
+	it("says so when Jira accepted the assignment but did not apply it, and the comment still names the person", async () => {
+		jira.ignoreAssign = true;
+		await run("qa_record_verdict", { verdict: "not_fixed" });
+		const text = (await handBack()).text;
+		jira.ignoreAssign = false;
+		assert.match(text, /could NOT assign it to Dana Dev \(Jira did not apply it\): the comment mentions them instead/);
+		assert.ok(!/reassigned to/.test(text));
+		assert.equal(jira.issues.get("QA-1")!.assignee, null);
+		assert.match(jira.issues.get("QA-1")!.comments[0]!.body, /\[~dana\]/);
+	});
+
+	it("assigns the ticket when the workflow left it with the agent's own account", async () => {
+		jira.transitions = [{ ...DEFAULT_TRANSITIONS[0]!, assignTo: { name: "qa-bot", displayName: "QA Bot" } }, DEFAULT_TRANSITIONS[1]!];
+		await run("qa_record_verdict", { verdict: "not_fixed" });
+		assert.match((await handBack()).text, /reassigned to Dana Dev/);
+		assert.equal(jira.issues.get("QA-1")!.assignee?.name, "dana");
 	});
 
 	it("never moves a ticket to a done status, even if the workflow names it like the in-progress one", async () => {

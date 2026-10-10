@@ -45,6 +45,10 @@ export class FakeJira {
 	readonly issues = new Map<string, FakeIssue>();
 	readonly requests: { method: string; path: string; body?: string }[] = [];
 	transitions: Transition[] = DEFAULT_TRANSITIONS;
+	/** Users by the key or name the changelog records. */
+	readonly users = new Map<string, { name: string; key: string; displayName: string; active: boolean }>();
+	/** Accept an assignment (204) without applying it. */
+	ignoreAssign = false;
 	/** Called before each request is handled: lets a test change the issue between two calls of the tool. */
 	beforeRequest?: (method: string, path: string) => void;
 	url = "";
@@ -89,6 +93,11 @@ export class FakeJira {
 			if (req.headers.authorization !== `Bearer ${PAT}`) return reply(401, { errorMessages: ["bad token"] });
 			this.beforeRequest?.(req.method!, url.pathname);
 			const parts = url.pathname.split("/").filter(Boolean); // rest api 2 issue KEY ...
+			if (url.pathname === "/rest/api/2/user") {
+				const ref = url.searchParams.get("key") ?? url.searchParams.get("username") ?? "";
+				const user = this.users.get(ref);
+				return user ? reply(200, user) : reply(404, { errorMessages: ["no such user"] });
+			}
 			if (url.pathname === "/rest/api/2/myself") return reply(200, { name: "qa-bot", displayName: "QA Bot" });
 			if (url.pathname === "/rest/api/2/search") {
 				const issues = [...this.issues.values()].map((issue) => this.#view(issue, false));
@@ -123,6 +132,7 @@ export class FakeJira {
 			}
 			if (sub === "assignee" && req.method === "PUT") {
 				const who = json();
+				if (this.ignoreAssign) return reply(204);
 				issue.assignee = { name: who.name ?? who.key, displayName: who.name ?? who.key };
 				return reply(204);
 			}

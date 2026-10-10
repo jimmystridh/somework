@@ -47,6 +47,10 @@ claim (SDK worker) -> hooks.prepareInput: ticket-key gate (a foreign key is `ski
   -> hooks.afterRun: stop the browser, run the profile's stop command, sweep the account's leftover processes
 ```
 
+**Which revision.** A job without an explicit `ref` verifies the revision that holds *this ticket's* change. With the repository's pull requests (GitHub REST, the repository's token) the agent looks for pull requests that name the ticket key in title, description, branch or comments and takes the newest open one; a merged one means its target branch, because the pull request's own head is a stale snapshot. A pull request the ticket's text only names counts when it names no other ticket; one written for another ticket (the backend change a front-end ticket depends on) is never taken, and a ticket whose only named pull request is such a one ends as `blocked` without running the model ("there is no revision of its own change to verify"). Without access to GitHub the last pull request the text names is used, as before. The reason is shown in the brief and in the result (`revision.note`).
+
+**Giving a ticket back.** A `not_fixed` hand-back goes to whoever was assigned before the ticket became unassigned, else to whoever moved it to the testing status (from the changelog). The person is looked up, mentioned in the comment (`[~user]`), assigned, and the assignment is read back: if Jira accepted it without applying it, the result says so instead of claiming it, and the mention is what reaches them. With nobody to give it to, the agent only comments and leaves the ticket in Test.
+
 No commit, no push, no pull request: the profile turns the git workflow off, and `git commit|add|reset|clean|...` in a shell command
 waits for a human on top of the Windows rules.
 

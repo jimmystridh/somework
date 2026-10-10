@@ -58,7 +58,7 @@ export function describeQaResult(result: unknown): string | undefined {
 	if (typeof r.verdict !== "string") return undefined;
 	const lines = [`${r.ticket ? `${r.ticket}: ` : ""}${VERDICT_WORDS[r.verdict] ?? r.verdict}`];
 	const revision = [r.revision?.frontendSha ? `front end ${String(r.revision.frontendSha).slice(0, 12)}` : "", r.revision?.backendRevision ? `back end ${squeeze(r.revision.backendRevision, 40)}` : ""].filter(Boolean);
-	if (revision.length > 0) lines.push(`Revision tested: ${revision.join(" · ")}`);
+	if (revision.length > 0) lines.push(`Revision tested: ${revision.join(" · ")}${r.revision?.note ? ` — ${squeeze(r.revision.note, 160)}` : ""}`);
 	if (typeof r.notes === "string" && r.notes.trim() !== "") lines.push("", `Findings: ${squeeze(r.notes, 1500)}`);
 	const checks = Array.isArray(r.acceptanceChecks) ? r.acceptanceChecks : [];
 	if (checks.length > 0) {

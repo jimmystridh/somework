@@ -3,6 +3,7 @@ import { jsonLogger, runAgentService, type RoleHooks, type ServiceContext } from
 import { windowsExecutionHooks } from "@somework/agent-kit/windows";
 import { loadAppProfiles, type AppEnv, type AppProfile } from "./app.ts";
 import type { BrowserBackend } from "./browser/backend.ts";
+import { GitHubPullFinder } from "./github-pulls.ts";
 import { qaChat } from "./chat.ts";
 import { createQaHooks } from "./hooks.ts";
 import { JiraClient } from "./jira.ts";
@@ -33,6 +34,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 		cliPath,
 		extensions: tools ? [tools.extension] : undefined,
 		hasTicketSystem: Boolean(tools),
+		pulls: new GitHubPullFinder({ token: (owner) => context.ownerTokens?.[owner.toLowerCase()] ?? context.gitToken }),
 		...(jiraClient ? { ticketText: async (ticket: string) => [(await jiraClient.getIssue(ticket)).fields.description ?? "", ...(await jiraClient.comments(ticket)).map((comment) => comment.body)].join("\n\n") } : {}),
 		verifiedLabel: settings.jira?.verifiedLabel ?? "AgentTested",
 		client: context.client,

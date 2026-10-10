@@ -4,12 +4,12 @@ import { Type } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import { silent, type AgentProfile, type Log } from "@somework/agent-kit";
 import { ConfinementError, nativeFlavour, resolveInside } from "@somework/agent-kit/windows";
-import { isDoneStatus, JiraError, previousAssignee, type Comment, type Issue, type JiraClient } from "./jira.ts";
+import { handBackTarget, isDoneStatus, JiraError, previousAssignee, type Comment, type Issue, type JiraClient } from "./jira.ts";
 import type { QaJob, QaSession } from "./session.ts";
 import type { Verdict } from "./result.ts";
 
 export interface JiraToolsOptions {
-	jira: Pick<JiraClient, "getIssue" | "search" | "comments" | "addComment" | "addLabel" | "removeLabel" | "transitions" | "transition" | "assign" | "attach">;
+	jira: Pick<JiraClient, "getIssue" | "search" | "comments" | "addComment" | "addLabel" | "removeLabel" | "transitions" | "transition" | "assign" | "attach" | "myself" | "user">;
 	session: QaSession;
 	/** Ticket keys the agent handles. Every key a tool touches must match; writes may only touch the job's own ticket. */
 	pattern: RegExp;
@@ -95,6 +95,22 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		].join("\n");
 	};
 
+	/** Assigns the ticket and reads it back, trying the user name Jira knows and then the recorded key: an assignment Jira accepted but did not apply is reported as such, never as done. */
+	async function assignAndCheck(ticket: string, ref: string, name: string | undefined, displayName: string | undefined): Promise<string> {
+		const who = displayName ?? name ?? ref;
+		for (const candidate of [...new Set([name, ref].filter((value): value is string => Boolean(value)))]) {
+			try {
+				await options.jira.assign(ticket, candidate);
+			} catch (error) {
+				log("warn", "jira_assign_failed", { ticket, error: String(error instanceof Error ? error.message : error).slice(0, 200) });
+				continue;
+			}
+			const holder = (await options.jira.getIssue(ticket)).fields.assignee;
+			if (holder && (holder.name === candidate || holder.name === name || holder.key === candidate || holder.displayName === displayName)) return `reassigned to ${who}`;
+		}
+		return `could NOT assign it to ${who} (Jira did not apply it): the comment mentions them instead`;
+	}
+
 	/** The developer who gets the ticket back needs to see what the agent saw: up to three screenshots and the finished video of this job go to the ticket first. */
 	async function attachHandBackEvidence(current: QaJob): Promise<string[]> {
 		const attached: string[] = [];
@@ -162,10 +178,11 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 					const histories = issue.changelog?.histories ?? [];
 					const lines = [...histories]
 						.sort((a, b) => String(b.created ?? "").localeCompare(String(a.created ?? "")))
-						.flatMap((history) => history.items.filter((item) => item.field === "assignee" || item.field === "status").map((item) => `${clip(history.created, 25)} ${item.field}: ${item.fromString ?? "(none)"} -> ${item.toString ?? "(none)"}`))
+						.flatMap((history) => history.items.filter((item) => item.field === "assignee" || item.field === "status").map((item) => `${clip(history.created, 25)} ${item.field}: ${item.fromString ?? "(none)"} -> ${item.toString ?? "(none)"}${history.author ? ` (by ${clip(history.author.displayName ?? history.author.name, 40)})` : ""}`))
 						.slice(0, 40);
 					const before = previousAssignee(histories);
-					return text(`${lines.join("\n") || "(no assignee or status changes)"}\nprevious assignee: ${before ? (before.displayName ?? before.name) : "unknown"}`);
+					const target = handBackTarget(histories, options.testStatus);
+					return text(`${lines.join("\n") || "(no assignee or status changes)"}\nprevious assignee: ${before ? (before.displayName ?? before.name) : "unknown"}\nhand-back goes to: ${target ? `${target.displayName ?? target.ref} (${target.why})` : "nobody could be found"}`);
 				});
 			},
 		}),
@@ -261,7 +278,7 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_transition_to_in_progress_and_reassign",
-			description: `The hand-back for a ticket that is NOT fixed (recorded verdict \`not_fixed\`): attaches your screenshots and finished video to the ticket, posts your comment, removes a stale ${options.verifiedLabel} label, moves the ticket to "${options.inProgressStatus}" and gives it back to whoever was assigned before it became unassigned (from its history). If no previous assignee can be found it only comments and leaves the ticket where it is. It can never move a ticket to a done status. May wait for the requester's approval.`,
+			description: `The hand-back for a ticket that is NOT fixed (recorded verdict \`not_fixed\`): attaches your screenshots and finished video to the ticket, posts your comment, removes a stale ${options.verifiedLabel} label, moves the ticket to "${options.inProgressStatus}" and gives it back to whoever was assigned before it became unassigned (from its history), else to whoever moved it to the testing status; that person is mentioned in the comment, and the assignment is read back and reported as it is (if Jira did not apply it, the mention is what reaches them). If nobody can be found it only comments and leaves the ticket where it is. It can never move a ticket to a done status. May wait for the requester's approval.`,
 			parameters: Type.Object({ comment: Type.String({ minLength: 1, maxLength: 8000 }) }),
 			async execute(args: { comment: string }) {
 				return wrap(async () => {
@@ -269,31 +286,35 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 					if (current.verdict !== "not_fixed") throw new Refusal("the hand-back is only for a recorded verdict of not_fixed");
 					const failureShots = listDir(join(current.evidenceDir, "screenshots")).filter((name) => /\.png$/i.test(name));
 					if (failureShots.length === 0) throw new Refusal("a hand-back needs a screenshot of the failure in the running application (`qa screenshot <name>`). Tests you ran yourself are not a basis: they can fail in this environment for reasons of their own and the repository's CI covers them. If the acceptance criteria cannot be observed in the browser, the result is blocked (not verifiable here), not not_fixed");
-					const before = previousAssignee(issue.changelog?.histories);
+					const target = handBackTarget(issue.changelog?.histories, options.testStatus);
 					const steps: string[] = [];
+					const me = await options.jira.myself().catch(() => undefined);
+					// the person is looked up by what the changelog recorded: the user name is what an assignment and a mention need
+					const person = target && target.ref !== me?.name ? await options.jira.user(target.ref).catch(() => undefined) : undefined;
+					const mention = target && target.ref !== me?.name ? `[~${person?.name ?? target.ref}]` : undefined;
 					const attached = await attachHandBackEvidence(current);
-					const comment = attached.length > 0 ? `${args.comment}\n\nEvidence attached to this ticket: ${attached.join(", ")}.` : args.comment;
-					const posted = await options.jira.addComment(current.ticket, comment);
+					const note = [args.comment, attached.length > 0 ? `Evidence attached to this ticket: ${attached.join(", ")}.` : "", mention ? `${mention} the ticket is handed back to you (${target!.why === "moved it to testing" ? "you moved it to testing" : "it was yours before testing"}); the verification found it not fixed.` : ""].filter(Boolean).join("\n\n");
+					const posted = await options.jira.addComment(current.ticket, note);
 					current.jira.commented = true;
-					steps.push(attached.length > 0 ? `attached ${attached.join(", ")}` : "no evidence files to attach", `commented (${posted.id})`);
+					steps.push(attached.length > 0 ? `attached ${attached.join(", ")}` : "no evidence files to attach", `commented (${posted.id})${mention ? `, mentioning ${target!.displayName ?? target!.ref}` : ""}`);
 					if ((issue.fields.labels ?? []).includes(options.verifiedLabel)) {
 						await options.jira.removeLabel(current.ticket, options.verifiedLabel);
 						steps.push(`removed ${options.verifiedLabel}`);
 					}
-					if (!before) return text(`${steps.join("; ")}; no previous assignee could be found in the history, so the ticket stays in "${options.testStatus}" unassigned`);
+					if (!target || target.ref === me?.name) return text(`${steps.join("; ")}; nobody could be found to give the ticket back to (not assigned before testing, and the one who moved it to testing is not known), so the ticket stays in "${options.testStatus}" unassigned`);
 					const transitions = await options.jira.transitions(current.ticket);
-					const target = transitions.find((t) => t.to.name === options.inProgressStatus);
-					if (!target) return text(`${steps.join("; ")}; no transition to "${options.inProgressStatus}" is available, so the ticket stays where it is`);
-					if (isDoneStatus(target.to)) throw new Refusal(`"${options.inProgressStatus}" is a done status in this workflow: this agent never moves a ticket there`);
-					await options.jira.transition(current.ticket, target.id);
+					const move = transitions.find((t) => t.to.name === options.inProgressStatus);
+					if (!move) return text(`${steps.join("; ")}; no transition to "${options.inProgressStatus}" is available, so the ticket stays where it is`);
+					if (isDoneStatus(move.to)) throw new Refusal(`"${options.inProgressStatus}" is a done status in this workflow: this agent never moves a ticket there`);
+					await options.jira.transition(current.ticket, move.id);
 					current.jira.transitioned = true;
 					steps.push(`moved to "${options.inProgressStatus}"`);
 					const after = await options.jira.getIssue(current.ticket);
-					if (after.fields.assignee) {
-						steps.push(`left the assignment alone (it is now ${after.fields.assignee.displayName ?? after.fields.assignee.name})`);
+					const holder = after.fields.assignee;
+					if (holder && holder.name !== me?.name) {
+						steps.push(`left the assignment alone (it is now ${holder.displayName ?? holder.name})`);
 					} else {
-						await options.jira.assign(current.ticket, before.name);
-						steps.push(`reassigned to ${before.displayName ?? before.name}`);
+						steps.push(await assignAndCheck(current.ticket, target.ref, person?.name, person?.displayName ?? target.displayName));
 					}
 					log("info", "jira_write", { taskId: current.taskId, action: "hand_back" });
 					return text(steps.join("; "));
