@@ -9,7 +9,7 @@ const summary = (changes: ReturnType<typeof plan>) => changes.changes.map((chang
 
 describe("plan", () => {
 	it("creates what is missing, leaves what matches and deletes what no file declares", () => {
-		const live = [...asLive([rules[0]!]), view("old", { owner: "automation/old", selector: "x.y.z", wake: true })];
+		const live = [...asLive([rules[0]!]), view("old", { owner: "agent/old", selector: "x.y.z", wake: true })];
 		const result = plan(rules, live);
 		assert.deepEqual(summary(result), ["unchanged a", "create b", "delete old"]);
 		assert.equal(result.counts.create, 1);
@@ -22,28 +22,29 @@ describe("plan", () => {
 	});
 
 	it("compares after filling the domain's defaults, so a live rule with defaults is unchanged", () => {
-		const live = asLive(rules).map((rule) => ({ ...rule, description: rule.description, reaction: { ...rule.reaction!, maxDepth: 3, maxFiringsPerHour: 30, capability: { ...rule.reaction!.capability, version: String(rule.reaction!.capability.version) } } }));
-		assert.equal(hasChanges(plan(rules, live)), false);
-		assert.deepEqual(comparable(rules[0]!.rule), comparable({ ...rules[0]!.rule, reaction: { ...rules[0]!.rule.reaction!, maxDepth: 3, maxFiringsPerHour: 30 } }));
+		const bare = parse({ "a.yaml": "name: a\nowner: agent/x\nselector: x.y.z\nwake: true\n" });
+		const live = asLive(bare).map((rule) => ({ ...rule, description: "", where: [] }));
+		assert.equal(hasChanges(plan(bare, live)), false);
+		assert.deepEqual(comparable(bare[0]!.rule), { description: "", owner: "agent/x", selector: "x.y.z", where: [], wake: true });
 	});
 
-	it("ignores fields the domain adds and key order inside the input", () => {
-		const live = asLive(rules).map((rule) => ({ ...rule, createdAt: "x", counters: { ...rule.counters, fired: 9 }, reaction: { ...rule.reaction!, requireApproval: "auto", input: Object.fromEntries(Object.entries(rule.reaction!.input).reverse()) } }));
+	it("ignores fields the domain adds", () => {
+		const live = asLive(rules).map((rule) => ({ ...rule, createdAt: "x", updatedAt: "y", lastFiredAt: "z", counters: { fired: 9 } }));
 		assert.equal(hasChanges(plan(rules, live as never)), false);
 	});
 
 	it("replaces a changed rule and says which fields differ", () => {
-		const changed = parse(declared("a", (yaml) => yaml.replace("selector: github.pull_request.opened", "selector: github.pull_request.reopened").replace("  budget:\n    maxTokens: 200000", "  budget:\n    maxTokens: 100000")));
+		const changed = parse(declared("a", (yaml) => yaml.replace("selector: github.pull_request.opened", "selector: github.pull_request.reopened").replace("equals: false", "equals: true")));
 		const result = plan(changed, asLive(parse(declared("a"))));
 		assert.deepEqual(summary(result), ["replace a"]);
 		assert.ok(result.changes[0]!.differences.includes('selector: "github.pull_request.opened" → "github.pull_request.reopened"'));
-		assert.ok(result.changes[0]!.differences.some((line) => line.startsWith("reaction.budget.maxTokens")));
+		assert.ok(result.changes[0]!.differences.includes("where.0.equals: false → true") || result.changes[0]!.differences.some((line) => line.startsWith("where")));
 	});
 
 	it("keeps the domain's pause state when the file says nothing about status", () => {
 		const paused = asLive(rules, { status: "paused" });
 		assert.equal(hasChanges(plan(rules, paused)), false);
-		const changed = parse(declared("a", (yaml) => yaml.replace("wake: false", "wake: true")));
+		const changed = parse(declared("a", (yaml) => yaml.replace("description: Wake the reviewer for every opened pull request.", "description: Reviewer wake")));
 		const replace = plan(changed, asLive(parse(declared("a")), { status: "paused" })).changes[0]!;
 		assert.equal(replace.action, "replace");
 		assert.equal(replace.body!.status, "paused");
@@ -61,12 +62,12 @@ describe("plan", () => {
 	});
 
 	it("renders a markdown comment with a marker, a table and the differences", () => {
-		const changed = parse(declared("a", (yaml) => yaml.replace("wake: false", "wake: true")));
+		const changed = parse(declared("a", (yaml) => yaml.replace("description: Wake the reviewer for every opened pull request.", "description: Reviewer wake")));
 		const markdown = toMarkdown(plan(changed, [...asLive(parse(declared("a"))), view("old", { owner: "agent/x", selector: "x.y.z", wake: true })]));
 		assert.ok(markdown.startsWith("<!-- somework-rules-plan -->"));
 		assert.match(markdown, /\| ✏️ \| `a` \| replace \|/);
-		assert.match(markdown, /\| 🗑️ \| `old` \| delete \(active, fired 0 times\) \|/);
-		assert.match(markdown, /wake: false → true/);
+		assert.match(markdown, /\| 🗑️ \| `old` \| delete \(active\) \|/);
+		assert.match(markdown, /description: "Wake the reviewer for every opened pull request\." → "Reviewer wake"/);
 		assert.match(markdown, /1 rule\(s\) exist in the domain but no file declares them/);
 		assert.match(toMarkdown(plan(rules, asLive(rules))), /No changes: the 2 declared rule\(s\) match the domain\./);
 		assert.match(toMarkdown(plan(rules, []), { dryRun: true }), /Dry run: nothing was changed/);

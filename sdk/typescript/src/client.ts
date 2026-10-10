@@ -29,13 +29,6 @@ export class SomeWorkError extends Error {
 	}
 }
 
-export interface Failure {
-	code: string;
-	message: string;
-	retryable: boolean;
-	details?: unknown;
-}
-
 export interface ClientOptions {
 	baseUrl: string;
 	identity: Identity;
@@ -160,7 +153,6 @@ export class SomeWorkClient {
 			sizeBytes: bytes.length,
 			sha256: createHash("sha256").update(bytes).digest("hex"),
 			classification: options.classification ?? "internal",
-			sourceTaskId: options.sourceTaskId,
 		});
 		const parts: { partNumber: number; etag: string }[] = [];
 		const put = async (url: string, body: Buffer, headers: Record<string, string> = {}) => {
@@ -191,39 +183,12 @@ export class SomeWorkClient {
 		return response.bytes;
 	}
 
-	// ---- tasks (requester side) -------------------------------------------------------------------------------------
-	/** Answer a task that is waiting in `input_required`. */
-	provideInput(taskId: string, data: unknown): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/input`, { data });
-	}
-
+	// ---- conversations ----------------------------------------------------------------------------------------------
 	conversationMessages(conversationId: string, limit = 200): Promise<any> {
 		return this.get(`/v1/conversations/${segment(conversationId)}/messages?limit=${limit}`);
 	}
 
-	submitTask(request: unknown, idempotencyKey?: string): Promise<any> {
-		return this.raw("POST", "/v1/tasks", { body: request, idempotencyKey });
-	}
-
-	getTask(taskId: string): Promise<any> {
-		return this.get(`/v1/tasks/${segment(taskId)}`);
-	}
-
-	cancelTask(taskId: string, reason?: string): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/cancel`, { reason });
-	}
-
-	/** Polls until the task is terminal or the timeout elapses. */
-	async waitTerminal(taskId: string, timeoutMs: number): Promise<any> {
-		const deadline = Date.now() + timeoutMs;
-		for (;;) {
-			const task = await this.getTask(taskId);
-			if (TERMINAL_STATES.has(task.state) || Date.now() >= deadline) return task;
-			await sleep(100);
-		}
-	}
-
-	// ---- tasks (worker side) ----------------------------------------------------------------------------------------
+	// ---- wakes ------------------------------------------------------------------------------------------------------
 	/** What the domain offers this principal for push wake-ups (`nats` block, absent when only HTTP is available). */
 	connection(): Promise<any> {
 		return this.get("/v1/connection");
@@ -238,39 +203,7 @@ export class SomeWorkClient {
 	ackEvents(cursor: number): Promise<any> {
 		return this.post("/v1/events/ack", { cursor });
 	}
-
-	/** Queued tasks this agent may claim. `waitSeconds` holds an empty lookup open on the server; the SDK's own loops always pass 0. */
-	async nextTasks(waitSeconds = 0, signal?: AbortSignal): Promise<{ taskId: string; revision: number; capabilityId: string; capabilityVersion: string; attempt: number }[]> {
-		const response = await this.get(`/v1/tasks/next?wait=${waitSeconds}`, { signal, timeoutMs: (waitSeconds + 30) * 1000 });
-		return response.tasks ?? [];
-	}
-
-	claimTask(taskId: string, leaseSeconds?: number): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/claim`, { leaseSeconds });
-	}
-
-	heartbeatTask(taskId: string, fencingToken: number, leaseSeconds?: number): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/heartbeat`, { fencingToken, leaseSeconds });
-	}
-
-	progressTask(taskId: string, body: Record<string, unknown>): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/progress`, body);
-	}
-
-	completeTask(taskId: string, fencingToken: number, result: unknown, artifacts: unknown[] = []): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/complete`, { fencingToken, result, artifacts });
-	}
-
-	failTask(taskId: string, fencingToken: number, failure: Failure): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/fail`, { fencingToken, failure });
-	}
-
-	ackCancel(taskId: string, fencingToken: number): Promise<any> {
-		return this.post(`/v1/tasks/${segment(taskId)}/cancel`, { acknowledge: true, fencingToken });
-	}
 }
-
-export const TERMINAL_STATES = new Set(["succeeded", "failed", "canceled", "rejected", "expired"]);
 
 function decode(status: number, body: string, traceHeader: string | string[] | undefined): { value: any } | { error: SomeWorkError } {
 	let value: any = null;

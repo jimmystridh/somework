@@ -3,9 +3,9 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Identity, SomeWorkClient } from "@somework/sdk";
 import { apply, ApplyRefused, clientApi, refuseIfRisky, type ApplyOptions } from "./apply.ts";
-import { checkAgainstCards, loadCards, loadSamples } from "./cards.ts";
 import { postPlanComment } from "./comment.ts";
 import { hasChanges, plan, toMarkdown, PLAN_MARKER } from "./plan.ts";
+import { checkAgainstSamples, loadSamples } from "./samples.ts";
 import { checkDuplicates, checkRule, loadRules, type Finding, type LoadedRule } from "./rules.ts";
 
 export const USAGE = `somework-rules <command> [options]
@@ -18,8 +18,6 @@ Commands
 
 Options
   --dir <path>            rules directory (default: rules)
-  --card <path>           a card.json, or a directory whose subdirectories hold card.json (repeatable); checks capabilities and renders inputs
-  --samples <path>        recorded sample events (default: <dir>/samples), used with --card
   --strict                treat warnings as errors
   --out <file>            write the markdown (plan) or findings to a file
   --json-out <file>       write the machine-readable result to a file
@@ -41,8 +39,6 @@ export class UsageError extends Error {
 
 const OPTIONS = {
 	dir: { type: "string", default: "rules" },
-	card: { type: "string", multiple: true },
-	samples: { type: "string" },
 	strict: { type: "boolean" },
 	out: { type: "string" },
 	"json-out": { type: "string" },
@@ -65,10 +61,10 @@ export interface Io {
 	api?: () => Parameters<typeof clientApi>[0];
 }
 
-export function validateAll(dir: string, cards: string[], samplesDir: string | undefined, strict: boolean): { rules: LoadedRule[]; findings: Finding[]; ok: boolean } {
+export function validateAll(dir: string, strict: boolean): { rules: LoadedRule[]; findings: Finding[]; ok: boolean } {
 	const { rules, findings } = loadRules(dir);
 	findings.push(...rules.flatMap(checkRule), ...checkDuplicates(rules));
-	if (cards.length > 0) findings.push(...checkAgainstCards(rules, loadCards(cards), loadSamples(samplesDir ?? join(dir, "samples"))));
+	findings.push(...checkAgainstSamples(rules, loadSamples(join(dir, "samples"))));
 	const ok = !findings.some((finding) => finding.level === "error" || (strict && finding.level === "warning"));
 	return { rules, findings, ok };
 }
@@ -128,7 +124,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
 	}
 
 	const dir = resolve(values.dir);
-	const checked = validateAll(dir, values.card ?? [], values.samples ? resolve(values.samples) : undefined, values.strict === true);
+	const checked = validateAll(dir, values.strict === true);
 	for (const finding of checked.findings) io.stderr(`${render(finding)}\n`);
 	const writeJson = (value: unknown) => values["json-out"] && writeFileSync(values["json-out"], `${JSON.stringify(value, null, 2)}\n`);
 	if (!checked.ok) {

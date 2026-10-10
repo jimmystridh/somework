@@ -7,7 +7,7 @@ import { after, before, describe, it } from "node:test";
 import type { RuleSpec, RuleView } from "@somework/sdk";
 import { run, type Io } from "../src/cli.ts";
 import { asLive, declared, FakeDomain, parse } from "./fake.ts";
-import { realRules, repoRoot, REVIEW_YAML, rulesDir, view } from "./helpers.ts";
+import { realRules, REVIEW_YAML, rulesDir, view } from "./helpers.ts";
 
 function invoke(args: string[], io: Partial<Io> = {}) {
 	const out: string[] = [];
@@ -19,19 +19,19 @@ const temp = () => mkdtempSync(join(tmpdir(), "rules-cli-out-"));
 const apiOf = (domain: FakeDomain): Io["api"] => () => ({ listRules: () => domain.list(), putRule: (name, spec) => domain.put(name, spec), deleteRule: (name) => domain.remove(name), pauseRule: (name) => domain.pause(name), resumeRule: (name) => domain.resume(name) });
 
 describe("validate", () => {
-	it("passes the shipped rules, with the real cards and samples, even in strict mode", async () => {
-		const result = await invoke(["validate", "--dir", realRules, "--card", join(repoRoot, "adapters"), "--strict"]);
+	it("passes the shipped rules, with their samples, even in strict mode", async () => {
+		const result = await invoke(["validate", "--dir", realRules, "--strict"]);
 		assert.equal(result.code, 0, result.err);
 		assert.match(result.out, /^\d+ rule file\(s\) valid/);
 	});
 
 	it("exits 1, names the file and writes a markdown comment for a pull request", async () => {
-		const dir = rulesDir({ "pr-review.yaml": REVIEW_YAML.replace("owner: automation/pr-review", "owner: agent/manager") });
+		const dir = rulesDir({ "pr-review.yaml": REVIEW_YAML.replace("owner: agent/reviewer", "owner: automation/pr-review") });
 		const out = join(temp(), "plan.md");
 		const json = join(temp(), "plan.json");
 		const result = await invoke(["validate", "--dir", dir, "--out", out, "--json-out", json]);
 		assert.equal(result.code, 1);
-		assert.match(result.err, /error\s+pr-review\.yaml: a rule with a reaction must be owned by an automation principal/);
+		assert.match(result.err, /error\s+pr-review\.yaml: a rule is a subscription of an agent; automation\/pr-review is an automation principal/);
 		assert.match(readFileSync(out, "utf8"), /not valid, so no plan was made[\s\S]*pr-review\.yaml/);
 		assert.equal(JSON.parse(readFileSync(json, "utf8")).ok, false);
 	});

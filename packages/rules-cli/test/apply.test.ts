@@ -71,7 +71,7 @@ describe("apply", () => {
 	});
 
 	it("does not delete anything when a replacement failed (deletes come last, and a failed rule stays)", async () => {
-		const domain = new FakeDomain([...asLive([two[0]!]).map((rule) => ({ ...rule, wake: true })), view("old", { owner: "agent/x", selector: "x.y.z", wake: true })]);
+		const domain = new FakeDomain([...asLive([two[0]!]).map((rule) => ({ ...rule, description: "stale" })), view("old", { owner: "agent/x", selector: "x.y.z", wake: true })]);
 		domain.failOn.add("put a");
 		const result = await apply(domain, two);
 		assert.ok(domain.rules.has("a"));

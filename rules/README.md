@@ -1,56 +1,42 @@
 # Rules
 
-One file per rule: `rules/<name>.yaml`. A rule is a subscription to events, optionally with a reaction that submits a task. The files are the only way rules are created; the domain refuses nothing else but nothing else is deployed. How they reach the domain is in `docs/RULES.md`, the design is in `docs/EVENTS.md`.
+One file per rule: `rules/<name>.yaml`. A rule is a subscription: events that match wake the agent that owns it, and the agent's own event handler decides what to do with each one (drop it, tell the owner, ask someone, or start a job). A rule never starts work by itself. The files are the only way rules are created; the domain refuses nothing else but nothing else is deployed. How they reach the domain is in `docs/RULES.md`, the design is in `docs/EVENTS.md` and `docs/adr/0003-messages-and-events-replace-tasks.md`.
 
 ```yaml
-name: pr-review-opened              # must equal the file name
-description: Review every pull request that is opened ready for review.
-owner: automation/pr-review         # reaction -> an automation principal; agent subscription -> the agent
-selector: github.pull_request.opened    # glob over the topic; * matches any run of characters, dots included
-where:                              # all must hold; typed equality against JSON pointers into the event payload
+name: aikido-fixer                  # must equal the file name
+description: Every Aikido event wakes the Aikido fixer, whose own handler decides what is worth a fix.
+owner: agent/aikido-fixer           # the agent that is woken
+selector: aikido.*                  # glob over the topic; * matches any run of characters, dots included
+where:                              # optional: all must hold; typed equality against JSON pointers into the event payload
   - path: /data/draft
     equals: false
-wake: false                         # always stated: does a match wake the owner?
-reaction:                           # leave out for an agent subscription (then wake: true)
-  capability: { id: code.review, version: 3 }
-  input:                            # the task input, with ${/pointer} references into the event payload
-    repository:
-      url: ${/data/repository/cloneUrl}
-      ref: refs/pull/${/data/number}/head
-    pullRequest: ${/data/number}
-    budget: { maxTokens: 200000, maxMinutes: 20 }
-  budget: { maxTokens: 200000, maxMinutes: 20 }   # the cap of the reaction; input.budget may not exceed it
-  maxDepth: 3                       # default 3, at most 5 here
-  maxFiringsPerHour: 20             # default 30, at most 120 here
+wake: true                          # always stated, always true
 # status: paused                    # leave out unless you mean it, see below
 ```
 
 ## The event payload
 
-`${/pointer}` and `where.path` read the event as the domain stores it:
+`where.path` reads the event as the domain stores it:
 
 | Pointer root | Content |
 |---|---|
 | `/data/...` | the fields the producer's mapping chose to carry |
 | `/topic`, `/source`, `/key` | topic, producer source, stable event key |
 | `/classification`, `/verified` | classification level; whether the receiver verified the sender |
-| `/depth`, `/causedByTask`, `/publishedBy` | loop depth, the task that caused the event (if any), the producer principal |
-
-A string that is exactly `${/pointer}` becomes the typed value (a number stays a number, a list a list). A reference inside a longer string becomes text. A pointer that finds nothing fails that firing; nothing is submitted with a hole in it. There is no escape for a literal `${`.
+| `/depth`, `/publishedBy` | hop depth, the producer principal |
 
 ## Safety
 
-* **Event text is untrusted data.** Titles, descriptions, comments and alert texts are written by people outside the platform. Put them into task input only where the capability treats that field as data (never as an instruction), and prefer identifiers (numbers, keys, URLs) over prose. Every field a mapping does not list is dropped before it reaches an event; list prose fields only when a rule needs them.
-* A rule with a reaction fires on every matching event, up to `maxFiringsPerHour`. Narrow it with `where`; a wildcard selector without `where` is a warning.
-* A reaction runs under its automation principal with that principal's allow-list of capabilities. A write-class capability (for example `qa.verify`) waits for approval at every firing.
+* **Event text is untrusted data.** Titles, descriptions, comments and alert texts are written by people outside the platform. The agent's handler treats them as data, never as instructions; every field a producer's mapping does not list is dropped before it reaches an event.
+* A wildcard selector without `where` is normal for a subscription: the agent's handler filters. Narrow it with `where` when the agent should not be woken (and billed) for events it will always drop.
 * `status`: the domain owns whether a rule is currently paused (pause and kill are runtime controls). Leave `status` out and `apply` keeps whatever the domain has, even when it replaces the rule. `status: paused` creates or keeps it paused; `status: active` resumes it at **every** apply, which silently undoes a pause made in an emergency, so validation warns about it.
-* One selector per rule. "Opened or ready for review" is two rules.
+* One selector per rule. The agent's handler can tell event types apart, so a wildcard rule is often simpler than several.
 
 ## Checking a rule
 
 ```
-node packages/rules-cli/src/main.ts validate --card adapters      # schema, contract, conventions, rendered inputs
-node packages/rules-cli/src/main.ts plan --card adapters          # what apply would change (needs SOMEWORK_URL and a key)
+node packages/rules-cli/src/main.ts validate      # schema, contract, conventions, where paths against the recorded samples
+node packages/rules-cli/src/main.ts plan          # what apply would change (needs SOMEWORK_URL and a key)
 ```
 
-`--card adapters` renders every reaction's `input` against the recorded sample events in `rules/samples/` (one file per topic, the full event payload) and validates the result against the capability's `inputSchema` on its card. A reaction without a sample for its selector is an error: record one (copy a real payload through the producer's mapping) so the input can be checked.
+`validate` checks every `where` path against the recorded sample events in `rules/samples/` (one file per topic, the full event payload): a path that resolves in none of the samples for the rule's selector is a warning, because the filter probably never holds. Record a sample (copy a real payload through the producer's mapping) when you add a rule with a `where`.

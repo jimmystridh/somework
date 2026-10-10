@@ -17,7 +17,7 @@ steps:
   - name: validate-rules
     image: node:22.19.0-bookworm
     commands:
-      - node packages/rules-cli/src/main.ts validate --card adapters --strict
+      - node packages/rules-cli/src/main.ts validate --strict
 
   - name: apply-rules
     image: node:22.19.0-bookworm
@@ -33,4 +33,4 @@ steps:
       - printf '%s' "$SOMEWORK_RULES_KEY" > /tmp/rules.key.json
       - printf '%s' "$SOMEWORK_CA" > /tmp/ca.pem
       - export SOMEWORK_RULES_KEY_FILE=/tmp/rules.key.json SOMEWORK_CA_FILE=/tmp/ca.pem SOMEWORK_REQUIRE_TLS=1
-      - node packages/rules-cli/src/main.ts apply --card adapters
+      - node packages/rules-cli/src/main.ts apply

@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { sleep } from "../src/backoff.ts";
-import { interpret, natsInfoFrom, NatsWakeSource, wakes } from "../src/wake.ts";
-import { Worker, type Handler, type WorkerOptions } from "../src/worker.ts";
-import { approve, review, startDomain, type Domain } from "./harness.ts";
+import { interpret, natsInfoFrom, NatsWakeSource, runWakes, wakes, type Wake } from "../src/wake.ts";
+import { startDomain, type Domain } from "./harness.ts";
 
-const SWEEP_MS = 25_000;
 const FAST_POLL_MS = 150;
 
 let domain: Domain;
@@ -24,22 +22,26 @@ async function until(what: string, ms: number, condition: () => boolean): Promis
 	}
 }
 
-function runWorker(handler: Handler, options: Partial<WorkerOptions> = {}) {
+/** A message from the author to the worker that wakes it. */
+const say = async (text: string): Promise<string> =>
+	(await domain.author.post("/v1/messages", { recipients: [{ kind: "agent", id: "agent/ts-worker" }], content: { mediaType: "text/plain", data: text }, triggerMode: "directed" })).messageId as string;
+
+function listen() {
 	const abort = new AbortController();
 	const logs: string[] = [];
-	const worker = new Worker(domain.worker(), {
-		handler,
-		leaseSeconds: 5,
-		progressThrottleMs: 50,
-		shutdownGraceMs: 3000,
-		sweepEveryMs: SWEEP_MS,
-		pollEveryMs: FAST_POLL_MS,
-		logger: (_level, message) => logs.push(message),
-		...options,
-	});
-	const finished = worker.run(abort.signal);
+	const seen: Wake[] = [];
+	const finished = runWakes(
+		domain.worker(),
+		abort.signal,
+		(wake) => {
+			seen.push(wake);
+			void wake.ack();
+		},
+		{ pollEveryMs: FAST_POLL_MS, logger: (_level, message) => logs.push(message) },
+	);
 	return {
 		logs,
+		seen,
 		connections: () => logs.filter((message) => message === "NATS wake connected").length,
 		stop: async () => {
 			abort.abort();
@@ -48,51 +50,33 @@ function runWorker(handler: Handler, options: Partial<WorkerOptions> = {}) {
 	};
 }
 
-const submit = async () => (await domain.author.submitTask(review())).taskId as string;
-const terminal = (taskId: string, ms = 30_000) => domain.author.waitTerminal(taskId, ms);
-
 describe("NATS wake", () => {
-	it("picks a task up in well under the sweep interval, and never holds a request open", async () => {
-		const started = new Map<string, number>();
-		const worker = runWorker(async (job) => {
-			started.set(job.taskId, Date.now());
-			return approve;
-		});
-		await until("the worker to connect to NATS", 30_000, () => worker.connections() === 1);
-
-		const submittedAt = Date.now();
-		const taskId = await submit();
-		assert.equal((await terminal(taskId)).state, "succeeded");
-		const latency = (started.get(taskId) ?? Infinity) - submittedAt;
-		await worker.stop();
-
-		assert.ok(latency < 2000, `picked up after ${latency} ms: the NATS notification, not the ${SWEEP_MS} ms sweep, woke the worker`);
-		const lookups = domain.requests.filter((line) => line.includes("/v1/tasks/next") || line.includes("/v1/events"));
-		assert.ok(lookups.length > 0, "the HTTP sweep ran at least once");
+	it("hands a message over at once, and never holds a request open", async () => {
+		const listener = listen();
+		await until("the listener to connect to NATS", 30_000, () => listener.connections() === 1);
+		const sentAt = Date.now();
+		const messageId = await say("hello");
+		await until("the wake", 10_000, () => listener.seen.some((wake) => wake.messageId === messageId));
+		const latency = Date.now() - sentAt;
+		await listener.stop();
+		assert.ok(latency < 2000, `woken after ${latency} ms`);
+		const lookups = domain.requests.filter((line) => line.includes("/v1/events"));
 		assert.ok(lookups.every((line) => /[?&]wait=0(&|$)/.test(line)), `no lookup may be held open: ${lookups.filter((line) => !/[?&]wait=0(&|$)/.test(line)).join(", ")}`);
 	});
 
-	it("keeps working through a broker outage over HTTP and returns to NATS afterwards", async () => {
-		const worker = runWorker(async () => approve);
-		await until("the worker to connect to NATS", 30_000, () => worker.connections() === 1);
-		assert.equal((await terminal(await submit())).state, "succeeded");
-
+	it("keeps receiving through a broker outage over HTTP and returns to NATS afterwards", async () => {
+		const listener = listen();
+		await until("the listener to connect to NATS", 30_000, () => listener.connections() === 1);
 		await domain.nats!.stop();
-		await until("the worker to notice the lost broker", 15_000, () => worker.logs.includes("NATS wake lost; falling back to HTTP and reconnecting") || worker.logs.includes("NATS wake unavailable; polling over HTTP meanwhile"));
-
-		const whileDown = await submit(); // submitted with no broker: found by the HTTP fallback
-		const outageStarted = Date.now();
-		assert.equal((await terminal(whileDown, 20_000)).state, "succeeded");
-		assert.ok(Date.now() - outageStarted < SWEEP_MS, "found by short polling, not by waiting for a sweep");
-
+		await until("the listener to notice the lost broker", 15_000, () => listener.logs.includes("NATS wake lost; falling back to HTTP and reconnecting") || listener.logs.includes("NATS wake unavailable; polling over HTTP meanwhile"));
+		await sleep(400);
+		const whileDown = await say("sent with no broker");
+		await until("the wake over HTTP", 20_000, () => listener.seen.some((wake) => wake.messageId === whileDown));
 		await domain.nats!.start();
-		await until("the worker to reconnect to NATS", 60_000, () => worker.connections() === 2);
-
-		const submittedAt = Date.now();
-		const afterwards = await submit();
-		assert.equal((await terminal(afterwards, 20_000)).state, "succeeded");
-		assert.ok(Date.now() - submittedAt < 10_000, "woken by NATS again, not by the 25 s sweep");
-		await worker.stop();
+		await until("the listener to reconnect to NATS", 60_000, () => listener.connections() === 2);
+		const afterwards = await say("sent after the broker came back");
+		await until("the wake over NATS again", 20_000, () => listener.seen.some((wake) => wake.messageId === afterwards));
+		await listener.stop();
 	});
 
 	it("refuses a plaintext broker when TLS is required", async () => {
@@ -108,8 +92,7 @@ describe("NATS wake", () => {
 			assert.ok(info?.url.startsWith("tls://127.0.0.1:"), "the domain hands out the TLS URL");
 			const source = await NatsWakeSource.connect(info, "agent/ts-worker", { requireTls: true, caPem: secured.nats!.caPem }, () => {});
 			await source.close();
-			const stranger = startDomain({ nats: "tls" });
-			const other = await stranger;
+			const other = await startDomain({ nats: "tls" });
 			try {
 				await assert.rejects(() => NatsWakeSource.connect(info, "agent/ts-worker", { requireTls: true, caPem: other.nats!.caPem }, () => {}), /./);
 			} finally {
@@ -122,39 +105,31 @@ describe("NATS wake", () => {
 
 	it("streams wakes to a requester-style consumer", async () => {
 		const abort = new AbortController();
-		const client = domain.worker();
-		await client.registerRuntime({ sdk: "test" });
-		const stream = wakes(client, abort.signal, { kinds: ["task"], sweepEveryMs: SWEEP_MS, pollEveryMs: FAST_POLL_MS });
-		const taskId = await submit();
-		const first = await Promise.race([stream.next(), sleep(20_000).then(() => undefined)]);
+		const stream = wakes(domain.worker(), abort.signal, { pollEveryMs: FAST_POLL_MS });
+		const first = Promise.race([stream.next(), sleep(20_000).then(() => undefined)]);
+		await sleep(1500);
+		const messageId = await say("for the stream");
+		const wake = await first;
 		abort.abort();
 		await stream.return(undefined);
-		assert.ok(first && !first.done, "a wake arrived");
-		assert.deepEqual([first.value.kind, (first.value as { taskId: string }).taskId], ["task", taskId]);
-		await first.value.ack();
-		const claim = await client.claimTask(taskId); // leave the queue clean for later tests
-		await client.progressTask(taskId, { fencingToken: claim.fencingToken, status: "running" });
-		await client.completeTask(taskId, claim.fencingToken, approve.result);
+		assert.ok(wake && !wake.done, "a wake arrived");
+		assert.deepEqual([wake.value.kind, wake.value.messageId], ["message", messageId]);
+		await wake.value.ack();
 	});
 });
 
 describe("wake interpretation", () => {
-	it("reads the connection block, with object or bare pool consumers", () => {
-		const base = { url: "nats://h:4222", user: "u", password: "p", workStream: "W", inboxStream: "I", inboxConsumer: "inbox-1" };
-		assert.deepEqual(natsInfoFrom({ nats: { ...base, poolConsumers: [{ stream: "W2", consumer: "c1" }, "c2"] } })?.poolConsumers, [
-			{ stream: "W2", consumer: "c1" },
-			{ stream: "W", consumer: "c2" },
-		]);
+	it("reads the connection block", () => {
+		const base = { url: "nats://h:4222", user: "u", password: "p", inboxStream: "I", inboxConsumer: "inbox-1" };
+		assert.deepEqual(natsInfoFrom({ nats: base }), { url: "nats://h:4222", user: "u", password: "p", token: undefined, inboxStream: "I", inboxConsumer: "inbox-1" });
 		assert.equal(natsInfoFrom({ nats: { urls: ["nats://a:1"] } })?.url, "nats://a:1");
 		assert.equal(natsInfoFrom({}), undefined);
 	});
 
-	it("maps pool and inbox notifications and ignores the agent's own and non-waking ones", () => {
-		assert.deepEqual(interpret({ taskId: "t1", revision: 3 }, false, "agent/me"), { kind: "task", taskId: "t1", dedupeKey: "task:t1:3" });
-		assert.equal(interpret({ revision: 3 }, false, "agent/me"), undefined);
-		assert.deepEqual(interpret({ wake: true, kind: "message", messageId: "m1", sender: "agent/other" }, true, "agent/me"), { kind: "message", messageId: "m1", dedupeKey: "msg:m1" });
-		assert.deepEqual(interpret({ wake: true, kind: "task", taskId: "t2", event: "task.completed", eventId: "e9" }, true, "agent/me"), { kind: "taskEvent", taskId: "t2", event: "task.completed", dedupeKey: "evt:e9" });
-		assert.equal(interpret({ wake: false, kind: "message", messageId: "m2" }, true, "agent/me"), undefined);
-		assert.equal(interpret({ wake: true, kind: "message", messageId: "m3", sender: "agent/me" }, true, "agent/me"), undefined);
+	it("maps message notifications and ignores the agent's own, non-waking and other ones", () => {
+		assert.deepEqual(interpret({ wake: true, kind: "message", messageId: "m1", sender: "agent/other" }, "agent/me"), { messageId: "m1", dedupeKey: "msg:m1" });
+		assert.equal(interpret({ wake: false, kind: "message", messageId: "m2" }, "agent/me"), undefined);
+		assert.equal(interpret({ wake: true, kind: "message", messageId: "m3", sender: "agent/me" }, "agent/me"), undefined);
+		assert.equal(interpret({ wake: true, kind: "task", taskId: "t2" }, "agent/me"), undefined);
 	});
 });

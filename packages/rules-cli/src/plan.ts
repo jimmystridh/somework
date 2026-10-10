@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_FIRINGS_PER_HOUR, type Json, type RuleSpec, type RuleStatus, type RuleView } from "@somework/sdk";
+import { type Json, type RuleSpec, type RuleStatus, type RuleView } from "@somework/sdk";
 import type { LoadedRule } from "./rules.ts";
 
 export type Action = "create" | "replace" | "delete" | "pause" | "resume" | "unchanged";
@@ -26,15 +26,6 @@ export function comparable(spec: RuleSpec): Json {
 		selector: spec.selector,
 		where: (spec.where ?? []).map((entry) => ({ path: entry.path, equals: entry.equals })),
 		wake: spec.wake,
-		reaction: spec.reaction
-			? {
-					capability: { id: spec.reaction.capability.id, version: String(spec.reaction.capability.version) },
-					input: spec.reaction.input as Json,
-					budget: { maxTokens: spec.reaction.budget.maxTokens, maxMinutes: spec.reaction.budget.maxMinutes },
-					maxDepth: spec.reaction.maxDepth ?? DEFAULT_MAX_DEPTH,
-					maxFiringsPerHour: spec.reaction.maxFiringsPerHour ?? DEFAULT_MAX_FIRINGS_PER_HOUR,
-				}
-			: null,
 	};
 }
 
@@ -79,7 +70,7 @@ export function plan(desired: LoadedRule[], live: RuleView[], options: { prune?:
 
 	if (options.prune !== false) {
 		const declared = new Set(desired.map(({ rule }) => rule.name));
-		for (const rule of live) if (!declared.has(rule.name)) changes.push({ action: "delete", name: rule.name, differences: [], note: `${rule.status}, fired ${rule.counters.fired} times` });
+		for (const rule of live) if (!declared.has(rule.name)) changes.push({ action: "delete", name: rule.name, differences: [], note: rule.status });
 	}
 
 	const counts = { create: 0, replace: 0, delete: 0, pause: 0, resume: 0, unchanged: 0 } satisfies Record<Action, number>;

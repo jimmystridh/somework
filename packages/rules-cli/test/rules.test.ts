@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { renderTemplate, type Json } from "@somework/sdk";
-import { checkAgainstCards, globMatch, loadCards, loadSamples } from "../src/cards.ts";
 import { validateAll } from "../src/cli.ts";
 import { checkDuplicates, checkRule, loadRules } from "../src/rules.ts";
-import { realRules, repoRoot, REVIEW_YAML, rulesDir } from "./helpers.ts";
+import { checkAgainstSamples, globMatch, loadSamples } from "../src/samples.ts";
+import { realRules, REVIEW_YAML, rulesDir } from "./helpers.ts";
 
-const messages = (dir: string, extra: { cards?: string[] } = {}) => validateAll(dir, extra.cards ?? [], undefined, false).findings.filter((finding) => finding.level === "error").map((finding) => `${finding.file}: ${finding.message}`);
+const messages = (dir: string) => validateAll(dir, false).findings.filter((finding) => finding.level === "error").map((finding) => `${finding.file}: ${finding.message}`);
 const withLine = (yaml: string, from: string, to: string) => {
 	assert.ok(yaml.includes(from), from);
 	return yaml.replace(from, to);
@@ -19,8 +18,8 @@ describe("loading", () => {
 		const { rules, findings } = loadRules(rulesDir({ "pr-review.yaml": REVIEW_YAML }));
 		assert.deepEqual(findings, []);
 		assert.equal(rules[0]!.rule.where![0]!.equals, false);
-		assert.equal(rules[0]!.rule.reaction!.capability.version, 3);
-		assert.equal((rules[0]!.rule.reaction!.input as any).pullRequest, "${/data/number}");
+		assert.equal(rules[0]!.rule.owner, "agent/reviewer");
+		assert.equal(rules[0]!.rule.wake, true);
 	});
 
 	it("reports YAML syntax errors, schema violations and unknown keys with the file name", () => {
@@ -31,8 +30,13 @@ describe("loading", () => {
 		assert.ok(errors.includes("empty.yaml: schema: /wake is required"));
 	});
 
+	it("refuses a rule that still carries a reaction", () => {
+		const errors = messages(rulesDir({ "pr-review.yaml": `${REVIEW_YAML}reaction:\n  capability:\n    id: code.review\n    version: 3\n` }));
+		assert.ok(errors.includes("pr-review.yaml: schema: /reaction is not allowed"), errors.join("\n"));
+	});
+
 	it("treats yes, no and on as strings (YAML 1.2), so a rule cannot turn a flag on by accident", () => {
-		const errors = messages(rulesDir({ "pr-review.yaml": withLine(REVIEW_YAML, "wake: false", "wake: no") }));
+		const errors = messages(rulesDir({ "pr-review.yaml": withLine(REVIEW_YAML, "wake: true", "wake: yes") }));
 		assert.ok(errors.includes("pr-review.yaml: schema: /wake must be boolean, got string"));
 	});
 
@@ -53,12 +57,11 @@ describe("loading", () => {
 describe("conventions", () => {
 	const check = (change: (yaml: string) => string) => messages(rulesDir({ "pr-review.yaml": change(REVIEW_YAML) }));
 
-	it("a reaction needs an automation owner; an agent subscription needs wake and an agent owner", () => {
-		assert.ok(check((y) => withLine(y, "owner: automation/pr-review", "owner: agent/manager")).some((line) => line.includes("must be owned by an automation principal")));
-		const subscription = "name: sub\nowner: automation/x\nselector: grafana.alert.firing\nwake: true\n";
-		assert.ok(messages(rulesDir({ "sub.yaml": subscription })).some((line) => line.includes("agent subscription")));
-		const idle = "name: idle\nowner: agent/manager\nselector: grafana.alert.firing\nwake: false\n";
-		assert.ok(messages(rulesDir({ "idle.yaml": idle })).some((line) => line.includes("reaction or wake: true") || line.includes("must set wake: true")));
+	it("wakes an agent: wake must be true and an automation principal has no inbox to wake", () => {
+		const idle = check((y) => withLine(y, "wake: true", "wake: false"));
+		assert.ok(idle.some((line) => line.includes("wake")), idle.join("\n"));
+		const automation = check((y) => withLine(y, "owner: agent/reviewer", "owner: automation/pr-review"));
+		assert.ok(automation.some((line) => line.includes("automation principal, which has no inbox to wake")), automation.join("\n"));
 		assert.deepEqual(messages(rulesDir({ "ok.yaml": "name: ok\nowner: agent/manager\nselector: grafana.alert.firing\nwake: true\n" })), []);
 	});
 
@@ -69,33 +72,20 @@ describe("conventions", () => {
 		assert.deepEqual(check((y) => withLine(y, "selector: github.pull_request.opened", "selector: github.pull_request.*")), []);
 	});
 
-	it("checks that every pointer starts at a field of the event payload", () => {
+	it("checks that every where pointer starts at a field of the event payload", () => {
 		assert.ok(check((y) => withLine(y, "path: /data/draft", "path: /payload/draft")).some((line) => line.includes('where path "/payload/draft"')));
-		assert.ok(check((y) => withLine(y, "pullRequest: ${/data/number}", "pullRequest: ${/body/number}")).some((line) => line.includes('input reference "/body/number"')));
-		assert.deepEqual(check((y) => withLine(y, "pullRequest: ${/data/number}", "pullRequest: ${/depth}")), []);
+		assert.deepEqual(check((y) => withLine(y, "path: /data/draft", "path: /depth")), []);
 	});
 
-	it("rejects malformed templates", () => {
-		assert.ok(check((y) => withLine(y, "pullRequest: ${/data/number}", 'pullRequest: "${/data/number"')).some((line) => line.includes('unterminated "${"')));
-		assert.ok(check((y) => withLine(y, "pullRequest: ${/data/number}", 'pullRequest: "${data/number}"')).some((line) => line.includes("JSON pointer must start")));
-	});
-
-	it("keeps budget, depth and rate within sane limits and the inner budget within the reaction budget", () => {
-		assert.ok(check((y) => y.replace("  budget:\n    maxTokens: 200000", "  budget:\n    maxTokens: 9000000")).some((line) => line.includes("maxTokens") && line.includes("exceeds")));
-		assert.ok(check((y) => `${y}  maxDepth: 6\n`).some((line) => line.includes("maxDepth exceeds 5")));
-		assert.ok(check((y) => `${y}  maxFiringsPerHour: 500\n`).some((line) => line.includes("maxFiringsPerHour exceeds 120")));
-		assert.ok(check((y) => y.replace(/(\n    budget:\n      maxTokens: )200000/, "$1300000")).some((line) => line.includes("input.budget.maxTokens exceeds reaction.budget.maxTokens")));
-		assert.ok(check((y) => y.replace("  budget:\n    maxTokens: 200000\n    maxMinutes: 20\n", "")).some((line) => line.includes("/reaction/budget is required")));
-	});
-
-	it("warns about a wildcard reaction without where, about status: active and about duplicates", () => {
+	it("warns about status: active and about duplicates, and lets a subscription use a wildcard without where (the agent filters)", () => {
 		const open = withLine(withLine(REVIEW_YAML, "selector: github.pull_request.opened", "selector: github.pull_request.*"), "where:\n  - path: /data/draft\n    equals: false\n", "");
-		const { findings } = validateAll(rulesDir({ "pr-review.yaml": open, "copy.yaml": withLine(open, "name: pr-review", "name: copy") }), [], undefined, false);
-		assert.ok(findings.some((finding) => finding.level === "warning" && finding.message.includes("fires for every matching event")));
+		const { findings } = validateAll(rulesDir({ "pr-review.yaml": open, "copy.yaml": withLine(open, "name: pr-review", "name: copy") }), false);
+		assert.ok(!findings.some((finding) => finding.message.includes("wildcard")));
+		assert.equal(findings.filter((finding) => finding.level === "error").length, 0);
 		assert.ok(findings.some((finding) => finding.message.startsWith("same owner, selector and where as ")));
-		const active = validateAll(rulesDir({ "pr-review.yaml": `${REVIEW_YAML}status: active\n` }), [], undefined, false).findings;
+		const active = validateAll(rulesDir({ "pr-review.yaml": `${REVIEW_YAML}status: active\n` }), false).findings;
 		assert.ok(active.some((finding) => finding.level === "warning" && finding.message.includes("resumes the rule at every apply")));
-		assert.equal(validateAll(rulesDir({ "pr-review.yaml": `${REVIEW_YAML}status: active\n` }), [], undefined, true).ok, false);
+		assert.equal(validateAll(rulesDir({ "pr-review.yaml": `${REVIEW_YAML}status: active\n` }), true).ok, false);
 	});
 
 	it("checkRule and checkDuplicates work on parsed rules directly", () => {
@@ -105,59 +95,20 @@ describe("conventions", () => {
 	});
 });
 
-describe("the capability cards", () => {
-	const cards = join(repoRoot, "adapters");
-	const sampleFor = (topic: string, data: Json) => JSON.stringify({ topic, source: "github", key: "k", data, classification: "internal", verified: true, depth: 0, causedByTask: null, publishedBy: "producer/github" });
+describe("recorded sample events", () => {
+	const sample = readFileSync(join(realRules, "samples/github.pull_request.opened.json"), "utf8");
 
-	it("every shipped rule renders an input that its capability's inputSchema accepts", () => {
-		const { rules, findings } = loadRules(realRules);
-		const capabilities = loadCards([cards]);
-		const samples = loadSamples(join(realRules, "samples"));
-		assert.deepEqual(findings, []);
-		const reactions = rules.filter(({ rule }) => rule.reaction);
-		assert.ok(reactions.length >= 3, "the shipped rules include reactions");
-		assert.deepEqual(checkAgainstCards(rules, capabilities, samples).filter((finding) => finding.level !== "note"), []);
-
-		for (const { rule } of reactions) {
-			const card = capabilities.find((capability) => capability.id === rule.reaction!.capability.id && String(capability.version) === String(rule.reaction!.capability.version));
-			assert.ok(card?.inputSchema, `${rule.name}: card with inputSchema`);
-			const firing = samples.filter((sample) => globMatch(rule.selector, sample.payload.topic));
-			assert.ok(firing.length > 0, `${rule.name}: a sample`);
-			for (const sample of firing) assert.doesNotThrow(() => renderTemplate(rule.reaction!.input as Json, sample.payload as Json));
-		}
+	it("warns when a where path resolves in none of the samples of the topic", () => {
+		const dir = rulesDir({ "pr-review.yaml": withLine(REVIEW_YAML, "path: /data/draft", "path: /data/isDraft"), "samples/github.pull_request.opened.json": sample });
+		const findings = validateAll(dir, false).findings;
+		assert.ok(findings.some((finding) => finding.level === "warning" && finding.message.includes("no recorded sample for github.pull_request.opened has every where path")), JSON.stringify(findings));
 	});
 
-	it("validates the whole shipped rules directory, with cards and samples", () => {
-		const result = validateAll(realRules, [cards], undefined, true);
-		assert.deepEqual(result.findings.filter((finding) => finding.level !== "note"), []);
-		assert.ok(result.ok);
-		assert.equal(result.rules.length, readdirSync(realRules).filter((name) => name.endsWith(".yaml")).length);
-	});
-
-	it("fails when the rendered input breaks the capability's schema", () => {
-		const dir = rulesDir({
-			"pr-review.yaml": withLine(REVIEW_YAML, "    pullRequest: ${/data/number}\n", "    pullRequest: ${/data/headRef}\n"),
-			"samples/github.pull_request.opened.json": readFileSync(join(realRules, "samples/github.pull_request.opened.json"), "utf8"),
-		});
-		const errors = messages(dir, { cards: [cards] });
-		assert.ok(errors.some((line) => line.includes("rendered input /pullRequest must be integer, got string")), errors.join("\n"));
-	});
-
-	it("fails when the input leaves out a required field or adds one the card forbids", () => {
-		const base = readFileSync(join(realRules, "samples/github.pull_request.opened.json"), "utf8");
-		const missing = rulesDir({ "pr-review.yaml": withLine(REVIEW_YAML, "    pullRequest: ${/data/number}\n    budget:\n      maxTokens: 200000\n      maxMinutes: 20\n  budget", "    pullRequest: ${/data/number}\n  budget"), "samples/a.json": base });
-		assert.ok(messages(missing, { cards: [cards] }).some((line) => line.includes("/budget is required")));
-		const extra = rulesDir({ "pr-review.yaml": withLine(REVIEW_YAML, "    pullRequest: ${/data/number}\n", "    pullRequest: ${/data/number}\n    force: true\n"), "samples/a.json": base });
-		assert.ok(messages(extra, { cards: [cards] }).some((line) => line.includes("/force is not allowed")));
-	});
-
-	it("fails when the sample lacks a field the template needs, when no sample exists and when the capability is unknown", () => {
-		const noField = rulesDir({ "pr-review.yaml": REVIEW_YAML, "samples/a.json": sampleFor("github.pull_request.opened", { draft: false, number: 1 }) });
-		assert.ok(messages(noField, { cards: [cards] }).some((line) => line.includes("nothing at /data/repository/cloneUrl")));
-		const none = rulesDir({ "pr-review.yaml": REVIEW_YAML });
-		assert.ok(messages(none, { cards: [cards] }).some((line) => line.includes("no sample event")));
-		const unknown = rulesDir({ "pr-review.yaml": withLine(REVIEW_YAML, "version: 3", "version: 99"), "samples/a.json": sampleFor("github.pull_request.opened", {}) });
-		assert.ok(messages(unknown, { cards: [cards] }).some((line) => line.includes("code.review v99 is on no card (versions on cards: 3)")));
+	it("is quiet when the path resolves, when there is no sample and when the rule has no where", () => {
+		assert.deepEqual(validateAll(rulesDir({ "pr-review.yaml": REVIEW_YAML, "samples/github.pull_request.opened.json": sample }), true).findings, []);
+		assert.deepEqual(validateAll(rulesDir({ "pr-review.yaml": REVIEW_YAML }), true).findings, []);
+		const { rules } = loadRules(rulesDir({ "a.yaml": "name: a\nowner: agent/x\nselector: github.pull_request.opened\nwake: true\n" }));
+		assert.deepEqual(checkAgainstSamples(rules, loadSamples(join(realRules, "samples"))), []);
 	});
 
 	it("matches selectors with the domain's glob semantics", () => {
@@ -167,5 +118,23 @@ describe("the capability cards", () => {
 		assert.equal(globMatch("*.alert.*", "grafana.alert.firing"), true);
 		assert.equal(globMatch("a*b*c", "axxbyyc"), true);
 		assert.equal(globMatch("a*b*c", "axxbyy"), false);
+	});
+});
+
+describe("the shipped rules directory", () => {
+	it("validates, even in strict mode, with its recorded samples", () => {
+		const result = validateAll(realRules, true);
+		assert.deepEqual(result.findings.filter((finding) => finding.level !== "note"), []);
+		assert.ok(result.ok);
+		assert.equal(result.rules.length, readdirSync(realRules).filter((name) => name.endsWith(".yaml")).length);
+	});
+
+	it("declares subscriptions only: every rule wakes an agent", () => {
+		const { rules } = loadRules(realRules);
+		assert.ok(rules.length > 0);
+		for (const { file, rule } of rules) {
+			assert.equal(rule.wake, true, file);
+			assert.ok(!rule.owner.startsWith("automation/"), `${file}: ${rule.owner}`);
+		}
 	});
 });

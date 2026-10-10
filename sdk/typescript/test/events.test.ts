@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { after, before, describe, it } from "node:test";
 import { SomeWorkClient, SomeWorkError } from "../src/client.ts";
-import { ContractError, parseRuleList, parseRuleView, validatePublish, validateRuleSpec, whereMatches, type RuleSpec } from "../src/events.ts";
+import { ContractError, parseRuleList, parseRuleView, unresolvedPointers, validatePublish, validateRuleSpec, whereMatches, type RuleSpec } from "../src/events.ts";
 import { Identity } from "../src/identity.ts";
-import { parsePointer, renderTemplate, resolvePointer, TemplateError, templatePointers } from "../src/rule-template.ts";
+import { parsePointer, PointerError, resolvePointer } from "../src/rule-pointer.ts";
 
 const keyFile = { kind: "service", id: "producer/github", domainId: "development", privateKey: Buffer.alloc(32, 9).toString("base64url"), publicKey: "" };
 
@@ -44,19 +44,14 @@ const client = () => new SomeWorkClient({ baseUrl, identity: new Identity(keyFil
 const event = { topic: "github.pull_request.opened", key: "delivery-1", source: "github", data: { number: 7 }, classification: "internal", verified: true };
 
 const rule: RuleSpec = {
-	description: "Review every opened pull request",
-	owner: "automation/pr-review",
+	description: "Wake the reviewer for every opened pull request",
+	owner: "agent/reviewer",
 	selector: "github.pull_request.opened",
 	where: [{ path: "/data/draft", equals: false }],
-	wake: false,
-	reaction: {
-		capability: { id: "code.review", version: 3 },
-		input: { pullRequest: "${/data/number}" },
-		budget: { maxTokens: 200000, maxMinutes: 20 },
-	},
+	wake: true,
 };
 
-const view = (overrides: object = {}) => ({ name: "pr-review", ...rule, status: "active", createdAt: "2026-10-05T10:00:00Z", updatedAt: "2026-10-05T10:00:00Z", lastFiredAt: null, counters: { fired: 2, skipped: { duplicate: 1 } }, ...overrides });
+const view = (overrides: object = {}) => ({ name: "reviewer-prs", ...rule, status: "active", createdAt: "2026-10-05T10:00:00Z", updatedAt: "2026-10-05T10:00:00Z", ...overrides });
 
 describe("publishEvent", () => {
 	it("posts the event signed, with an idempotency key, and reads the answer", async () => {
@@ -121,13 +116,12 @@ describe("publishEvent", () => {
 });
 
 describe("rules", () => {
-	it("lists rules from either answer shape and normalises missing counters and where", async () => {
-		answer = () => ({ status: 200, body: { rules: [view(), view({ name: "bare", where: undefined, counters: undefined, description: undefined })] } });
+	it("lists rules from either answer shape and normalises a missing where and description", async () => {
+		answer = () => ({ status: 200, body: { rules: [view(), view({ name: "bare", where: undefined, description: undefined })] } });
 		const rules = await client().listRules();
 		assert.equal(rules.length, 2);
 		assert.deepEqual(rules[1]!.where, []);
-		assert.equal(rules[1]!.counters.skipped.rate, 0);
-		assert.equal(rules[0]!.counters.skipped.duplicate, 1);
+		assert.equal(rules[1]!.description, "");
 		assert.equal(parseRuleList([view()]).length, 1);
 	});
 
@@ -142,14 +136,14 @@ describe("rules", () => {
 		seen.length = 0;
 		answer = (request) => ({ status: request.method === "DELETE" ? 204 : 200, body: request.method === "DELETE" ? undefined : view({ status: request.path.endsWith("/pause") ? "paused" : "active" }) });
 		const c = client();
-		assert.equal((await c.putRule("pr-review", rule)).name, "pr-review");
-		await c.getRule("pr-review");
-		assert.equal((await c.pauseRule("pr-review")).status, "paused");
-		assert.equal((await c.resumeRule("pr-review")).status, "active");
-		await c.deleteRule("pr-review");
+		assert.equal((await c.putRule("reviewer-prs", rule)).name, "reviewer-prs");
+		await c.getRule("reviewer-prs");
+		assert.equal((await c.pauseRule("reviewer-prs")).status, "paused");
+		assert.equal((await c.resumeRule("reviewer-prs")).status, "active");
+		await c.deleteRule("reviewer-prs");
 		assert.deepEqual(
 			seen.map((s) => `${s.method} ${s.path}`),
-			["PUT /v1/rules/pr-review", "GET /v1/rules/pr-review", "POST /v1/rules/pr-review/pause", "POST /v1/rules/pr-review/resume", "DELETE /v1/rules/pr-review"],
+			["PUT /v1/rules/reviewer-prs", "GET /v1/rules/reviewer-prs", "POST /v1/rules/reviewer-prs/pause", "POST /v1/rules/reviewer-prs/resume", "DELETE /v1/rules/reviewer-prs"],
 		);
 		assert.deepEqual(seen[0]!.body, rule);
 	});
@@ -160,15 +154,11 @@ describe("rules", () => {
 		await assert.rejects(c.putRule("../etc", rule), ContractError);
 		await assert.rejects(c.putRule("Bad Name", rule), ContractError);
 		for (const bad of [
-			{ ...rule, owner: "pr-review" },
+			{ ...rule, owner: "reviewer" },
 			{ ...rule, selector: "*" },
 			{ ...rule, selector: "github.**" },
 			{ ...rule, wake: undefined },
-			{ ...rule, reaction: undefined, wake: false },
-			{ ...rule, reaction: { ...rule.reaction!, budget: undefined } },
-			{ ...rule, reaction: { ...rule.reaction!, maxDepth: 0 } },
-			{ ...rule, reaction: { ...rule.reaction!, maxFiringsPerHour: 5000 } },
-			{ ...rule, reaction: { ...rule.reaction!, input: { a: "${/data/x" } } },
+			{ ...rule, wake: false },
 			{ ...rule, where: [{ path: "data/draft", equals: false }] },
 			{ ...rule, where: [{ path: "/data/draft", equals: { a: 1 } }] },
 			{ ...rule, status: "running" },
@@ -178,43 +168,31 @@ describe("rules", () => {
 		assert.equal(seen.length, 0);
 	});
 
-	it("accepts an agent subscription (wake without reaction)", () => {
+	it("accepts an agent subscription", () => {
 		validateRuleSpec({ owner: "agent/manager", selector: "grafana.alert.firing", wake: true });
+	});
+
+	it("names the where pointers a sample payload does not have", () => {
+		assert.deepEqual(unresolvedPointers(rule, { data: { draft: false } }), []);
+		assert.deepEqual(unresolvedPointers(rule, { data: {} }), ["/data/draft"]);
 	});
 });
 
-describe("rule templates", () => {
-	const payload = { topic: "github.pull_request.opened", data: { number: 42, draft: false, title: "Fix ${/data/number}", labels: ["a", "b"], repo: { url: "https://x/y.git" }, "a/b": 1, "m~n": 2, empty: null } };
-
-	it("substitutes a whole-string reference with the typed value and an embedded one with text", () => {
-		const out = renderTemplate({ n: "${/data/number}", flag: "${/data/draft}", ref: "refs/pull/${/data/number}/head", labels: "${/data/labels}", nested: { url: "${/data/repo/url}" }, list: ["${/data/labels/1}", "x"], keep: 5 }, payload) as any;
-		assert.deepEqual(out, { n: 42, flag: false, ref: "refs/pull/42/head", labels: ["a", "b"], nested: { url: "https://x/y.git" }, list: ["b", "x"], keep: 5 });
-	});
-
-	it("does not interpret substituted text again", () => {
-		assert.equal(renderTemplate("t=${/data/title}", payload), "t=Fix ${/data/number}");
-	});
+describe("pointers and where", () => {
+	const payload = { topic: "github.pull_request.opened", data: { number: 42, draft: false, labels: ["a", "b"], "a/b": 1, "m~n": 2, empty: null } };
 
 	it("handles pointer escapes, null values and array indexes", () => {
 		assert.deepEqual(parsePointer("/a~1b/m~0n"), ["a/b", "m~n"]);
-		assert.equal(renderTemplate("${/data/a~1b}", payload), 1);
-		assert.equal(renderTemplate("${/data/m~0n}", payload), 2);
-		assert.equal(renderTemplate("${/data/empty}", payload), null);
-		assert.equal(renderTemplate("x=${/data/empty}", payload), "x=null");
+		assert.deepEqual(resolvePointer(payload, "/data/a~1b"), { found: true, value: 1 });
+		assert.deepEqual(resolvePointer(payload, "/data/m~0n"), { found: true, value: 2 });
+		assert.deepEqual(resolvePointer(payload, "/data/empty"), { found: true, value: null });
 		assert.equal(resolvePointer(payload, "/data/labels/2").found, false);
 		assert.equal(resolvePointer(payload, "/data/labels/01").found, false);
 	});
 
-	it("fails the whole rendering when a pointer resolves to nothing", () => {
-		assert.throws(() => renderTemplate({ a: "${/data/missing}" }, payload), TemplateError);
-		assert.throws(() => renderTemplate("${/data/number/x}", payload), TemplateError);
-	});
-
-	it("rejects malformed references", () => {
-		assert.throws(() => templatePointers("${/data/x"), TemplateError);
-		assert.throws(() => templatePointers("${data/x}"), TemplateError);
-		assert.throws(() => templatePointers("${/a~2b}"), TemplateError);
-		assert.deepEqual(templatePointers({ a: ["${/x}", "${/y} and ${/z}"] }), ["/x", "/y", "/z"]);
+	it("rejects malformed pointers", () => {
+		assert.throws(() => parsePointer("data/x"), PointerError);
+		assert.throws(() => parsePointer("/a~2b"), PointerError);
 	});
 
 	it("evaluates where as an and over typed equality", () => {

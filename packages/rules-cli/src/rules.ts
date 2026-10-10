@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { parseDocument } from "yaml";
-import { ContractError, DEFAULT_MAX_DEPTH, DEFAULT_MAX_FIRINGS_PER_HOUR, RULE_NAME_PATTERN, templatePointers, validateRuleSpec, type Json, type RuleSpec } from "@somework/sdk";
+import { ContractError, RULE_NAME_PATTERN, validateRuleSpec, type RuleSpec } from "@somework/sdk";
 import { formatIssues, validateSchema, type Schema } from "./schema.ts";
 
 export interface RuleFile extends RuleSpec {
@@ -19,10 +19,8 @@ export interface Finding {
 	message: string;
 }
 
-export const LIMITS = { maxDepth: 5, maxFiringsPerHour: 120, maxTokens: 5_000_000, maxMinutes: 240 } as const;
-
 /** The first token of every pointer a rule may read: the fields of the event payload as the domain stores them. */
-export const EVENT_FIELDS = new Set(["data", "topic", "source", "key", "classification", "verified", "depth", "causedByTask", "publishedBy"]);
+export const EVENT_FIELDS = new Set(["data", "topic", "source", "key", "classification", "verified", "depth", "publishedBy"]);
 
 export const RULE_EXTENSIONS = new Set([".yaml", ".yml"]);
 
@@ -89,30 +87,10 @@ export function checkRule({ file, rule }: LoadedRule): Finding[] {
 		return findings;
 	}
 
-	const owner = spec.owner;
-	if (spec.reaction && !owner.startsWith("automation/")) error(`a rule with a reaction must be owned by an automation principal (automation/<name>), not ${owner}`);
-	if (!spec.reaction && owner.startsWith("automation/")) error(`a rule without a reaction is an agent subscription; ${owner} is an automation principal, which has no inbox to wake`);
-	if (!spec.reaction && spec.wake !== true) error("a rule without a reaction must set wake: true");
-	if (spec.reaction && spec.selector.endsWith("*") && !spec.where?.length) warn(`selector ${JSON.stringify(spec.selector)} ends in a wildcard and the rule has no where: the reaction fires for every matching event`);
+	if (spec.owner.startsWith("automation/")) error(`a rule is a subscription of an agent; ${spec.owner} is an automation principal, which has no inbox to wake`);
 	if (spec.status === "active") warn("status: active resumes the rule at every apply, undoing a pause made at runtime; leave status out unless that is the intent");
 
 	for (const problem of pointerProblems("where path", (spec.where ?? []).map((entry) => entry.path))) error(problem);
-
-	const reaction = spec.reaction;
-	if (reaction) {
-		try {
-			for (const problem of pointerProblems("input reference", templatePointers(reaction.input as Json))) error(problem);
-		} catch (problem) {
-			error(`input: ${(problem as Error).message}`);
-		}
-		if (reaction.budget.maxTokens > LIMITS.maxTokens) error(`reaction.budget.maxTokens ${reaction.budget.maxTokens} exceeds ${LIMITS.maxTokens}`);
-		if (reaction.budget.maxMinutes > LIMITS.maxMinutes) error(`reaction.budget.maxMinutes ${reaction.budget.maxMinutes} exceeds ${LIMITS.maxMinutes}`);
-		if ((reaction.maxDepth ?? DEFAULT_MAX_DEPTH) > LIMITS.maxDepth) error(`reaction.maxDepth exceeds ${LIMITS.maxDepth}`);
-		if ((reaction.maxFiringsPerHour ?? DEFAULT_MAX_FIRINGS_PER_HOUR) > LIMITS.maxFiringsPerHour) error(`reaction.maxFiringsPerHour exceeds ${LIMITS.maxFiringsPerHour}`);
-		const inner = (reaction.input as { budget?: { maxTokens?: unknown; maxMinutes?: unknown } }).budget;
-		if (inner && typeof inner.maxTokens === "number" && inner.maxTokens > reaction.budget.maxTokens) error("input.budget.maxTokens exceeds reaction.budget.maxTokens");
-		if (inner && typeof inner.maxMinutes === "number" && inner.maxMinutes > reaction.budget.maxMinutes) error("input.budget.maxMinutes exceeds reaction.budget.maxMinutes");
-	}
 	return findings;
 }
 
