@@ -10,6 +10,6 @@ runAgentService({
 		defaultBudget: { maxTokens: 100_000, maxMinutes: 5 },
 		git: { push: false, pullRequest: false, branchPrefix: "agent" },
 		skills: { allow: [] },
-		events: { enabled: true, notifyTo: "agent/ts-author", controllers: ["agent/ts-author"], accept: ["task.*"] },
+		events: { enabled: true, notifyTo: "agent/ts-author", controllers: ["agent/ts-author"], accept: ["test.*"] },
 	},
 });

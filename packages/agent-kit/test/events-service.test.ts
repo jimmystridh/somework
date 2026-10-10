@@ -23,9 +23,9 @@ const run = (script: string, env: Record<string, string>): ChildProcess => {
 	return child;
 };
 
-const HANDLER = `// @topics task.*
+const HANDLER = `// @topics test.*
 export default async ({ event }) =>
-	event.topic === "task.queued" ? { action: "notify", message: "queued " + JSON.stringify(event.data).slice(0, 120) } : { action: "drop", reason: "not interesting" };
+	event.topic === "test.watch.queued" ? { action: "notify", message: "queued " + JSON.stringify(event.data).slice(0, 120) } : { action: "drop", reason: "not interesting" };
 `;
 
 async function until<T>(what: string, read: () => Promise<T | undefined | false>, ms = 20_000): Promise<T> {
@@ -38,7 +38,7 @@ async function until<T>(what: string, read: () => Promise<T | undefined | false>
 	}
 }
 
-/** The real service process (a fixture role with events on), a real domain and a real sandbox daemon. The events are the domain's own task events. */
+/** The real service process (a fixture role with events on), a real domain and a real sandbox daemon. The events are published by the test's author. */
 describe("events end to end (real domain, real sandbox, real service process)", () => {
 	it("hands an event to the agent's handler, acts on its decision and obeys a control message", async () => {
 		const domain = await startDomain({ cardFile: join(here, "../../../adapters/pi/card.json") });
@@ -78,13 +78,11 @@ describe("events end to end (real domain, real sandbox, real service process)", 
 		await sleep(600); // the first look at the feed fast-forwards past anything that already exists
 
 		const worker = domain.worker();
-		await worker.post("/v1/subscriptions", { kind: "topic", selector: "task.*", wakeOnMatch: true });
-		const task = await domain.author.submitTask({ capability: { id: "code.agent", version: "1" }, input: { repository: { url: remote, ref: "main" }, instruction: "do nothing", budget: { maxTokens: 100_000, maxMinutes: 2 } } });
-		assert.ok(task.taskId);
-		// no agent claims a task any more, so the task's own events come from the requester cancelling it
-		await domain.author.cancelTask(task.taskId, "not needed");
+		await worker.post("/v1/subscriptions", { kind: "topic", selector: "test.*", wakeOnMatch: true });
+		await domain.author.post("/v1/events/publish", { topic: "test.watch.queued", key: "k1", source: "test", data: { n: 1 } });
+		await domain.author.post("/v1/events/publish", { topic: "test.watch.other", key: "k2", source: "test", data: { n: 2 } });
 
-		const ran = await until("the handler to run on task events", async () => {
+		const ran = await until("the handler to run on events", async () => {
 			const current = await status();
 			return current.handlers[0].runs >= 2 && current.handlers[0].drops >= 1 ? current : undefined;
 		});
@@ -98,7 +96,7 @@ describe("events end to end (real domain, real sandbox, real service process)", 
 			const response = JSON.stringify(await domain.author.get("/v1/inbox?unread=true&limit=50"));
 			return response.includes("queued") && response.includes("chat.notice") ? response : undefined;
 		});
-		assert.match(inbox, /task\.queued|queued/);
+		assert.match(inbox, /queued/);
 
 		// the kill switch: a control message from the controller switches every handler off
 		await domain.author.post("/v1/messages", { recipients: [{ kind: "agent", id: "agent/ts-worker" }], content: { mediaType: "text/plain", data: "switch off" }, triggerMode: "directed", labels: { eventControl: "disable-all", eventReason: "maintenance" } });
