@@ -121,9 +121,11 @@ export class ReactionApprovals {
 		const candidates = this.#deps.autoApprove?.filter((entry) => entry.action === approval.action) ?? [];
 		if (candidates.length === 0 || this.#deps.isSuspended?.()) return false;
 		if (Date.parse(approval.expiresAt) <= this.#now()) return false;
-		// the domain records which rule's reaction started a task; a task nobody can show the origin of is left to the owner
+		// the domain records which rule's reaction started a task: on the task itself when the Manager may read it, else in the rule's firings (which name the approval)
 		const origin = (await this.#deps.domain.getTask(approval.taskId).catch(() => undefined))?.origin;
-		const rule = origin?.kind === "reaction" ? candidates.find((entry) => entry.rule === origin.rule) : undefined;
+		let ruleName: string | undefined = origin?.kind === "reaction" && typeof origin.rule === "string" ? origin.rule : undefined;
+		if (!ruleName) ruleName = (await new RuleBook(this.#deps.domain).firingFor(approval.approvalId).catch(() => undefined))?.rule.name;
+		const rule = ruleName ? candidates.find((entry) => entry.rule === ruleName) : undefined;
 		if (!rule) return false;
 		try {
 			await this.#deps.domain.decideApproval(approval.approvalId, {

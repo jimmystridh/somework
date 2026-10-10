@@ -179,6 +179,20 @@ test("a standing approval does not cover another rule, a task that is not a reac
 	assert.equal(refused.telegram.sent.filter((s) => s.method === "sendMessage").length, 1, "a refused decision goes to the owner");
 });
 
+test("a task the Manager may not read is still approved when the rule's firings name its approval, and not when they do not", async () => {
+	const b = build();
+	b.domain.approvals = [approval("appr_e1", { actionDigest: "dg-e1" }), approval("appr_e2")];
+	b.domain.getTask = (async () => {
+		throw new SomeWorkError(403, "policy_denied", "no");
+	}) as never;
+	b.domain.rules = [rule("qa-on-ticket", { reaction: { capability: { id: "qa.verify", version: 1 }, input: {} } }), rule("other-rule", { reaction: { capability: { id: "qa.verify", version: 1 }, input: {} } })];
+	b.domain.firings["qa-on-ticket"] = [{ rule: "qa-on-ticket", eventId: "evt_1", status: "pending", approvalId: "appr_e1" }];
+	b.domain.firings["other-rule"] = [{ rule: "other-rule", eventId: "evt_2", status: "pending", approvalId: "appr_e2" }];
+	await standing(b).poll();
+	assert.deepEqual(b.domain.decisions.map((d) => [d.approvalId, d.decision.decision, d.decision.actionDigest]), [["appr_e1", "approved", "dg-e1"]]);
+	assert.equal(b.telegram.sent.filter((s) => s.method === "sendMessage").length, 1, "only the other rule's approval reaches the owner");
+});
+
 test("the standing approval setting takes plain names only", () => {
 	assert.deepEqual(parseAutoApprovals("qa.verify@1=qa-on-ticket, other@2 = some-rule"), [{ action: "qa.verify@1", rule: "qa-on-ticket" }, { action: "other@2", rule: "some-rule" }]);
 	assert.deepEqual(parseAutoApprovals(undefined), []);
