@@ -76,7 +76,7 @@ export function createJobReporter(deps: JobReporterDeps): JobReporter {
 	const tell = async (entry: JobEntry, text: string, key: string, artifacts: unknown[] = []): Promise<void> => {
 		const to = audienceOf(entry, deps.agentId);
 		if (to.length === 0) return;
-		await deps.sender.send({ recipients: to, ...(entry.conversationId ? { conversationId: entry.conversationId } : {}), ...(entry.replyTo ? { causationId: entry.replyTo } : {}), text, artifacts, key, labels: { jobId: entry.id } });
+		await deps.sender.send({ recipients: to, ...(entry.conversationId ? { conversationId: entry.conversationId } : {}), ...(entry.replyTo ? { causationId: entry.replyTo } : {}), text, artifacts, key, labels: { jobId: entry.id, ...(entry.source === "event" ? { eventNotice: "true" } : {}) } });
 	};
 	return {
 		async waiting(entry, blocking) {

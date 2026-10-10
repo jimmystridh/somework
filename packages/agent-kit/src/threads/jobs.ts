@@ -275,7 +275,7 @@ export class JobManager {
 		const finished: JobEntry = { ...current, state: "finished", finishedAt: this.#now(), waitingFor: undefined, end: describeEnd(outcome, cancelled) };
 		this.#deps.store.put(finished);
 		this.#trim();
-		const artifacts = [...(outcome?.type === "completed" ? (outcome.artifacts ?? []) : []), ...this.#deps.takeArtifacts(entry.id)];
+		const artifacts = uniqueArtifacts([...(outcome?.type === "completed" ? (outcome.artifacts ?? []) : []), ...this.#deps.takeArtifacts(entry.id)]);
 		await safely("finished", () => reporter.finished(finished, outcome, artifacts));
 	}
 
@@ -309,4 +309,16 @@ function describeEnd(outcome: Outcome | undefined, cancelled: boolean): NonNulla
 	if (outcome.type === "failed") return { kind: "failed", code: outcome.failure.code, summary: outcome.failure.message.slice(0, 300) };
 	const result = outcome.type === "completed" ? ((outcome.result ?? {}) as Record<string, unknown>) : {};
 	return { kind: "completed", ...(typeof result.summary === "string" ? { summary: result.summary.slice(0, 300) } : {}) };
+}
+
+/** A hook that uploads through the wrapped client and also returns the reference in its result would carry the artifact twice. */
+function uniqueArtifacts(artifacts: unknown[]): unknown[] {
+	const seen = new Set<string>();
+	return artifacts.filter((ref) => {
+		const id = (ref as { artifactId?: unknown } | null)?.artifactId;
+		if (typeof id !== "string") return true;
+		if (seen.has(id)) return false;
+		seen.add(id);
+		return true;
+	});
 }

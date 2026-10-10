@@ -229,4 +229,11 @@ describe("jobs", () => {
 		assert.equal(reports[0]?.entry.end?.kind, "failed");
 		assert.match(reports[0]?.entry.end?.summary ?? "", /sandbox gone/);
 	});
+
+	it("carries an artifact once when the job's result and its uploads both name it", async () => {
+		const { manager, reports } = setup(async () => ({ type: "completed", result: {}, artifacts: [{ artifactId: "art-for-job-" }, { artifactId: "other" }] }));
+		manager.start(spec("SAD-5"), "job-xyz");
+		await manager.idle();
+		assert.deepEqual(reports[0]!.artifacts.map((ref: any) => ref.artifactId), ["art-for-job-", "other"]);
+	});
 });

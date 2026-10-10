@@ -149,8 +149,10 @@ export class EventIntake {
 		this.#remember(event.eventId);
 	}
 
-	/** A job started in a conversation the owner has with the agent already shows its result message there. */
+	/** A job started in a conversation the owner has with the agent, or by an event of the agent, already shows its result message. */
 	#inOwnersChat(event: FeedEvent): boolean {
+		const requestedBy = event.payload?.data?.requestedBy;
+		if (typeof requestedBy === "string" && requestedBy.startsWith("event:")) return true;
 		const conversationId = event.payload?.data?.conversationId;
 		return typeof conversationId === "string" && this.#deps.state.chats?.[conversationId] !== undefined;
 	}

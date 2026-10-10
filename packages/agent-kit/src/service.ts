@@ -291,7 +291,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const engine = new ThreadEngine({
 				client,
 				agentId: identity.agentId,
-				runtime,
+				runtime: taskRuntime,
 				jobs,
 				inbox: new DurableInbox(join(config.state.dir, "threads", "inbox.json")),
 				approvals,
@@ -367,6 +367,17 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			intercepts.push(async (message) => (await budgetIntercept(message)) || (events ? await events.intercept(message) : false));
 			if (events) void events.run(stop.signal).catch((error) => log("error", "events_stopped", { error: error instanceof Error ? error.message : String(error) }));
 			if (threadSettings.enabled) {
+				const conversationsGauge = metrics.gauge("somework_conversations", "Conversations the agent is in, by state");
+				const jobsGauge = metrics.gauge("somework_jobs", "Jobs of the agent that have not finished, by state");
+				const measure = (): void => {
+					conversationsGauge.set(engine.active, { state: "running" });
+					conversationsGauge.set(engine.queued, { state: "waiting" });
+					const open = jobs.active();
+					for (const state of ["waiting", "running"] as const) jobsGauge.set(open.filter((job) => job.state === state).length, { state });
+				};
+				measure();
+				const measuring = setInterval(measure, 10_000);
+				stop.signal.addEventListener("abort", () => clearInterval(measuring), { once: true });
 				const recovered = engine.start();
 				const resumed = jobs.recover();
 				log("info", "threads_recovered", { messages: recovered, jobs: resumed.length });
