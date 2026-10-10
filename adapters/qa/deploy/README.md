@@ -46,8 +46,7 @@ It prints the public key. On the domain host (where `ops` is the one-off admin c
 ops admin --config /etc/somework/somework.toml enroll-agent --id agent/qa --public-key '<publicKey>' --side-effects write
 ops admin --config /etc/somework/somework.toml register-card --card /cards/qa.json --approve
 ```
-(`card.json` is the card; keep a copy where `ops` can read it.) The agent that is allowed to submit `qa.verify` tasks needs
-`--may-invoke qa.*` (or that capability) on its own enrolment. Copy the domain's CA certificate to `C:\somework\secrets\ca.pem`.
+(`card.json` is the card; keep a copy where `ops` can read it.) Copy the domain's CA certificate to `C:\somework\secrets\ca.pem`.
 
 **Model login.** The agent needs its **own** login (model refresh tokens rotate on use, so a login shared with another agent or a person
 breaks one of them): device-code login for this agent (`node node_modules\@earendil-works\pi-ai\dist\cli.js login openai-codex` in the
@@ -98,7 +97,7 @@ Get-Content C:\somework\logs\supervisor.log -Tail 5
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8082/ready | Select-Object -ExpandProperty Content
 ```
 `/ready` includes the application profiles and, with a ticket system, a real call to it (`/myself`), so a wrong certificate or token shows
-up here. Then submit a first `qa.verify` task for a ticket on a practice setup, answer the approvals it asks for, and read the result and
+up here. Then ask the agent in a message to verify a ticket on a practice setup (it starts a `verify_ticket` job), answer the approvals it asks for, and read the result message and
 the ticket.
 
 ## If it does not work
@@ -126,7 +125,7 @@ the ticket.
 * **The ticket-key gate runs after the workspace is prepared**, so even a `skipped` verdict needs a repository the account can clone (a private repository needs the git
   token; an unreachable one fails the job as `job_error` before the gate).
 * **A SQL Server restore reads the backup as the SQL service account**: copy the `.BAK` files into the instance's own `Backup` folder (not a user or `C:\somework` folder).
-* **The status name is the workflow's**: `JIRA_TEST_STATUS` and the `qa-on-ticket` rule both use the status the ticket enters (`Test` in the pilot project, not `Testing`).
+* **The status name is the workflow's**: `JIRA_TEST_STATUS` and the shipped handler (`src/handlers/qa-ticket.mjs`, woken by the `qa-ticket` rule) both use the status the ticket enters; after changing `JIRA_TEST_STATUS` set `QA_RESEED_HANDLER=1` once so the installed handler follows (`Test` in the pilot project, not `Testing`).
 * **A new agent's NATS login only works after the broker reloads its user list**; if the log shows "NATS wake unavailable: Authorization Violation" long after the
   start, send the broker a reload (`docker kill -s HUP <broker container>`). Until then the agent polls over HTTP and still works.
 

@@ -35,7 +35,7 @@ output  verdict: verified | not_fixed | blocked | skipped
 ## How a job runs
 
 ```
-claim (SDK worker) -> hooks.prepareInput: ticket-key gate (a foreign key is `skipped`, nothing else happens)
+job (from a message or an event) -> hooks.prepareInput: ticket-key gate (a foreign key is `skipped`, nothing else happens)
   -> kit handler: budget, ledger, model allowlist, clone the ref and check it out at the resolved SHA
   -> hooks.beforeRun: start the application from its named profile and wait until it is healthy;
                       start the browser daemon and write the `qa` command line for the model;
@@ -137,17 +137,16 @@ machine. Role-specific:
 | `JIRA_PFX_FILE`, `JIRA_PFX_PASSWORD_FILE` | client certificate for hosts that demand mutual TLS, and its password (an empty file for none) |
 | `JIRA_CA_FILE` | a private CA that signed the host's certificate |
 | `JIRA_TEST_STATUS`, `JIRA_IN_PROGRESS_STATUS`, `JIRA_VERIFIED_LABEL` | names in that system (defaults `Test`, `In Progress`, `AgentTested`) |
+| `QA_EVENT_APP`, `QA_EVENT_CAP_PER_DAY`, `QA_EVENT_BUDGET_TOKENS`, `QA_EVENT_BUDGET_MINUTES`, `QA_RESEED_HANDLER` | the ticket event handler (see Events) |
 
-## Chat
+## Conversations
 
-QA answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice). A **question** from the manager or a person
-gets one bounded, read-only turn: tools `read, agent_status`, no commands, no changes, no approvals, an answer built from the service's own records
-(`agent_status`) and, where it has one, a read-only checkout. A **plain request** from the manager (no `instruct:` needed) is carried out by the model with QA's tools; for verification it has the tool `verify_ticket` (with `jira_search` to find tickets): it queues one real verification per ticket (at most `QA_CHAT_BATCH_MAX` per request), they run one after another after the model's reply, and each result is posted to the conversation. An **instruction** (`instruct: ...`, from `agent/manager` only) is the strict form and becomes a `qa.verify` task for the ticket key named in the text (`instruct: verify ABC-123`), with optional lines `repo:`, `ref:`, `scenario:`, `app:`. Several keys (`instruct: verify ABC-123 ABC-124`) or a state (`instruct: verify the tickets in Test`, a line `status: <name>`, or a line `jql: <query>`; needs the ticket system) become a queue: the agent says which tickets it found (those that already carry the verified label are skipped unless the text says "again"), verifies them one at a time and answers after each, at most `QA_CHAT_BATCH_MAX` (default 5, up to 10) per instruction and within the chat budget of the day. Writes to the ticket system still wait for approval, which is asked of the manager.
-It runs as a job of the normal handler, with the role's own tools, guards and approvals, a chat budget of its own (150 000 tokens, 15 minutes by
-default, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES`) and the `chat` share of the daily token limit (`CHAT_TOKEN_SHARE`); a step that needs
-approval is asked of the manager in the conversation. Settings: `CHAT_MODE`, `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS`, `CHAT_REPOSITORY_URL`,
-`CHAT_REPOSITORY_REF`, `QA_CHAT_BATCH_MAX`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
-`packages/agent-kit/README.md`).
+Every message sent to QA is read by its model in a run of its own; it answers, or says `NO_REPLY` when there is nothing to add. It can read tickets (the Jira read tools, attachments included) and the repository, run the build, tests and the application, and drive the browser by hand. A verification is a **job**: the model finds the tickets with `jira_search` or `jira_get_issue` and calls `verify_ticket` for each (optionally `scenario`, `app`, `repo`/`ref`). The call starts a `qa.verify` job in the background and returns at once; the application stack is a singleton resource (`app-stack`), so several tickets are verified one after another and each says what it waits for, and each result is posted to the conversation when it is done. A step that needs approval is asked of an approver (the manager) in the conversation. Settings: `CHAT_REPOSITORY_URL`, `CHAT_REPOSITORY_REF`, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES` (the budget of one conversation run), `CHAT_TOKEN_SHARE`, `APPROVERS` (all optional; the full table is in `packages/agent-kit/README.md`).
+
+## Events
+
+A ticket that moves into the test status starts a verification without anyone asking. The rule `rules/qa-ticket.yaml` (owner `agent/qa`, selector `jira.issue.transitioned`, `wake: true`) wakes the agent; its shipped handler `src/handlers/qa-ticket.mjs` (installed into the agent's handler directory on the first start and versioned like any handler) drops every move into another status and decides for the rest: one `qa.verify` v1 job for the agent itself (`submit`) with the ticket key (checked against `QA_TICKET_PATTERN`), the application profile `QA_EVENT_APP` (default `local`), the repository and ref of the event (`CHAT_REPOSITORY_URL` and `HEAD` when it names none) and a budget of 4 000 000 tokens / 60 minutes. A delivery is handled once; past `QA_EVENT_CAP_PER_DAY` (default 40) the event goes to a person (`deliver`). The job holds `app-stack` like any other verification, so tickets that arrive together wait for each other. Its ticket writes run without asking (the standing approval of the profile), and its result is posted to the manager as a message.
+Settings (written into the handler when it is installed; `QA_RESEED_HANDLER=1` saves the current ones as a new version): `JIRA_TEST_STATUS` (default `Test`), `QA_TICKET_PATTERN`, `QA_EVENT_APP`, `QA_EVENT_CAP_PER_DAY`, `QA_EVENT_BUDGET_TOKENS`, `QA_EVENT_BUDGET_MINUTES`.
 
 ## Skills
 

@@ -13,9 +13,9 @@ afterEach(async () => {
 });
 
 describe("the QA card", () => {
-	it("is accepted and approved by a real domain, and served with its contract", async () => {
-		domain = await startDomain({ cardFile, mayInvoke: "qa.*" });
-		const found = await domain.author.get("/v1/capabilities/qa.verify/1");
+	it("is accepted and approved by a real domain, and served in its catalog with its contract", async () => {
+		domain = await startDomain({ cardFile });
+		const found = await domain.worker().get("/v1/capabilities/qa.verify/1");
 		assert.equal(found.id, "qa.verify");
 		assert.equal(found.version, "1");
 		assert.equal(found.sideEffects, "write");
@@ -28,14 +28,15 @@ describe("the QA card", () => {
 		assert.deepEqual((card.capabilities[0]!.inputSchema as any).required, ["ticket", "repository", "budget"]);
 	});
 
-	it("refuses input that is not shaped like a verification (no extra keys, a budget is required, keys are bounded)", async () => {
-		domain = await startDomain({ cardFile, mayInvoke: "qa.*" });
-		const valid = { ticket: "QA-1", repository: { url: "https://example.test/r.git", ref: "main" }, budget: { maxTokens: 10_000, maxMinutes: 5 } };
-		const submit = (input: unknown) => domain!.author.submitTask({ capability: { id: "qa.verify", version: "1" }, input });
-		for (const bad of [{ ...valid, command: "rm -rf /" }, { ...valid, budget: undefined }, { ...valid, ticket: "" }, { ...valid, ticket: "x".repeat(41) }, { ...valid, app: "Not Valid" }, { ...valid, budget: { maxTokens: 10, maxMinutes: 5 } }]) {
-			await assert.rejects(() => submit(bad), /schema_violation/, JSON.stringify(bad).slice(0, 80));
-		}
-		const task = await submit(valid);
-		assert.ok(task.taskId, "a valid verification is accepted");
+	it("declares the shape of a verification: no extra keys, a budget is required, keys are bounded", () => {
+		const schema = card.capabilities[0]!.inputSchema as any;
+		assert.equal(schema.additionalProperties, false);
+		assert.deepEqual(schema.required, ["ticket", "repository", "budget"]);
+		assert.deepEqual([schema.properties.ticket.minLength, schema.properties.ticket.maxLength], [1, 40]);
+		assert.match("nope", new RegExp(schema.properties.app.pattern));
+		assert.doesNotMatch("Not Valid", new RegExp(schema.properties.app.pattern));
+		assert.equal(schema.properties.budget.additionalProperties, false);
+		assert.equal(schema.properties.budget.properties.maxTokens.minimum, 1000);
+		assert.equal(schema.properties.repository.additionalProperties, false);
 	});
 });

@@ -18,7 +18,8 @@ export interface QaProfileOptions {
 /**
  * The QA role: reads a revision, runs the application, drives a browser, reports a verdict. Nothing leaves the workspace through git (no
  * commit, no push, no pull request). The model is offered `read`, `bash` and the ticket-system tools; the deployment names the repository's
- * QA skill with SKILLS_ALLOW. The contract is `card.json`.
+ * QA skill with SKILLS_ALLOW. Events are on: the shipped handler turns a ticket moving into the test status into a `qa.verify` job for the agent
+ * itself (`src/handlers/qa-ticket.mjs`). The contract is `card.json`.
  */
 export function qaProfile(options: QaProfileOptions = {}): AgentProfile {
 	return validateProfile({
@@ -34,7 +35,7 @@ export function qaProfile(options: QaProfileOptions = {}): AgentProfile {
 		requireBudget: true,
 		git: { push: false, pullRequest: false, branchPrefix: "qa" },
 		skills: { allow: [] },
-		events: { enabled: false },
+		events: { enabled: true, notifyTo: "agent/manager", submitBudgetCap: { maxTokens: 4_000_000, maxMinutes: 60 } },
 	});
 }
 

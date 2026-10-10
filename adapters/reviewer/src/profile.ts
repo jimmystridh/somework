@@ -6,6 +6,7 @@ import { SYSTEM_PROMPT } from "./prompt.ts";
 /**
  * The reviewer role: reads a branch, returns findings. Nothing leaves the workspace (no commit, no push, no pull request), the model is
  * offered only `read` and `bash`, and `bash` is restricted to plain inspection by the approval patterns. The contract is `card.json`.
+ * Events are on: the shipped handler turns pull request events into `code.review` jobs for the agent itself (`src/handlers/pr-review.mjs`).
  * The repository's own review skills are opt-in by name: the default list is empty and the deployment supplies it with SKILLS_ALLOW.
  */
 export const profile: AgentProfile = validateProfile({
@@ -18,5 +19,5 @@ export const profile: AgentProfile = validateProfile({
 	requireBudget: true,
 	git: { push: false, pullRequest: false, branchPrefix: "review" },
 	skills: { allow: [] },
-	events: { enabled: false },
+	events: { enabled: true, notifyTo: "agent/manager", submitBudgetCap: { maxTokens: 200_000, maxMinutes: 20 } },
 });

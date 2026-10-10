@@ -26,12 +26,9 @@ ops admin --config /etc/somework/somework.toml enroll-agent --id agent/reviewer 
 cp card.json cards/reviewer.json                                  # adapters/reviewer/card.json, copied to the host's ./cards directory
 ops admin --config /etc/somework/somework.toml register-card --card /cards/reviewer.json --approve
 ```
-`--side-effects read` is all this agent needs: it provides one `read` capability and requests nothing (no `--may-invoke`). The card declares
-`code.review` **version 3**: a stub that already provides `code.review` v1/v2 (the demo reviewer) keeps working next to it, and requesters choose by
-version. A published contract cannot change in place: a later change to the schemas needs `version 4`, with v3 kept in the same card until its
-requesters have moved.
-
-A requester that may call it needs `--may-invoke 'code.review'` (or `code.*`) on its own enrolment.
+`--side-effects read` is all this agent needs: it provides one `read` capability and requests nothing. The card declares
+`code.review` **version 3**. The card is an advertisement of what the agent offers; nobody needs a permission to ask it for a review: send it a message.
+A published contract cannot change in place: a later change to the schemas needs `version 4`, with v3 kept in the same card until its callers have moved.
 
 ## 2. Files on the host (`./`, the compose directory)
 | Path | What |
@@ -83,17 +80,10 @@ the service cannot import every module it runs. When building on the host, sync 
 adapters/reviewer` (without `node_modules`) to the build directory first.
 
 ## 4. Smoke test
-Without credentials first: `PI_PROVIDER=faux` with a one-step plan whose final text ends in a `json` block (see `.env.example`), then a job:
-```bash
-node - <<'JS'
-import { Identity, SomeWorkClient } from "@somework/sdk";
-const client = new SomeWorkClient({ baseUrl: process.env.SOMEWORK_URL, identity: Identity.fromFile(process.env.REQUESTER_KEY), caFile: process.env.CA, requireTls: true });
-const task = await client.submitTask({ capability: { id: "code.review", version: "3" }, input: { repository: { url: "<repository url>", ref: "<branch>" }, budget: { maxTokens: 200000, maxMinutes: 10 } } });
-const done = await client.waitTerminal(task.taskId, 600_000);
-console.log(done.state, JSON.stringify(done.result ?? done.failure, null, 2));
-JS
-```
-Then with the real model on a small branch: expect `succeeded`, a `verdict`, findings with file and line, and one `…-review.md` artifact. Check that
+Without credentials first: `PI_PROVIDER=faux` with a one-step plan whose final text ends in a `json` block (see `.env.example`), then ask the agent for a
+review in a message from any principal of the domain (for example "review branch <branch> of <repository url>"); the agent starts a `review_code` job and the
+result arrives as a message in the same conversation.
+Then with the real model on a small branch: expect a completed job, a `verdict`, findings with file and line, and one `…-review.md` artifact. Check that
 `git ls-remote` of the repository shows no new branch (nothing was pushed) and that a job whose model tries `git push` or a file write is
 refused (the log shows `approval_requested` only for commands outside plain inspection).
 

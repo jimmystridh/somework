@@ -5,6 +5,7 @@ import { fetchPullRequestContext } from "./context.ts";
 import { buildInstruction, CONTEXT_KEY } from "./prompt.ts";
 import { ReviewRuntime } from "./review-runtime.ts";
 import { renderReport } from "./result.ts";
+import { loadReviewEventSettings, seedHandler } from "./seed.ts";
 
 export interface ReviewerOptions {
 	client: Pick<SomeWorkClient, "uploadArtifact">;
@@ -81,7 +82,12 @@ async function invalidOutput(context: ResultContext, reason: string, raw: string
 }
 
 /** For `runAgentService`: the hooks of the service being composed (its client, log and optional read-only token). */
-export const reviewerHooksFor = (context: ServiceContext): RoleHooks => ({
+export function reviewerHooksFor(context: ServiceContext): RoleHooks {
+	seedHandler({ stateDir: context.config.state.dir, settings: loadReviewEventSettings(context.env), log: context.log, reseed: context.env.REVIEWER_RESEED_HANDLER === "1" });
+	return reviewerHooks(context);
+}
+
+const reviewerHooks = (context: ServiceContext): RoleHooks => ({
 	chat: reviewerChat(context.env),
 	...createReviewerHooks({
 		client: context.client,

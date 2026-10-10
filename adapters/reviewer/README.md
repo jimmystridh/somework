@@ -53,6 +53,11 @@ The kit's environment (`SOMEWORK_URL`, `SOMEWORK_KEY_FILE`, `PI_PROVIDER`/`PI_MO
 Every message sent to the reviewer is read by its model in a run of its own; it answers, or says `NO_REPLY` when there is nothing to add. A review is a **job**: the model calls `review_code` (a pull request number and/or a ref, a ticket key, a focus, optionally `repo`) which starts a `code.review` v3 job in the background and returns at once. The job stays read-only (the guard on commands applies); its verdict and the findings by severity, and the report as an attachment, are posted to the conversation when it is done. A step that needs approval is asked of an approver (the manager) in the conversation.
 Settings: `CHAT_REPOSITORY_URL`, `CHAT_REPOSITORY_REF`, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES` (the budget of one conversation run), `CHAT_TOKEN_SHARE`, `APPROVERS`, `THREADS_MAX_CONVERSATIONS` (all optional; the full table is in `packages/agent-kit/README.md`).
 
+## Events
+
+Pull requests start reviews without anyone asking. The rule `rules/reviewer-prs.yaml` (owner `agent/reviewer`, selector `github.pull_request.*`, `wake: true`) wakes the reviewer for every pull request event; its shipped handler `src/handlers/pr-review.mjs` (installed into the agent's handler directory on the first start and versioned like any handler) handles `github.pull_request.opened` and `github.pull_request.ready_for_review`, drops drafts, and for anything else decides: one `code.review` v3 job for the agent itself (`submit`) with the clone address, the number and `refs/pull/<n>/head`, at most once per pull request head commit. Past `REVIEW_CAP_PER_DAY` it hands the event to a person (`deliver`). The job is a normal job: read-only, its result is posted to the manager as a message. The events pool is the agent's own share of the daily limit (`events` in the profile: `notifyTo agent/manager`, budget cap 200 000 tokens / 20 minutes).
+Settings (written into the handler when it is installed; `REVIEWER_RESEED_HANDLER=1` saves the current ones as a new version): `REVIEW_REPOSITORIES` (comma separated `owner/name`; empty = every repository the events come from), `REVIEW_CAP_PER_DAY` (default 100), `REVIEW_BUDGET_TOKENS` (200000), `REVIEW_BUDGET_MINUTES` (20).
+
 ## Files
 | | |
 |---|---|
@@ -62,6 +67,7 @@ Settings: `CHAT_REPOSITORY_URL`, `CHAT_REPOSITORY_REF`, `CHAT_INSTRUCT_TOKENS` a
 | `src/result.ts` | extract, validate and cap the review; render the report |
 | `src/context.ts` | read-only pull request context (REST + GraphQL), host-restricted |
 | `src/review-runtime.ts` · `src/hooks.ts` | the repair turn and auto-denial; the kit hooks: PR context, instruction, task result and artifacts |
+| `src/seed.ts` · `src/handlers/pr-review.mjs` | the shipped event handler and its installation |
 | `src/handler.ts` | builds a handler from the hooks without the service around it (used by the tests) |
 | `Dockerfile` · `deploy/` | the image (agent only; the sandbox is the developer role's image), compose project, rollout and rollback |
 

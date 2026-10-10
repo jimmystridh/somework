@@ -5,36 +5,47 @@ import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { approvalPolicy, PiDurableRuntime, skillsExtension, type AgentRuntime } from "@somework/agent-kit";
-import { makeRemote, sh } from "@somework/agent-kit/testing";
-import { sleep, Worker, type SomeWorkClient } from "@somework/sdk";
-import type { Job, JobControl } from "@somework/agent-kit";
-import { startDomain, type Domain } from "../../../sdk/typescript/test/harness.ts";
+import { makeRemote, runHandler, sh } from "@somework/agent-kit/testing";
+import type { Job, JobControl, Outcome } from "@somework/agent-kit";
 import { createReviewerHandler } from "../src/handler.ts";
 import { profile } from "../src/profile.ts";
 import { answer, closeServers, codeHost, offeredTools, REVIEW_JSON, TOKEN, turnModels } from "./support.ts";
 
-const here = new URL(".", import.meta.url).pathname;
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
 	closeServers();
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
-interface Stack {
-	domain: Domain;
-	remote: string;
-	author: SomeWorkClient;
-	contexts: any[];
-	workspaceRoot: string;
-	startWorker(): void;
-	submit(over?: Record<string, unknown>): Promise<string>;
-	terminal(taskId: string, ms?: number): Promise<any>;
+interface Stored {
+	artifactId: string;
+	filename: string;
+	mediaType: string;
 }
 
-/** A real domain, the SDK worker, the reviewer's handler and runtime, a scripted model, and a local repository with a `feature` branch to review. */
+interface Finished {
+	taskId: string;
+	task: { state: "succeeded" | "failed"; result?: any; failure?: any; resultArtifacts: Stored[] };
+}
+
+interface Stack {
+	remote: string;
+	contexts: any[];
+	workspaceRoot: string;
+	stored: Stored[];
+	questions: { tool: string; summary: string }[];
+	run(over?: Record<string, unknown>, options?: { approve?: (question: { tool: string; summary: string }) => { approved: boolean; reason?: string } }): Promise<Finished>;
+}
+
+/** The outcome of a run as the old task view: succeeded or failed, with the result, the failure and the artifacts it carried. */
+function asTask(outcome: Outcome): Finished["task"] {
+	if (outcome.type === "failed") return { state: "failed", failure: outcome.failure, resultArtifacts: [] };
+	if (outcome.type !== "completed") assert.fail("the run detached");
+	return { state: "succeeded", result: outcome.result, resultArtifacts: (outcome.artifacts ?? []) as Stored[] };
+}
+
+/** The reviewer's handler and runtime, a scripted model, a client that records the uploads, and a local repository with a `feature` branch to review. */
 async function stack(turns: string[][], options: { github?: { token: string; apiBase: string; tokenHosts?: string[] } } = {}): Promise<Stack> {
-	const domain = await startDomain({ cardFile: join(here, "../card.json") });
-	cleanups.push(() => domain.close());
 	const { dir, remote } = makeRemote();
 	const seed = join(dir, "seed");
 	sh(seed, "checkout", "-b", "feature");
@@ -59,48 +70,47 @@ async function stack(turns: string[][], options: { github?: { token: string; api
 	});
 	await runtime.start();
 	cleanups.push(() => runtime.close());
+	const stored: Stored[] = [];
+	const client = {
+		uploadArtifact: async (upload: { filename: string; mediaType: string }) => {
+			const ref = { artifactId: `art_${stored.length + 1}`, filename: upload.filename, mediaType: upload.mediaType };
+			stored.push(ref);
+			return ref;
+		},
+	};
 	const handler = createReviewerHandler({
 		runtime,
 		session: { env: env(workspaceRoot), identity: { name: "Reviewer", email: "reviewer@test.invalid" } },
 		workspaceRoot,
-		client: domain.worker(),
+		client: client as never,
 		limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 },
 		github: options.github,
 	});
-	const author = domain.author;
+	const questions: Stack["questions"] = [];
 	return {
-		domain,
 		remote,
-		author,
 		contexts,
 		workspaceRoot,
-		startWorker() {
-			const abort = new AbortController();
-			const finished = new Worker(domain.worker(), { handler, leaseSeconds: 2, shutdownGraceMs: 5000 }).run(abort.signal);
-			cleanups.push(async () => {
-				abort.abort();
-				await finished;
-			});
+		stored,
+		questions,
+		async run(over = {}, runOptions = {}) {
+			const taskId = `job-${Math.random().toString(36).slice(2, 10)}`;
+			const outcome = await runHandler(
+				handler,
+				{ taskId, capability: { id: "code.review", version: "3" }, input: { repository: { url: remote, ref: "feature" }, ticket: "ABC-12", focus: "empty lists", budget: { maxTokens: 1_000_000, maxMinutes: 5 }, ...over } },
+				{ approve: async (question) => (questions.push(question), runOptions.approve?.(question) ?? { approved: false, reason: "no approver in this test" }) },
+			);
+			return { taskId, task: asTask(outcome) };
 		},
-		async submit(over = {}) {
-			const task = await author.submitTask({
-				capability: { id: "code.review", version: "3" },
-				input: { repository: { url: remote, ref: "feature" }, ticket: "ABC-12", focus: "empty lists", budget: { maxTokens: 1_000_000, maxMinutes: 5 }, ...over },
-			});
-			return task.taskId as string;
-		},
-		terminal: (taskId, ms = 60_000) => author.waitTerminal(taskId, ms),
 	};
 }
 
 const toolResults = (contexts: any[]): string => JSON.stringify(contexts.at(-1)?.messages?.filter((message: any) => message.role === "toolResult") ?? []);
 
-describe("reviewer service, end to end", () => {
-	it("accepts its card in a real domain and returns the review as the result, with the report as an artifact", async () => {
+describe("reviewer handler, end to end", () => {
+	it("returns the review as the result, with the report as an artifact", async () => {
 		const s = await stack([[`final:${answer()}`]]);
-		s.startWorker();
-		const taskId = await s.submit();
-		const task = await s.terminal(taskId);
+		const { taskId, task } = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "request_changes");
 		assert.equal(task.result.findings[0].severity, "P1");
@@ -115,8 +125,7 @@ describe("reviewer service, end to end", () => {
 
 	it("tells the model what to review and how, and offers it only read and bash", async () => {
 		const s = await stack([[`final:${answer()}`]]);
-		s.startWorker();
-		await s.terminal(await s.submit());
+		await s.run();
 		const request = s.contexts[0];
 		assert.deepEqual(offeredTools(request), ["bash", "read"]);
 		const sent = JSON.stringify(request);
@@ -128,8 +137,7 @@ describe("reviewer service, end to end", () => {
 
 	it("makes one repair turn when the answer has no usable result, and reports the usage of both turns", async () => {
 		const s = await stack([["final:I think it is fine, no structured result."], [`final:${answer()}`]]);
-		s.startWorker();
-		const task = await s.terminal(await s.submit());
+		const { task } = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "request_changes");
 		assert.equal(s.contexts.length, 2, "exactly two model calls: the review and the repair");
@@ -138,8 +146,7 @@ describe("reviewer service, end to end", () => {
 
 	it("fails with invalid_review_output after one repair turn, and keeps the raw answer as an artifact", async () => {
 		const s = await stack([["final:no result here"], ["final:still no result"]]);
-		s.startWorker();
-		const task = await s.terminal(await s.submit());
+		const { task } = await s.run();
 		assert.equal(task.state, "failed");
 		assert.equal(task.failure.code, "invalid_review_output");
 		assert.equal(task.failure.retryable, false);
@@ -150,10 +157,9 @@ describe("reviewer service, end to end", () => {
 
 	it("never lets the model change anything: a push and a file write are refused without asking anyone, reading still works", async () => {
 		const s = await stack([["bash:git push origin HEAD:refs/heads/evil", "bash:echo x > hacked.txt", "bash:git log --oneline -3", `final:${answer()}`]]);
-		s.startWorker();
-		const taskId = await s.submit();
-		const task = await s.terminal(taskId);
-		// nobody was asked: an approval request would have left the task in input_required with no one to answer
+		const { task } = await s.run();
+		// nobody was asked: an approval request would have been recorded as a question
+		assert.deepEqual(s.questions, []);
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(sh(s.remote, "branch", "--list", "evil").trim(), "", "the push never happened");
 		const seen = toolResults(s.contexts);
@@ -164,23 +170,21 @@ describe("reviewer service, end to end", () => {
 		assert.ok(!files.some((file) => file.endsWith("hacked.txt")), "the redirect never wrote a file");
 	});
 
-	it("asks the requester before a command that is not plain inspection, and respects a refusal", async () => {
+	it("asks the approver before a command that is not plain inspection, and respects a refusal", async () => {
 		const s = await stack([["bash:node --version", `final:${answer()}`]]);
-		s.startWorker();
-		const taskId = await s.submit();
-		for (let i = 0; i < 200 && (await s.author.getTask(taskId)).state !== "input_required"; i++) await sleep(100);
-		const waiting = await s.author.getTask(taskId);
-		assert.equal(waiting.state, "input_required");
-		assert.match(JSON.stringify(waiting), /not plain read-only inspection/);
-		await s.author.provideInput(taskId, { approved: false, reason: "not needed" });
-		const task = await s.terminal(taskId);
+		const { task } = await s.run({}, { approve: () => ({ approved: false, reason: "not needed" }) });
+		assert.equal(s.questions.length, 1);
+		assert.match(JSON.stringify(s.questions[0]), /not plain read-only inspection/);
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.match(toolResults(s.contexts), /denied by the requester: not needed/);
 	});
 
-	it("rejects a job without a budget when it is submitted", async () => {
+	it("refuses a job without a budget", async () => {
 		const s = await stack([[`final:${answer()}`]]);
-		await assert.rejects(() => s.author.submitTask({ capability: { id: "code.review", version: "3" }, input: { repository: { url: s.remote, ref: "feature" } } }), /schema_violation/);
+		const { task } = await s.run({ budget: undefined });
+		assert.equal(task.state, "failed");
+		assert.equal(task.failure.code, "budget_required");
+		assert.equal(s.contexts.length, 0, "no model call");
 	});
 });
 
@@ -229,8 +233,6 @@ describe("pull request context in a real review", () => {
 			}
 		});
 
-		const domain = await startDomain({ cardFile: join(here, "../card.json") });
-		cleanups.push(() => domain.close());
 		const contexts: any[] = [];
 		const fake = turnModels([[`final:${answer()}`]], (context) => contexts.push(context));
 		const work = mkdtempSync(join(tmpdir(), "reviewer-pr-"));
@@ -243,20 +245,12 @@ describe("pull request context in a real review", () => {
 			runtime,
 			session: { env: env(workspaceRoot), identity: { name: "r", email: "r@test.invalid" } },
 			workspaceRoot,
-			client: domain.worker(),
+			client: { uploadArtifact: async (upload: { filename: string }) => ({ artifactId: "art_1", filename: upload.filename }) } as never,
 			limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 },
 			github: { token: TOKEN, apiBase: host.apiBase },
 		});
-		const abort = new AbortController();
-		const finished = new Worker(domain.worker(), { handler, leaseSeconds: 2, shutdownGraceMs: 5000 }).run(abort.signal);
-		cleanups.push(async () => {
-			abort.abort();
-			await finished;
-		});
-		const task = await domain.author.waitTerminal(
-			(await domain.author.submitTask({ capability: { id: "code.review", version: "3" }, input: { repository: { url: "https://github.com/o/r.git", ref: "feature" }, pullRequest: 7, budget: { maxTokens: 1_000_000, maxMinutes: 5 } } })).taskId,
-			60_000,
-		);
+		const outcome = await runHandler(handler, { capability: { id: "code.review", version: "3" }, input: { repository: { url: "https://github.com/o/r.git", ref: "feature" }, pullRequest: 7, budget: { maxTokens: 1_000_000, maxMinutes: 5 } } });
+		const task = asTask(outcome);
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		const sent = JSON.stringify(contexts[0]);
 		assert.match(sent, /pull request #7/);

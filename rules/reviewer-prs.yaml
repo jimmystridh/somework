@@ -1,0 +1,5 @@
+name: reviewer-prs
+description: Pull request events wake the reviewer, whose own handler decides whether a pull request is worth a review (not a draft, not reviewed at this commit yet, within its daily cap) and starts at most one code.review job for itself. Only opened and ready_for_review are handled; the other pull request events are recorded and ignored.
+owner: agent/reviewer
+selector: github.pull_request.*
+wake: true

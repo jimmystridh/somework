@@ -10,6 +10,7 @@ import { JiraClient } from "./jira.ts";
 import { createJiraTools, jiraToolApprovals } from "./jira-tools.ts";
 import { qaProfile } from "./profile.ts";
 import { QaSession } from "./session.ts";
+import { loadQaEventSettings, seedHandler } from "./seed.ts";
 import { loadQaSettings, readJiraSecrets, type QaSettings } from "./settings.ts";
 
 const cliPath = fileURLToPath(new URL("./browser/cli.ts", import.meta.url)).replaceAll("\\", "/");
@@ -23,6 +24,7 @@ async function launchBrowser(settings: QaSettings, allowHosts: readonly string[]
 export function composeQa(settings: QaSettings, context: ServiceContext, session: QaSession, profiles: Record<string, AppProfile>, tools?: ReturnType<typeof createJiraTools>, jiraClient?: JiraClient, jiraSecrets?: { token: string; passphrase?: string }): RoleHooks {
 	const execution = windowsExecutionHooks(settings);
 	context.log("info", "qa_configured", { profiles: Object.keys(profiles), ticketSystem: Boolean(settings.jira), browser: settings.browser.channel, allowHosts: settings.browser.allowHosts });
+	seedHandler({ stateDir: context.config.state.dir, settings: loadQaEventSettings(context.env), log: context.log, reseed: context.env.QA_RESEED_HANDLER === "1" });
 	const hooks = createQaHooks({
 		root: settings.root,
 		ticketPattern: settings.ticketPattern,

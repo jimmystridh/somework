@@ -88,6 +88,9 @@ services:
       GRAFANA_TOKEN_FILE: /run/secrets/grafana-token
       GRAFANA_CA_FILE: /run/somework/grafana-ca.pem
       CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-15}
+      REVIEW_REPOSITORIES: ${REVIEW_REPOSITORIES:-}              # events: comma separated owner/name the pull request handler reviews; empty = every repository the events come from
+      REVIEW_CAP_PER_DAY: ${REVIEW_CAP_PER_DAY:-100}             # events: reviews the handler starts per day (a flood guard)
+      REVIEWER_RESEED_HANDLER: ${REVIEWER_RESEED_HANDLER:-}      # 1 = save the handler with the current settings as a new version at start
       HEALTH_PORT: "8081"
     volumes:
       - ${REVIEWER_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro

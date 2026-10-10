@@ -1,0 +1,5 @@
+name: qa-ticket
+description: Ticket transitions wake the QA agent, whose own handler decides whether a ticket moved into the test status and starts at most one qa.verify job for itself per delivery. Verifications share one application stack, so jobs started for several tickets run one after another in the agent. The agent's own ticket writes run without asking.
+owner: agent/qa
+selector: jira.issue.transitioned
+wake: true

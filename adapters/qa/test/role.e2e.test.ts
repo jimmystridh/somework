@@ -6,10 +6,10 @@ import { afterEach, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { approvalPolicy, createHandler, Metrics, PiDurableRuntime } from "@somework/agent-kit";
 import { scriptedModels } from "@somework/agent-kit/providers/faux";
-import { FakeHost, makeRemote, sh } from "@somework/agent-kit/testing";
+import type { Outcome } from "@somework/agent-kit";
+import { FakeHost, makeRemote, runHandler, sh } from "@somework/agent-kit/testing";
 import { localEnvFactory } from "@somework/agent-kit/windows";
-import { Worker } from "@somework/sdk";
-import { freePort, startDomain, type Domain } from "../../../sdk/typescript/test/harness.ts";
+import { freePort } from "../../../sdk/typescript/test/harness.ts";
 import type { AppProfile } from "../src/app.ts";
 import type { BrowserBackend } from "../src/browser/backend.ts";
 import { FakeBackend } from "../src/browser/fake.ts";
@@ -24,7 +24,6 @@ import { DEFAULT_TRANSITIONS, FakeJira, PAT, testIssue } from "./fake-jira.ts";
 import { makeTls, type TestTls } from "./tls.ts";
 
 const cliPath = fileURLToPath(new URL("../src/browser/cli.ts", import.meta.url));
-const cardFile = fileURLToPath(new URL("../card.json", import.meta.url));
 const EDGE = ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe"].find((path) => existsSync(path));
 
 const PAGE = `<!doctype html><html><head><title>Invoice form</title></head><body><h1>Invoice</h1>
@@ -51,6 +50,21 @@ before(() => {
 
 const REPORT = (verdict: string, extra = "") => `\`\`\`json\n${JSON.stringify({ verdict, acceptanceChecks: [{ criterion: "the total is right", passed: verdict === "verified", evidence: "saw it" }], fixtures: [{ description: "an invoice", keys: "INV-1" }], notes: `done${extra}` })}\n\`\`\``;
 
+interface Stored {
+	artifactId: string;
+	filename: string;
+	mediaType: string;
+}
+
+type Finished = { state: "succeeded" | "failed"; result?: any; failure?: any; resultArtifacts: Stored[] };
+
+/** The outcome of a run as the old task view: succeeded or failed, with the result, the failure and the artifacts it carried. */
+function asTask(outcome: Outcome): Finished {
+	if (outcome.type === "failed") return { state: "failed", failure: outcome.failure, resultArtifacts: [] };
+	if (outcome.type !== "completed") assert.fail("the run detached");
+	return { state: "succeeded", result: outcome.result, resultArtifacts: (outcome.artifacts ?? []) as Stored[] };
+}
+
 interface Options {
 	plan: string[] | ((context: { root: string; url: string }) => string[]);
 	issue?: ReturnType<typeof testIssue>;
@@ -60,8 +74,16 @@ interface Options {
 }
 
 async function stack(options: Options) {
-	const domain: Domain = await startDomain({ cardFile, mayInvoke: "qa.*" });
-	cleanups.push(() => domain.close());
+	const stored: Stored[] = [];
+	const client = {
+		uploadArtifact: async (upload: { filename: string; mediaType: string }) => {
+			const ref = { artifactId: `art_${stored.length + 1}`, filename: upload.filename, mediaType: upload.mediaType };
+			stored.push(ref);
+			return ref;
+		},
+		post: async () => ({}),
+		get: async () => ({}),
+	};
 	const jira = await FakeJira.start(tls, [options.issue ?? testIssue("QA-1")]);
 	cleanups.push(() => jira.close());
 	const jiraClient = new JiraClient({ baseUrl: jira.url, token: PAT, pfx: tls.clientPfx, passphrase: tls.clientPassphrase, ca: tls.ca });
@@ -99,7 +121,7 @@ async function stack(options: Options) {
 		extensions: [tools.extension],
 		hasTicketSystem: true,
 		verifiedLabel: "AgentTested",
-		client: domain.worker(),
+		client: client as never,
 		secrets: [PAT],
 	});
 
@@ -107,47 +129,32 @@ async function stack(options: Options) {
 	const runtime = new PiDurableRuntime({ storagePath: join(dir, "pi.sqlite"), models: fake.models, model: fake.model, env: envFor, policy: approvalPolicy([], profile.approvalPatterns, profile.toolApprovals), allowedTools: profile.allowedTools, extensions: hooks.extensions });
 	await runtime.start();
 	cleanups.push(() => runtime.close());
-	const handler = createHandler({ runtime: hooks.wrapRuntime!(runtime), envFor, session: { env: envFor(root), identity: { name: "QA", email: "qa@test.invalid" } }, host: new FakeHost(), workspaceRoot: root, client: domain.worker(), limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 }, metrics: new Metrics(), profile, hooks });
-	const abort = new AbortController();
-	const worker = new Worker(domain.worker(), { handler, leaseSeconds: 2, shutdownGraceMs: 5000 }).run(abort.signal);
-	cleanups.push(async () => {
-		abort.abort();
-		await worker;
-	});
+	const handler = createHandler({ runtime: hooks.wrapRuntime!(runtime), envFor, session: { env: envFor(root), identity: { name: "QA", email: "qa@test.invalid" } }, host: new FakeHost(), workspaceRoot: root, client: client as never, limits: { maxTokensCap: 5_000_000, maxMinutesCap: 60 }, metrics: new Metrics(), profile, hooks });
 
 	const asked: string[] = [];
 	return {
-		domain,
+		stored,
 		jira,
 		url,
 		port,
 		root,
 		sha,
 		asked,
-		async submit(input: Record<string, unknown> = {}): Promise<string> {
-			const task = await domain.author.submitTask({ capability: { id: "qa.verify", version: "1" }, input: { ticket: "QA-1", repository: { url: remote, ref: sha }, budget: { maxTokens: 1_000_000, maxMinutes: 5 }, ...input } });
-			return task.taskId as string;
-		},
-		/** Answers each approval the task asks for with `decide(summary)`, until it ends. */
-		async finish(taskId: string, decide: (summary: string) => boolean = () => true): Promise<any> {
-			const deadline = Date.now() + 120_000;
-			let answered = "";
-			while (Date.now() < deadline) {
-				const task = await domain.author.getTask(taskId);
-				if (["succeeded", "failed", "canceled"].includes(task.state)) return task;
-				if (task.state === "input_required") {
-					const question = task.blocker?.question;
-					const key = JSON.stringify(question);
-					if (key !== answered) {
-						answered = key;
-						const summary = String(question?.summary ?? question?.question?.summary ?? key);
+		/** Runs one verification through the handler; `decide(summary)` answers each approval the job asks for. */
+		async run(input: Record<string, unknown> = {}, decide: (summary: string) => boolean = () => true): Promise<Finished & { taskId: string }> {
+			const taskId = `job-${Math.random().toString(36).slice(2, 10)}`;
+			const outcome = await runHandler(
+				handler,
+				{ taskId, capability: { id: "qa.verify", version: "1" }, input: { ticket: "QA-1", repository: { url: remote, ref: sha }, budget: { maxTokens: 1_000_000, maxMinutes: 5 }, ...input } },
+				{
+					approve: async (question) => {
+						const summary = String(question.summary);
 						asked.push(summary);
-						await domain.author.provideInput(taskId, decide(summary) ? { approved: true } : { approved: false, reason: "not now" });
-					}
-				}
-				await new Promise((resolve) => setTimeout(resolve, 100));
-			}
-			throw new Error("the task did not finish");
+						return decide(summary) ? { approved: true } : { approved: false, reason: "not now" };
+					},
+				},
+			);
+			return { taskId, ...asTask(outcome) };
 		},
 		async healthy(): Promise<boolean> {
 			return fetch(url, { signal: AbortSignal.timeout(1000) }).then(() => true, () => false);
@@ -182,7 +189,7 @@ const verifiedPlan = (root: string, url: string): string[] => [
 
 const evidenceKinds = (task: any): string[] => task.result.evidence.map((item: any) => item.kind).sort();
 
-describe("QA role end to end", () => {
+describe("QA role, through the handler", () => {
 	it("is the card it claims to be", () => {
 		const profile = qaProfile();
 		assert.deepEqual(profile.capabilities, [{ id: "qa.verify", version: "1" }]);
@@ -195,8 +202,7 @@ describe("QA role end to end", () => {
 
 	it("verifies a ticket: app up, browser driven, video recorded, three approved writes, app down", async () => {
 		const s = await stack({ plan: ({ root, url }) => verifiedPlan(root, url) });
-		const taskId = await s.submit();
-		const task = await s.finish(taskId);
+		const task = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "verified");
 		assert.equal(task.result.ticket, "QA-1");
@@ -221,7 +227,7 @@ describe("QA role end to end", () => {
 
 	it("does not write anything the requester declined, and still reports", async () => {
 		const s = await stack({ plan: ({ root, url }) => verifiedPlan(root, url) });
-		const task = await s.finish(await s.submit(), (summary) => !/post a comment/.test(summary));
+		const task = await s.run({}, (summary) => !/post a comment/.test(summary));
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		const issue = s.jira.issues.get("QA-1")!;
 		assert.equal(issue.comments.length, 0, "the declined comment was not posted");
@@ -233,7 +239,7 @@ describe("QA role end to end", () => {
 
 	it("a verified report without a video is not verified", async () => {
 		const s = await stack({ plan: ({ root, url }) => ["call:qa_record_verdict:{\"verdict\":\"verified\"}", `bash:${wrapper(root)} open ${url}`, `final:${REPORT("verified")}`] });
-		const task = await s.finish(await s.submit());
+		const task = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "blocked");
 		assert.match(task.result.notes, /no playable video/);
@@ -250,7 +256,7 @@ describe("QA role end to end", () => {
 		];
 		const s = await stack({ plan });
 		s.jira.transitions = [{ ...DEFAULT_TRANSITIONS[0]!, assignTo: undefined }, DEFAULT_TRANSITIONS[1]!];
-		const task = await s.finish(await s.submit());
+		const task = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "not_fixed");
 		assert.deepEqual(evidenceKinds(task), ["screenshot"]);
@@ -268,7 +274,7 @@ describe("QA role end to end", () => {
 			if (method === "POST" && path.endsWith("/attachments")) throw new Error("not reached: the guard re-reads before writing");
 		};
 		s.jira.issues.get("QA-1")!.assignee = { name: "eve", displayName: "Eve" };
-		const task = await s.finish(await s.submit());
+		const task = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.deepEqual(s.jira.issues.get("QA-1")!.attachments, [], "nothing was attached");
 		assert.equal(s.jira.issues.get("QA-1")!.comments.length, 0);
@@ -278,7 +284,7 @@ describe("QA role end to end", () => {
 
 	it("skips a ticket key it does not handle without starting anything or calling the ticket system", async () => {
 		const s = await stack({ plan: ["final:the model must not run"], ticketPattern: /^QA-[0-9]+$/ });
-		const task = await s.finish(await s.submit({ ticket: "OTHER-9" }));
+		const task = await s.run({ ticket: "OTHER-9" });
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "skipped");
 		assert.match(task.result.jira.skippedReason, /does not match/);
@@ -289,7 +295,7 @@ describe("QA role end to end", () => {
 
 	it("an application that does not come up is a blocked verification, not a failed task", async () => {
 		const s = await stack({ plan: ["final:the model must not run"], app: { start: "true", startupTimeoutSeconds: 5 } });
-		const task = await s.finish(await s.submit());
+		const task = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "blocked");
 		assert.match(task.result.notes, /did not (start|become healthy)/);
@@ -298,28 +304,31 @@ describe("QA role end to end", () => {
 
 	it("an answer without a usable report gets one repair turn and then fails with the raw answer kept", async () => {
 		const s = await stack({ plan: ["final:I looked around and it seems fine."] });
-		const task = await s.finish(await s.submit());
+		const task = await s.run();
 		assert.equal(task.state, "failed");
 		assert.equal(task.failure.code, "invalid_qa_report");
-		assert.ok(task.failure.details.rawAnswer.artifactId);
+		assert.ok(task.failure.details.rawAnswer.artifactId, "the raw answer is referenced from the failure");
 		assert.equal(await s.healthy(), false);
 	});
 
 	it("an unknown application profile is refused as invalid input", async () => {
 		const s = await stack({ plan: ["final:x"] });
-		const task = await s.finish(await s.submit({ app: "nope" }));
+		const task = await s.run({ app: "nope" });
 		assert.equal(task.state, "failed");
 		assert.equal(task.failure.code, "invalid_input");
 		assert.equal(task.failure.retryable, false);
 	});
 
-	it("rejects a task without a budget at submission", async () => {
+	it("refuses a verification without a budget before anything runs", async () => {
 		const s = await stack({ plan: ["final:x"] });
-		await assert.rejects(() => s.domain.author.submitTask({ capability: { id: "qa.verify", version: "1" }, input: { ticket: "QA-1", repository: { url: "x", ref: "main" } } }), /schema_violation/);
+		const task = await s.run({ budget: undefined });
+		assert.equal(task.state, "failed");
+		assert.equal(task.failure.code, "budget_required");
+		assert.equal(s.jira.requests.length, 0);
 	});
 });
 
-describe("QA role end to end: the real browser", { skip: EDGE ? false : "no installed Edge on this machine" }, () => {
+describe("QA role through the handler: the real browser", { skip: EDGE ? false : "no installed Edge on this machine" }, () => {
 	it("verifies in Edge: the page is driven by refs and the recording is a real WebM that is attached", async () => {
 		const real = (_port: number, allowHosts: readonly string[]) => PlaywrightBackend.launch({ channel: "msedge", allowHosts, executablePath: EDGE });
 		const plan = ({ root, url }: { root: string; url: string }) => [
@@ -337,7 +346,7 @@ describe("QA role end to end: the real browser", { skip: EDGE ? false : "no inst
 			`final:${REPORT("verified")}`,
 		];
 		const s = await stack({ plan, browser: real });
-		const task = await s.finish(await s.submit());
+		const task = await s.run();
 		assert.equal(task.state, "succeeded", JSON.stringify(task.failure));
 		assert.equal(task.result.verdict, "verified");
 		assert.deepEqual(evidenceKinds(task), ["video"]);
