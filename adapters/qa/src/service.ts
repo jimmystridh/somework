@@ -43,11 +43,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 	});
 	return {
 		...hooks,
-		chat: qaChat(context.env, settings.ticketPattern, tools, jiraClient && settings.jira ? {
-			search: async (jql, max) => (await jiraClient.search(jql, max)).issues.map((issue) => ({ key: issue.key, labels: issue.fields.labels ?? [], ...(issue.fields.summary ? { summary: issue.fields.summary } : {}) })),
-			testStatus: settings.jira.testStatus,
-			verifiedLabel: settings.jira.verifiedLabel,
-		} : undefined),
+		chat: qaChat(context.env, settings.ticketPattern, tools),
 		...execution,
 		readinessChecks: {
 			...execution.readinessChecks,

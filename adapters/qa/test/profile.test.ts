@@ -55,9 +55,10 @@ describe("the QA profile", () => {
 		assert.match(policy.needsApproval("jira_transition_to_in_progress_and_reassign", { comment: "still broken" })!, /hand QA-1 back/);
 	});
 
-	it("takes a verification-sized budget and chat pool for an instruction in chat", () => {
-		assert.deepEqual(qaProfile().chat?.instructBudget, { maxTokens: 4_000_000, maxMinutes: 60 });
-		assert.equal(qaProfile().chat?.hardTokenCap, 5_000_000);
+	it("gives a conversation a roomier budget than the default, and a verification job the budget of a task", () => {
+		assert.deepEqual(qaProfile().chat?.runBudget, { maxTokens: 1_500_000, maxMinutes: 30 });
+		assert.equal(qaProfile().chat?.hardTokenCap, 2_000_000);
+		assert.deepEqual(qaProfile().defaultBudget, { maxTokens: 4_000_000, maxMinutes: 60 });
 	});
 
 	it("asks before a shell command that would change the checkout, on top of the default and Windows rules", () => {
