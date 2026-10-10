@@ -145,7 +145,8 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		if (!requested && (requireBudget || !profile)) return fail("budget_required", "a job without a token and time budget is not accepted");
 		const asked = requested ?? profile!.defaultBudget;
 		const budget = { maxTokens: Math.min(asked.maxTokens, deps.limits.maxTokensCap), maxMinutes: Math.min(asked.maxMinutes, deps.limits.maxMinutesCap) };
-		const agentKey: string = prepared.agentKey ?? `${scratch ? "scratch" : repository.url}#${job.task.conversationId ?? taskId}`;
+		// one model session and one workspace per job: the jobs of a chat share its conversation, and a job that resumed the session of an earlier one repeated its conclusion instead of doing its own work
+		const agentKey: string = prepared.agentKey ?? `${scratch ? "scratch" : repository.url}#${taskId}`;
 		if (deps.shards && !ownsKey(deps.shards.table, deps.shards.agentId, agentKey)) return fail("wrong_shard", "this agent does not own the shard of that agentKey; route the task with targetAgentId from the shard table");
 		if (deps.ledger && deps.ledger.remaining() < budget.maxTokens) {
 			m.jobs({ status: "budget_exhausted" });

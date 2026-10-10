@@ -277,13 +277,14 @@ describe("the handler's retry of a task whose pull request is the only thing mis
 	const control = (): JobControl => ({ signal: new AbortController().signal, progress: () => undefined, requestInput: async () => ({ approved: false }) }) as unknown as JobControl;
 
 	function handlerFor(r: Rig, host: GitHost, hooks: Record<string, unknown>) {
-		const calls = { model: 0, resume: 0 };
+		const calls = { model: 0, resume: 0, keys: [] as string[] };
 		const runtime: AgentRuntime = {
 			start: async () => undefined,
 			health: () => ({ ready: true }),
 			close: async () => undefined,
 			execute: async (request) => {
 				calls.model += 1;
+				calls.keys.push(request.agentKey);
 				writeFileSync(join(request.workspace, "fix.txt"), "fixed\n");
 				return { status: "done", answer: "FIXED: by the model", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0 } };
 			},
@@ -305,9 +306,19 @@ describe("the handler's retry of a task whose pull request is the only thing mis
 				...hooks,
 			},
 		});
-		const job = (taskId: string): Job => ({ taskId, capability: { id: "code.fix", version: 1 }, input: { repository: { url: r.remote, ref: "HEAD" }, budget: { maxTokens: 1000, maxMinutes: 1 }, instruction: "fix" }, task: {} }) as unknown as Job;
-		return { calls, run: (taskId: string) => handler(job(taskId), control()) };
+		const job = (taskId: string, conversationId?: string): Job => ({ taskId, capability: { id: "code.fix", version: 1 }, input: { repository: { url: r.remote, ref: "HEAD" }, budget: { maxTokens: 1000, maxMinutes: 1 }, instruction: "fix" }, task: conversationId ? { conversationId } : {} }) as unknown as Job;
+		return { calls, run: (taskId: string, conversationId?: string) => handler(job(taskId, conversationId), control()) };
 	}
+
+	it("gives every job its own model session and workspace, also when several jobs are started from one conversation", async () => {
+		const r = rig();
+		const h = handlerFor(r, new FakeHost(), {});
+		await h.run("job-a", "conv_chat");
+		await h.run("job-b", "conv_chat");
+		assert.equal(h.calls.keys.length, 2);
+		assert.notEqual(h.calls.keys[0], h.calls.keys[1], "a job that resumed the session of an earlier one repeated its conclusion instead of doing its own work");
+		assert.ok(h.calls.keys.every((key) => key.endsWith("job-a") || key.endsWith("job-b")));
+	});
 
 	it("opens the pull request without running the model again", async () => {
 		const r = rig();
