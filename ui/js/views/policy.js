@@ -26,7 +26,6 @@ async function decisions(pane) {
       { label: 'Resource', render: (d) => h('span', { class: 'mono' }, d.resource || '—') },
       { label: 'Decision', render: (d) => chip(d.decision, 'plain', d.decision === 'allow' ? 'succeeded' : 'failed') },
       { label: 'Reasons', render: (d) => (d.reasons || []).join('; ') || '—' }, { label: 'Policy', render: (d) => d.policyVersion },
-      { label: 'Task', render: (d) => (d.taskId ? h('a', { href: `#/tasks/${d.taskId}` }, short(d.taskId, 6)) : '—') },
     ], res.decisions, { testid: 'decisions-table', rowTestid: 'decision-row', rowAttrs: (d) => ({ 'data-decision': d.decision }) }));
   };
   pane.append(h('div', { class: 'row', style: 'margin-bottom:1rem' },

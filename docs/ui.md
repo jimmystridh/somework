@@ -2,25 +2,21 @@
 
 A dependency-free single-page app (`ui/`, vanilla ES modules + CSS, no build step) served by the domain service at
 `/ui/`. It implements the spec's *Audit and introspection* section: two timelines (conversation vs execution),
-canonical inspection, the introspection milestone views, and the POL-03 approval UX.
+canonical inspection and the introspection views. There are no tasks or approvals in the platform any more (`docs/adr/0003-messages-and-events-replace-tasks.md`): the console shows conversations, messages, the catalog, policy and audit.
 
 ## Views
 
 | Route | What it shows |
 |---|---|
-| `#/overview` | Tasks by state, pending approvals, reconciliation queue, online runtimes, denials (24 h), draft catalog entries, per-sink outbox (plane) status |
-| `#/tasks`, `#/tasks/<id>` | Filterable task list; detail with lease/fencing/attempt, effective authority, blocker, result/failure, artifacts, lifecycle timeline (`task_events`), cancel and reconcile actions |
-| `#/tasks/<id>` → DAG tab | Delegation lineage (`/v1/tasks/{id}/tree`) |
-| `#/conversations/<id>` | **What participants said** (left) next to the **platform record** (right). Messages carry type badges and trigger modes; `chat.notice`/`task.status` are visually de-emphasised ("automated notice"); `chat.message` is stamped "reported by participant"; platform-emitted projections (`task.request`, `task.result`, …) are stamped "platform projection". Task events, audit and policy decisions sit under a verdigris "platform record" stamp (AUD-02) |
+| `#/overview` | Agents, online runtimes, denials (24 h), draft catalog entries, per-sink outbox (plane) status |
+| `#/conversations/<id>` | **What participants said** (left) next to the **platform record** (right). Messages carry type badges, trigger modes and their attachments; `chat.notice` is visually de-emphasised ("automated notice"); `chat.message` is stamped "reported by participant". The audit records of the conversation sit under a verdigris "platform record" stamp (AUD-02) |
 | `#/canonical/message/<id>` | The exact stored `MessageEnvelope`, with SHA-256 of the canonical envelope and of `content.data` (equals the audit record's `contentDigest`) |
-| `#/canonical/task/<id>` | The task document as returned by the API, with digest |
-| `#/canonical/context/<id>/<v>` | Stored ContextPack manifest; the digest is **recomputed in the browser** and compared with the recorded one; section index shows presence, size and disclosure |
-| `#/catalog` | Entries incl. drafts; approve/suspend/revoke with visibility, trust tier and exported capabilities |
-| `#/approvals` | Pending/decided approvals showing action digest and task revision; Approve/Deny send exactly those values, so a stale approval is refused by the server |
+| `#/catalog` | Entries incl. drafts (the nav shows how many); approve/suspend/revoke with visibility, trust tier and exported capabilities. Capabilities are advertisements only |
 | `#/policy[/audit]` | Policy decisions (filter by decision/actor, reasons), audit trail with a *Verify hash chain* button, active policy document |
 | `#/outbox` | Readiness, per-sink backlog, dead-letter re-queue, link to `/metrics` |
 | `#/runtimes` | Logical agents with availability vs concrete runtime instances |
-| `#/contexts` | Context packs |
+
+The agents' background jobs are not in this console: the fleet dashboard (`dashboard/`, `docs/FLEET_DASHBOARD.md`) shows them from the `agent.<slug>.job.*` events.
 
 Trace ids on audit rows and events can be copied; Matrix room links appear when a `transport_mappings` row maps the
 conversation to a room.
@@ -55,16 +51,15 @@ jwks_url = "https://idp.example.com/jwks"
 
 ## Operator API used by the console
 
-All gated by operator actions (`ops.read`, `audit.read`, `catalog.approve`, `task.reconcile`, `approval.grant`);
+All gated by operator actions (`ops.read`, `audit.read`, `catalog.approve`);
 ordinary agents and humans receive 403 and no data.
 
-`GET /v1/admin/{overview,tasks,audit,audit/verify,policy-decisions,conversations,catalog,context-packs,context-packs/{id}/{v},artifacts,messages,outbox,policy}`,
+`GET /v1/admin/{overview,audit,audit/verify,policy-decisions,conversations,catalog,artifacts,messages,outbox,policy}`,
 `GET /ui/config.json`, `GET /ui/session`, `POST /ui/{logout,dev-login}`.
 
 ## Running the browser suite
 
-The suite runs against `devstack`, a seeded stack (agents, workers, tasks in every state, delegation tree, pending
-and decided approvals, reconciliation queue, a policy denial, an artifact, a context pack, conversations, a mock
+The suite runs against `devstack`, a seeded stack (two agents, a conversation with a notice, an answer and an attached file, a room, a mock
 OIDC IdP with users `alice` (operator), `bob` (ordinary) and `mallory` (not provisioned)).
 
 ```
@@ -76,5 +71,5 @@ SOMEWORK_E2E=1 cargo test -p somework-it --test ui_e2e -- --nocapture       # sa
 cargo test -p somework-it --test ui_api                                      # fast, no browser
 ```
 
-The suite is stateful (approvals are decided, tasks reconciled), so it runs serially against one fresh devstack.
+The suite is stateful (catalog approvals, the denial it provokes), so it runs serially against one fresh devstack.
 Traces and screenshots of failures land in `e2e/test-results/` (gitignored); an HTML report in `e2e/playwright-report/`.

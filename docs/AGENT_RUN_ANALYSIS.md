@@ -1,5 +1,7 @@
 # Agent run analysis (2026-10-05 to 2026-10-06)
 
+> Historical (2026-10-05/06): the tasks, claim loop and reactions this document talks about were replaced by messages, events and background jobs on 2026-10-10 (`docs/adr/0003-messages-and-events-replace-tasks.md`).
+
 Scope: every run of the QA, Aikido fixer, developer, reviewer and Windows developer agents since the event hub went live, plus the rules, the hub, CI and the hypervisor jobs those runs depend on. Evidence comes from the domain's task and rule counters, Loki, the hub and receiver stats, Woodpecker runs and the backup logs. Host names and credentials are left out on purpose.
 
 Legend: severity P1 (broken or unsafe), P2 (wrong or wasteful), P3 (hygiene). "Repo" means fixable by a change in this repository; "config" means a deployment or owner action.

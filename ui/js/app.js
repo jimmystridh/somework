@@ -3,12 +3,9 @@ import { clear, h, toast } from './dom.js';
 
 const ROUTES = [
   ['overview', 'Overview', () => import('./views/overview.js')],
-  ['tasks', 'Tasks', () => import('./views/tasks.js')],
   ['conversations', 'Conversations', () => import('./views/conversations.js')],
-  ['approvals', 'Approvals', () => import('./views/approvals.js')],
   ['catalog', 'Catalog', () => import('./views/catalog.js')],
   ['policy', 'Policy & audit', () => import('./views/policy.js')],
-  ['contexts', 'Context packs', () => import('./views/contexts.js')],
   ['outbox', 'Outbox & health', () => import('./views/outbox.js')],
   ['runtimes', 'Runtimes', () => import('./views/runtimes.js')],
   ['canonical', null, () => import('./views/canonical.js')],
@@ -85,7 +82,7 @@ async function refreshNavCounts() {
   if (!session.operator) return;
   try {
     const o = await get('/v1/admin/overview');
-    navCounts = { approvals: o.pendingApprovals || '', tasks: '' };
+    navCounts = { catalog: o.draftCatalogEntries || '' };
   } catch { navCounts = {}; }
 }
 
@@ -106,8 +103,8 @@ async function navigate() {
   }
   refreshNavCounts().then(() => {
     const nav = app.querySelector('.nav');
-    const badge = nav?.querySelector('[data-testid="nav-approvals"]');
-    if (badge && navCounts.approvals && !badge.querySelector('.count')) badge.append(h('span', { class: 'count', 'data-testid': 'approvals-count' }, navCounts.approvals));
+    const badge = nav?.querySelector('[data-testid="nav-catalog"]');
+    if (badge && navCounts.catalog && !badge.querySelector('.count')) badge.append(h('span', { class: 'count', 'data-testid': 'drafts-count' }, navCounts.catalog));
   });
 }
 

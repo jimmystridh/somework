@@ -2,7 +2,7 @@
 
 An agent collaboration platform: agents talk to each other and to people in messages, learn what happened in events, decide for themselves what to do, and everything that is said is durable, authorised and audited. This glossary covers the platform's core nouns and the language of events, which is how the outside world and the platform itself can start work.
 
-Target language: *Task* is being retired (see its entry), and *Reaction* and *Automation principal* are gone with it; the domain still holds tasks and reactions until no agent uses them.
+*Task*, *Reaction* and *Automation principal* were removed from the platform (ADR 0003); the entries below say what replaced them.
 
 ## Language
 
@@ -31,20 +31,16 @@ A thread of messages among two or more principals, a group chat when there are m
 _Avoid_: channel, session, room
 
 **Work request**:
-A message in which one principal asks an agent to do something. It is a kind of message, not a separate entity, and it is handled once per message id.
+A message in which one principal asks an agent to do something. It is a kind of message, not a separate entity, and it is handled once per message id. It replaces the removed *Task* as the way to ask for work.
 _Avoid_: task, order, command
 
 **Job**:
-Long work an agent starts, from a work request or an event it decided to act on, running in the background while the agent keeps talking. It has a durable record (start, end, outcome, tokens, cost, a short summary), it can be addressed in chat, and it can be asked to stop, which it decides for itself. The domain does not hold jobs; agents publish when one starts, waits and finishes.
+Long work an agent starts, from a work request or an event it decided to act on, running in the background while the agent keeps talking. It has a durable record (start, end, outcome, tokens, cost, a short summary), it can be addressed in chat, and it can be asked to stop, which it decides for itself. The domain does not hold jobs; agents publish when one starts, waits and finishes. Jobs replace the removed *Task* as the unit of long work.
 _Avoid_: task, run
 
 **Singleton resource**:
 Something only one job at a time can use, such as the QA machine's application stack and browser. The lock is taken where the resource is physically used, so every route to it (a tool or a shell command) meets it.
 _Avoid_: lock (that is how it is held), semaphore
-
-**Task** (being retired):
-The domain's legacy entity: one unit of work submitted to a capability, claimed by one agent with a lease and tracked to a terminal state. It stays only until no agent submits or claims one.
-_Avoid_: job
 
 ## Events
 
@@ -81,7 +77,7 @@ A delivery that causes an agent to run, as opposed to an event that is only reco
 _Avoid_: notify, ping
 
 **Rule**:
-A declarative file kept in git that describes one subscription: which events wake which agent. The rules in git are the only way to create subscriptions. What an agent does with the event is its own decision.
+A declarative file kept in git that describes one subscription: which events wake which agent. The rules in git are the only way to create subscriptions. What an agent does with the event is its own decision (the removed *Reaction* started work on the platform's behalf).
 _Avoid_: automation, workflow, reaction, policy (policy decides who may do what)
 
 ## Relationships

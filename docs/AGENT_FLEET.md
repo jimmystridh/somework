@@ -57,7 +57,7 @@ The rule that keeps this honest: **a role may not import from another role**. If
 Agents do not see each other's disks. Work moves as **a reference**, not as files:
 
 ```
-developer  --{repo, branch agent/<task>, commit sha, prUrl, diff artifact}-->  manager
+developer  --{repo, branch agent/<job>, commit sha, prUrl, diff artifact}-->  manager
 manager    --{repo, ref=sha, pr, ticket}-->  reviewer      (read-only review)
 manager    --{repo, ref=sha}-->              windows-developer (build/test on Windows) and qa (browser)
 reviewer   --{verdict, findings[]}-->        manager  -- fixes needed -->  developer (same branch, new commits)
@@ -65,15 +65,15 @@ reviewer   --{verdict, findings[]}-->        manager  -- fixes needed -->  devel
 
 * The **git remote is the exchange medium**. Every handoff carries `{repository.url, ref}`, and the ref is a **resolved commit SHA**,
   so a reviewer or QA run is always about exactly the code that was produced, even if the branch moves.
-* Results larger than a few KB (diffs, review reports, videos, logs) are **artifacts** in SomeWork, referenced from the task result.
-* Long conversations that must change hands (a half-done task, ownership) use a **ContextPack**, not copied prompts.
-* **Same branch, many agents:** the developer owns `agent/<task>`. Others never push to it; follow-up fixes are new developer tasks
-  with the same `agentKey`, so the durable conversation (and its workspace) continues.
+* Results larger than a few KB (diffs, review reports, videos, logs) are **artifacts** in SomeWork, attached to the message that reports the job's result.
+* Work that must change hands is described in a message (and the conversation it is in), not copied prompts; context packs were removed.
+* **Same branch, many agents:** the developer owns `agent/<job>`. Others never push to it; follow-up fixes are new developer jobs
+  asked for in the same conversation, so the history is there for the next run.
 
 ### 3. Knowledge (rules, skills, prompts): the target repository is the source of truth
 
 The repository the agents work on already carries its own instructions (`AGENTS.md`, `.agents/skills`, `.claude/skills`,
-`.claude/agents`). The kit's skill loader reads them **from the checked-out ref at task time** and adds an index (name and
+`.claude/agents`). The kit's skill loader reads them **from the checked-out ref at job time** and adds an index (name and
 description) to the system prompt; the model opens the `SKILL.md` it needs with its file tool (progressive disclosure). Consequences:
 
 * Skills are **never copied into agent images or into this repository**. They change with the code they describe, per branch.
@@ -87,32 +87,27 @@ description) to the system prompt; the model opens the `SKILL.md` it needs with 
 * Because this repository is public, company-specific skill text, ticket keys and internal hosts belong in the target repository
   or the private deployment config, not here.
 
-### 4. Capabilities: contracts, not code
+### 4. Capabilities: advertisements, not contracts
 
-Agents never call each other's functions. They submit tasks against **capability cards**; the card (input/output schema, side
-effects, budget requirement, tags) is the interface. This is what lets the Windows developer be a different program on a different
-operating system and still be a drop-in provider: it only has to honour the contract. Two agents that are interchangeable provide the
-same capability id; agents that differ in a way that matters (Windows vs Linux) provide different ids so routing is explicit.
+Agents never call each other's functions. They ask each other for things in messages, and each agent decides what to do. The **capability card** (name, description, examples, advisory side-effect class) tells others what an agent offers; nothing is enforced by it and no schema is checked by the platform. The agent's job tool (`verify_ticket`, `fix_issue`, ...) is where an input is validated. Agents that differ in a way that matters (Windows vs Linux) offer different capability ids so a person or another agent can pick the right one.
 
 ## Roles in detail
 
 ### Aikido fixer (live)
-`code.fix` v1 on the same kit and git protocol as the developer, started by events instead of a requester: the rule `rules/aikido-fixer.yaml` wakes it for `aikido.*` events, its shipped handler turns an eligible issue into one task for itself, and the task works in a fresh clone (from a persistent mirror) at the resolved commit of the default branch. It reads the issue through a host-side, read-only Aikido client, refuses protected paths, secret-like text, oversized changes and a failing check profile, and opens a pull request (a real one by default, a draft with `GIT_PR_DRAFT=1`) on `agent/aikido-<issue>-<sha>`. Approval requests are refused (nobody answers for it). Limits are enforced twice: by the handler in the sandbox as an early filter and by a ledger on the service host as the authority. See `adapters/aikido-fixer/README.md`.
+`code.fix` v1 on the same kit and git protocol as the developer, started by events instead of a requester: the rule `rules/aikido-fixer.yaml` wakes it for `aikido.*` events, its shipped handler turns an eligible issue into one `code.fix` job for itself, and the job works in a fresh clone (from a persistent mirror) at the resolved commit of the default branch. It reads the issue through a host-side, read-only Aikido client, refuses protected paths, secret-like text, oversized changes and a failing check profile, and opens a pull request (a real one by default, a draft with `GIT_PR_DRAFT=1`) on `agent/aikido-<issue>-<sha>`. Approval requests are refused (nobody answers for it), also in a conversation. Limits are enforced twice: by the handler in the sandbox as an early filter and by a ledger on the service host as the authority. See `adapters/aikido-fixer/README.md`.
 
 ### Datadog triage (live)
-`ops.triage` v1 (side effects `read`), started by events like the fixer: the rule `datadog-triage` wakes it for `datadog.monitor.*` events (`rules/datadog-triage.yaml`, added once the agent was enrolled, because the rules pipeline refuses a rule whose owner does not exist; the existing `alert-datadog-to-manager` rule stays), its shipped handler turns an eligible alert into one task for itself, and the task works on no repository (`profile.noRepository` in the kit: an empty scratch directory). The model reads Datadog through six read-only tools that run in the service, where the keys are (monitor, monitor search, logs, metrics, events, incidents); `save: true` writes the full redacted result into `data/` in the workspace, and `python3` (standard library), `jq` and a few text tools in a sandbox with **no credentials and no network** (its own image: the developer sandbox plus python3; no egress proxy) analyse it under a command policy (anything else, including any approval, is refused). The answer is one json diagnosis (severity, summary, suspected cause with confidence, timeline, evidence, actions); the service checks that every finding cites a tool call or is marked inference, allows one repair turn, and sends the owner one deterministic notice (at most 1500 characters, secrets and links stripped, the monitor link built by the service) to `agent/manager`. Limits are enforced twice, like the fixer's: handler early filter, host ledger as the authority. See `adapters/datadog-triage/README.md`.
+`ops.triage` v1 (side effects `read`), started by events like the fixer: the rule `datadog-triage` wakes it for `datadog.monitor.*` events (`rules/datadog-triage.yaml`, added once the agent was enrolled, because the rules pipeline refuses a rule whose owner does not exist; the existing `alert-datadog-to-manager` rule stays), its shipped handler turns an eligible alert into one `ops.triage` job for itself, and the job works on no repository (`profile.noRepository` in the kit: an empty scratch directory). The model reads Datadog through six read-only tools that run in the service, where the keys are (monitor, monitor search, logs, metrics, events, incidents); `save: true` writes the full redacted result into `data/` in the workspace, and `python3` (standard library), `jq` and a few text tools in a sandbox with **no credentials and no network** (its own image: the developer sandbox plus python3; no egress proxy) analyse it under a command policy (anything else, including any approval, is refused). The answer is one json diagnosis (severity, summary, suspected cause with confidence, timeline, evidence, actions); the service checks that every finding cites a tool call or is marked inference, allows one repair turn, and sends the owner one deterministic notice (at most 1500 characters, secrets and links stripped, the monitor link built by the service) to `agent/manager`. Limits are enforced twice, like the fixer's: handler early filter, host ledger as the authority. See `adapters/datadog-triage/README.md`.
 
 ### Manager (live)
 Existing Telegram bridge (owner pairing, private chat only) retrofitted: SomeWork identity `agent/manager` held by the bridge, a narrow
-local gateway that the Pi process reaches through tools (catalog, submit, task, cancel, message, inbox). Write-side-effect submissions
-need owner approval in Telegram; budgets are capped; task results, questions and agent messages are pushed to the chat.
-It also relays domain approvals (reactions that need a write capability), forwards events from the alert rules and the nightly digest without a model, and offers owner-only controls to pause or resume rules and hub sources and to switch an agent's handlers off (`EVENTS.md`). It encodes the pipeline: ticket triage, developer, reviewer, (autofix loop), QA, Windows build when C++ is touched.
+local gateway that the Pi process reaches through tools (catalog, message, inbox, handlers, control). The Manager asks an agent for something in a message; the agent decides and, for long work, starts a background job. The owner is told in Telegram when `agent.<slug>.job.finished` events arrive, and agent messages and approval questions are pushed to the chat. It relays agents' approval questions (`chatApprovalRequest`) to the owner and sends the labelled decision back, forwards events from the alert rules and the nightly digest without a model, and offers owner-only controls to pause or resume rules and hub sources and to switch an agent's handlers off (`EVENTS.md`). It encodes the pipeline: ticket triage, developer, reviewer, (autofix loop), QA, Windows build when C++ is touched.
 
 ### Developer (exists)
-`code.agent`: durable Pi run in a sandbox, git steps done by service code, approvals through `input_required`, budgets, draft PRs.
+`code.agent`: durable Pi run in a sandbox, git steps done by service code, approvals asked of the approver in the conversation, budgets, draft PRs. Started with the `code_agent` job tool.
 
 ### Windows developer
-Same kit and the same protocol (clone, branch `agent/<task>`, commit, push, PR) with these differences:
+Same kit and the same protocol (clone, branch `agent/<job>`, commit, push, PR) with these differences:
 * Provides `code.windows`; input adds `{ build?: {solution, configuration}, tests?: string[] }`; output adds `{ build: {ok, log artifact}, tests: {...} }`.
 * **No Docker on that machine**, so the sandbox is a local `ExecutionEnv` (kit interface `ExecutionEnv`) under a dedicated unprivileged
   Windows account whose only writable area is the workspace root; egress is limited by Windows Firewall rules to the model API, the
@@ -125,14 +120,12 @@ Same kit and the same protocol (clone, branch `agent/<task>`, commit, push, PR) 
 ### Reviewer
 `code.review` v3 (compatible with v2; adds `pr` and `ticket`): checks out the ref read-only, loads the allowed review skills, gathers PR
 context (diff, checks, existing threads), and returns `{verdict, summary, findings[{severity,file,line,text}]}` plus the full report
-as an artifact. Drafted inline comments are **returned, not posted**; posting is a separate approved action (Manager).
+as an artifact. Started by the `review_code` job tool or by the `pr-review` event handler (rule `rules/reviewer-prs.yaml`). Drafted inline comments are **returned, not posted**; posting is a separate approved action (Manager).
 
 ### QA
-`qa.verify` v1: input `{ ticket, ref? }`. Runs the adapted QA skill: resolves the SHA, builds a clean worktree, starts the app against the
-remote test backend, drives a real browser, builds fixtures, records a short video as an artifact, returns
-`{verdict: verified|not_fixed|blocked|skipped, evidence[], fixtures[], notes}`.
-**The ticket-system writes of the original skill (comment, label, transitions) become Manager-approved follow-up actions**, because
-they are visible side effects; the "never move to Done" rule is kept as a hard constraint in the tool layer, not only in the prompt.
+`qa.verify` v1: input `{ ticket, repository, app?, scenario? }`. Started by the `verify_ticket` job tool (a person or agent asks for a ticket, or "the tickets in Test") or by the `qa-ticket` event handler (rule `rules/qa-ticket.yaml`: a ticket moving to Test). Runs the adapted QA skill: resolves the revision of the ticket's pull request, builds a clean worktree, starts the app against the remote test backend, drives a real browser, builds fixtures, records a short video as an artifact, returns
+`{verdict: verified|not_fixed|blocked|skipped, evidence[], fixtures[], notes}` and posts the findings to the conversation. The application stack is a singleton resource: verifications run one after another and say what they wait for.
+The ticket-system writes (comment, label, hand-back to the previous assignee) are made by the job's own tools; they ask for approval only where `QA_JIRA_APPROVE` says so (the deployment sets `none`), and the "never move to Done" rule is a hard constraint in the tool layer, not only in the prompt.
 The role is built and tested; its machine (a Windows clone with a browser and the product's local back end) is prepared, and it waits for the product's web database to be restored before it can verify a ticket.
 
 ## Conversations and jobs
@@ -162,7 +155,7 @@ When an agent has used up a token pool, or the owner wants it to be able to do m
 
 Any kit-based role can ask the event hub to wake it later ("trigger me with this in 15 minutes"): set `TIMERS_URL` (the hub's TLS address), `TIMERS_TOKEN_FILE` (the agent's own token, `somework-hub timer-token <agent id>` on the hub) and `TIMERS_CA_FILE`, and list the agent in the hub's `timers.agents` (`packages/events-hub/README.md`, "Timers"). The model gets `schedule_followup` (minutes, a self-contained note, an optional key), `list_followups` and `cancel_followup` in tasks and in the instruct and open chat tiers, and role code gets `context.timers`. The wake arrives as the event `clock.timer.<agent>.due`; the role needs one rule that turns it into a wake and a handler that decides what the wake means. Timers are one-shot, 1 minute to 7 days away, at most 20 pending per agent; asking again with the same key moves the timer.
 
-The Aikido fixer uses it to follow up on its own pull requests: after it opens one it asks for a look after 15 minutes, then 60 and 240 (`AIKIDO_FOLLOWUP_MINUTES`, `off` to disable). The wake starts a `code.fix.followup` task for itself, which reads the reviews, comments and failing checks that came after the branch's newest commit (reviews, inline comments and failing checks from anyone, automated reviewers included, and plain comments from people, as data) and, when there are some and the pull request is still open, pushes a follow-up commit to the same branch. A closed or merged pull request, or one with nothing new, ends as `skipped` without cloning anything, and the next look is asked for while checks are left.
+The Aikido fixer uses it to follow up on its own pull requests: after it opens one it asks for a look after 15 minutes, then 60 and 240 (`AIKIDO_FOLLOWUP_MINUTES`, `off` to disable). The wake starts a `code.fix.followup` job for itself, which reads the reviews, comments and failing checks that came after the branch's newest commit (reviews, inline comments and failing checks from anyone, automated reviewers included, and plain comments from people, as data) and, when there are some and the pull request is still open, pushes a follow-up commit to the same branch. A closed or merged pull request, or one with nothing new, ends as `skipped` without cloning anything, and the next look is asked for while checks are left.
 
 ## Observe tools
 
@@ -170,8 +163,7 @@ Any pi-based role can be given read-only access to the central Grafana (Loki log
 roles with fleet scope, the rest of the fleet: `logs_query`, `my_history`, `logs_labels`, `alerts_status`, `dashboards_search`, `metrics_catalog`, `metrics_query`, `llm_usage`. They are off by
 default (`OBSERVE_ENABLED=1`, `GRAFANA_URL`, `GRAFANA_TOKEN_FILE`); the token belongs to a Viewer service account created by
 `deploy/grafana/provision-reader.py` and never enters the sandbox. A role with own scope has its matchers added to every query. Queries are parsed and
-rebuilt (no aggregations, sub-queries or `offset`), answers are redacted, size-capped and framed as untrusted data. Allowed in ASK and INSTRUCT
-chat. Limits: Loki logs and Prometheus metrics (no traces), log history reaches as far as Loki retention and at most 168 hours per query, metrics at most 720 hours (Prometheus keeps a year). `llm_usage` and the *LLM usage and cost* dashboard answer "who spent how many tokens and dollars on which model"; own scope shows only the asking agent. Settings: `packages/agent-kit/README.md`.
+rebuilt (no aggregations, sub-queries or `offset`), answers are redacted, size-capped and framed as untrusted data. Allowed in conversations. Limits: Loki logs and Prometheus metrics (no traces), log history reaches as far as Loki retention and at most 168 hours per query, metrics at most 720 hours (Prometheus keeps a year). `llm_usage` and the *LLM usage and cost* dashboard answer "who spent how many tokens and dollars on which model"; own scope shows only the asking agent. Settings: `packages/agent-kit/README.md`.
 
 ## Identity on the code host, and how an agent shows its setup
 
@@ -192,7 +184,7 @@ chat. Limits: Loki logs and Prometheus metrics (no traces), log history reaches 
   rotate on use).
 * **Least privilege per role**: reviewer has no push token; QA has no push token; only developers push, only to `agent/*` branches via a
   token scoped to the one repository.
-* Every handoff names a **resolved SHA**. Every task has a **budget**. Every write needs an **approval path**.
+* Every handoff names a **resolved SHA**. Every job has a **budget**. Every write needs an **approval path**.
 * Provider choice is per job within an allowlist; the default is the paid provider the organisation has approved. Personal-account or
   third-party-routed providers are opt-in only.
 
@@ -204,7 +196,8 @@ chat. Limits: Loki logs and Prometheus metrics (no traces), log history reaches 
 4. Windows developer (local `ExecutionEnv`, Windows service packaging). **Done and live.**
 5. QA. **Built; deployment waits for the web database restore.**
 6. Manager orchestration, approvals and controls. **Done and live.**
-7. Events and reactions, event handlers and token pools in the kit. **Done and live** (`EVENTS.md`).
+7. Events and rules, event handlers and token pools in the kit. **Done and live** (`EVENTS.md`).
+8. Messages and events replace tasks: conversations, background jobs, singleton resources, job events. **Implemented 2026-10-10, not yet deployed** (`docs/adr/0003-messages-and-events-replace-tasks.md`).
 
 ## Decisions taken since
 

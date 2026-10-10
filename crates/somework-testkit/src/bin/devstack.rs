@@ -20,7 +20,10 @@ fn key_json(kind: &str, id: &str, key: &ed25519_dalek::SigningKey, runtime: Opti
 }
 
 async fn send(client: &Client, conversation: &str, kind: &str, to: Option<&str>, text: &str, artifacts: &[Value]) -> Value {
-    let mut body = json!({"type": kind, "conversationId": conversation, "content": {"mediaType": "text/plain", "data": text}, "artifacts": artifacts});
+    let mut body = json!({"type": kind, "content": {"mediaType": "text/plain", "data": text}, "artifacts": artifacts});
+    if !conversation.is_empty() {
+        body["conversationId"] = json!(conversation);
+    }
     if let Some(to) = to {
         body["recipients"] = json!([{"kind": "agent", "id": to}]);
     }

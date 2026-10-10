@@ -752,3 +752,22 @@ C. WHAT TO INVESTIGATE (in this order)
 9. Write and rehearse the "rotate everything" runbook once, on the pilot: every secret in the inventory, in order, with the time it took and what broke.
 10. Remove or document the plaintext copies on the owner's workstation; decide how the two lists (workstation, password manager) are kept in step.
 - [DECISION] who owns secrets for the fleet (a person, a role mailbox, a team), which store is the source of truth, and how long a token may live.
+
+== 2026-10-10: after the messages-and-events cut-over (docs/adr/0003-messages-and-events-replace-tasks.md) ==
+Tasks, reactions and context handovers are gone from the domain, SDK, kit, roles, Manager and dashboard. Everything is on main as local commits; nothing is
+deployed. Follow-ups:
+1. Deploy order: domain first (new binary, migration 0600 runs at start, then re-apply the rules: validate/apply in CI), then the agents (kit and roles), then
+   the Manager and the dashboard. An agent started before the domain change cannot claim anything any more, so do not mix old agents with the new domain.
+2. Grant every agent `events.publish:agent.<slug>.*` (note the wildcard) so that job events and the dashboard's Jobs panel work:
+   `node scripts/grant-job-events.ts --url <domain> --key <root key> [--ca <ca.pem>]` (dry run), then again with `--apply`. Agents enrolled later: `enroll-agent --publish`.
+3. The shipped QA event handler (`adapters/qa/src/handlers/qa-ticket.mjs`) has not run on the QA machine: check that the handler runner works in Git Bash there.
+4. The reviewer rule selects `github.pull_request.*`, so the reviewer is woken for every pull request event; its handler drops what it does not need. Check how
+   many wakes per day that is and narrow the selector (opened, ready_for_review) if it is noisy.
+5. QA's application stack is a singleton resource held by the job manager only: a shell command in a conversation can still start the application by hand
+   (advisory, the `resources` tool shows the holder). A lock at the start script / browser daemon is not implemented.
+6. The Manager's `/suspend` no longer stops running jobs on the agents (nothing to cancel in the domain): use `scripts/fleet-suspend.sh` for that.
+7. A job that only waits for a free job slot publishes no `job.waiting` event: it first shows up as running.
+8. Every message gets its own durable Pi conversation (`thread:<messageId>`), so `pi.sqlite` grows without bound: add pruning of old conversations.
+9. The first start of an agent with the new kit treats what the domain holds for it as history (marked read, not answered). A message that arrives while an
+   agent is down on its second start is a backlog and is answered (people first, one at a time).
+10. Deploy configs on the hosts still set `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS` and other removed settings: they are ignored; replace by `APPROVERS` where needed.

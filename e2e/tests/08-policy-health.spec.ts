@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
-import { loginOperator } from './support';
+import { author, call, loginOperator } from './support';
 
 test('policy decisions list denials with the reasons that caused them', async ({ page }) => {
+  expect((await call(author(), 'PUT', '/v1/admin/policy', {})).status).toBe(403);
   await loginOperator(page);
   await page.goto('/ui/#/policy');
   await expect(page.getByTestId('decision-row').first()).toBeVisible();
@@ -9,7 +10,7 @@ test('policy decisions list denials with the reasons that caused them', async ({
   const rows = page.locator('[data-testid="decision-row"]');
   await expect(rows.first()).toHaveAttribute('data-decision', 'deny');
   for (const r of await rows.all()) await expect(r).toHaveAttribute('data-decision', 'deny');
-  await expect(rows.first()).toContainText('agent:agent/intruder');
+  await expect(rows.first()).toContainText('agent:agent/author');
   await expect(rows.first()).toContainText('not granted');
   await page.getByTestId('actor-filter').fill('nobody-at-all');
   await expect(page.getByTestId('empty')).toBeVisible();
@@ -32,9 +33,9 @@ test('outbox and health, runtimes and agents views render live data', async ({ p
   await expect(page.getByTestId('metrics-link')).toHaveAttribute('href', '/metrics');
   await page.goto('/ui/#/runtimes');
   await expect(page.getByTestId('agent-row').filter({ hasText: 'agent/reviewer' })).toBeVisible();
-  await expect(page.getByTestId('runtime-row')).toHaveCount(3);
+  await expect(page.getByTestId('runtime-row')).toHaveCount(2);
   const metrics = await page.request.get('/metrics');
-  expect(await metrics.text()).toContain('somework_tasks_submitted_total');
+  expect(await metrics.text()).toContain('somework_api_requests_total');
 });
 
 test('audit records expose trace ids that can be copied', async ({ page, context }) => {

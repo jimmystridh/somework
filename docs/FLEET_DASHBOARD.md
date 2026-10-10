@@ -50,7 +50,7 @@ gateway. The dashboard's source is in `dashboard/` (see its README for the build
 ## Jobs (2026-10-10)
 
 Agents publish `agent.<slug>.job.started`, `.waiting` and `.finished` for every job (`packages/agent-kit/src/threads/reporter.ts`; the domain
-grants them `events.publish:agent.<slug>.`). The dashboard reads them from `GET /v1/admin/events` (`ops.read`) into a `JobBook`
+grants them `events.publish:agent.<slug>.*`). The dashboard reads them from `GET /v1/admin/events` (`ops.read`) into a `JobBook`
 (`dashboard/server/src/jobs.rs`) and shows the jobs that run or wait with what the waiting ones wait for, the recently finished ones with their
 result and the agent's own short summary, per-agent counts and hourly throughput. Label, waiting-for and summary are the agents' own wording, cut at
 120, 200 and 300 characters and shown as plain text; the job's input and result are not in the events and never read.

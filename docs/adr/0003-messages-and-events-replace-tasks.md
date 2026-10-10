@@ -1,8 +1,8 @@
 # Messages and events replace tasks between agents
 
-Status: accepted (2026-10-10). Supersedes the reaction half of ADR 0001.
+Status: accepted and implemented on 2026-10-10 in one cut-over (domain, SDK, agent kit, every role, the Manager, the dashboard and the rules tooling). Supersedes the reaction half of ADR 0001.
 
-Tasks made agent-to-agent work locked: a capability contract with a schema, a mandatory budget, a claim with a lease, a result, and nothing in between. Agents now talk in **messages** and learn what happened from **events**; each agent decides for itself what to do with either, and starts a **job** when there is something to do. The domain keeps tasks only until the last consumer is gone, then deletes them (one cut-over, no dual running).
+Tasks made agent-to-agent work locked: a capability contract with a schema, a mandatory budget, a claim with a lease, a result, and nothing in between. Agents now talk in **messages** and learn what happened from **events**; each agent decides for itself what to do with either, and starts a **job** when there is something to do. The domain's tasks and reactions were deleted in the same cut-over (no dual running).
 
 Decisions that follow, each a deliberate trade:
 

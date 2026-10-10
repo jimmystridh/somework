@@ -11,7 +11,7 @@ export async function render({ root, onCleanup }) {
     clear(body).append(
       h('div', { class: 'card' }, h('h2', {}, 'Logical agents'), table([
         { label: 'Agent', render: (e) => h('span', { class: 'mono' }, e.agentCard.agentId) }, { label: 'Approval', render: (e) => chip(e.approval.status, 'plain') },
-        { label: 'Availability', render: (e) => chip(e.availability.state, 'plain') }, { label: 'Live instances', render: (e) => e.availability.activeInstances ?? 0 }, { label: 'Queue depth', render: (e) => e.availability.queueDepth ?? 0 },
+        { label: 'Availability', render: (e) => chip(e.availability.state, 'plain') }, { label: 'Live instances', render: (e) => e.availability.activeInstances ?? 0 },
         { label: 'Capabilities', render: (e) => e.agentCard.capabilities.map((c) => c.id).join(', ') },
       ], cat.entries, { testid: 'agents-table', rowTestid: 'agent-row' })),
       h('div', { class: 'card' }, h('h2', {}, 'Runtime instances'), table([

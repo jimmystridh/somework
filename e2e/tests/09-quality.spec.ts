@@ -7,8 +7,8 @@ test('no console errors across every operator view', async ({ page }) => {
   await loginOperator(page);
   const ids = devstack().ids;
   const routes = [
-    '#/overview', '#/tasks', `#/tasks/${ids.succeeded}`, `#/tasks/${ids.delegationRoot}`, '#/conversations', `#/conversations/${ids.conversation}`,
-    `#/conversations/${ids.room}`, '#/approvals', '#/catalog', '#/policy', '#/policy/audit', '#/contexts', '#/outbox', '#/runtimes',
+    '#/overview', '#/conversations', `#/conversations/${ids.conversation}`, `#/conversations/${ids.room}`,
+    '#/catalog', '#/policy', '#/policy/audit', '#/outbox', '#/runtimes',
   ];
   for (const r of routes) {
     await page.goto(`/ui/${r}`);
@@ -25,11 +25,11 @@ test('keyboard users can reach the content and navigate', async ({ page }) => {
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/#main$/);
   await page.goto('/ui/#/overview');
-  const tasksLink = page.getByTestId('nav-tasks');
-  await tasksLink.focus();
+  const catalogLink = page.getByTestId('nav-catalog');
+  await catalogLink.focus();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/#\/tasks$/);
-  await expect(page.getByTestId('nav-tasks')).toHaveAttribute('aria-current', 'page');
+  await expect(page).toHaveURL(/#\/catalog$/);
+  await expect(page.getByTestId('nav-catalog')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible();
   await expect(page.getByRole('main')).toBeVisible();
 });
@@ -49,7 +49,7 @@ test('layout holds on a phone-sized viewport', async ({ page }, info) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await loginOperator(page);
   const ids = devstack().ids;
-  for (const route of ['#/overview', '#/tasks', `#/tasks/${ids.succeeded}`, '#/approvals', `#/conversations/${ids.conversation}`]) {
+  for (const route of ['#/overview', '#/catalog', '#/policy', `#/conversations/${ids.conversation}`]) {
     await page.goto(`/ui/${route}`);
     await page.waitForLoadState('networkidle');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

@@ -1,5 +1,7 @@
 # Pi coding agent on SomeWork: review of the research report and plan
 
+> Historical (2026-10-05/06): the tasks, claim loop and reactions this document talks about were replaced by messages, events and background jobs on 2026-10-10 (`docs/adr/0003-messages-and-events-replace-tasks.md`).
+
 Input: `~/Downloads/deep-research-report.md` ("Building a Long-Running Pi Coding Agent Driven by a Message Queue", dated
 2026-10-04). Reviewed 2026-10-05 against the SomeWork source, the live pilot, and public package metadata.
 

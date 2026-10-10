@@ -19,7 +19,7 @@ ops admin --config /etc/somework/somework.toml enroll-agent --id agent/datadog-t
 cp card.json cards/datadog-triage.json                             # adapters/datadog-triage/card.json, copied to the host's ./cards directory
 ops admin --config /etc/somework/somework.toml register-card --card /cards/datadog-triage.json --approve
 ```
-`--side-effects read` because the capability changes nothing. Capabilities are advertisements: nobody needs a permission to ask the agent for a triage, in a message or through an event. The agent needs the permission `events.publish:agent.datadog_triage.` for its job events.
+`--side-effects read` because the capability changes nothing. Capabilities are advertisements: nobody needs a permission to ask the agent for a triage, in a message or through an event. The agent needs the permission `events.publish:agent.datadog_triage.*` for its job events.
 
 **The NATS broker reloads itself** (a watcher inside the broker's container, see the root deploy README). On a deployment from before 2026-10-06 that still has the separate `nats-reloader` container, send `SIGHUP` by hand: Right after `enroll-agent`, send `SIGHUP` to the broker process (`docker kill -s HUP somework-domain-nats-1` on the domain host). Its reloader prints "reloaded" but does not load the new user; without this the agent polls over HTTP only. Check `GET /v1/connection` as the agent first.
 
