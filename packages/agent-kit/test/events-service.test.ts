@@ -81,6 +81,8 @@ describe("events end to end (real domain, real sandbox, real service process)", 
 		await worker.post("/v1/subscriptions", { kind: "topic", selector: "task.*", wakeOnMatch: true });
 		const task = await domain.author.submitTask({ capability: { id: "code.agent", version: "1" }, input: { repository: { url: remote, ref: "main" }, instruction: "do nothing", budget: { maxTokens: 100_000, maxMinutes: 2 } } });
 		assert.ok(task.taskId);
+		// no agent claims a task any more, so the task's own events come from the requester cancelling it
+		await domain.author.cancelTask(task.taskId, "not needed");
 
 		const ran = await until("the handler to run on task events", async () => {
 			const current = await status();

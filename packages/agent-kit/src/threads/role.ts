@@ -12,6 +12,8 @@ export interface ThreadRoleHooks {
 	toolNames?: readonly string[];
 	/** A repository whose default branch is checked out for conversations to read (refreshed from the mirror before each run). */
 	checkout?(): { repoUrl: string; ref?: string } | undefined;
+	/** The singleton resources the jobs of a capability hold while they run (the application stack, a browser), whoever started them. */
+	jobResources?(capabilityId: string, input: Record<string, unknown>): string[] | undefined;
 	/** The role's capabilities as tools: a call starts the job at once, in the background (see `JobTool`). */
 	jobTools?: JobTool[];
 	/** Words for a finished job's result (default: the outcome, the summary, the pull request and the branch). */

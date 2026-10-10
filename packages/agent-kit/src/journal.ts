@@ -6,8 +6,8 @@ import { redactText } from "./events/redact.ts";
 export interface JobRecord {
 	taskId: string;
 	capability: string;
-	/** `task` for a job from the domain, `chat` for an instruction given in chat. */
-	source: "task" | "chat";
+	/** `job` for work an agent started (from a message or an event); `task` and `chat` are what older records say. */
+	source: "job" | "task" | "chat";
 	state: "completed" | "failed";
 	/** When the job ended. */
 	at: string;

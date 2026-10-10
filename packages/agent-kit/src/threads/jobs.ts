@@ -64,6 +64,8 @@ export interface JobManagerDeps {
 	steer: (jobId: string, text: string) => Promise<boolean>;
 	/** A step of the job that needs a person's approval. */
 	approve: (entry: JobEntry, request: { tool: string; summary: string }, signal: AbortSignal) => Promise<ApprovalDecision>;
+	/** The singleton resources a capability's jobs hold while they run, whoever asked for them (the role knows). */
+	resourcesFor?: (capabilityId: string, input: Record<string, unknown>) => string[] | undefined;
 	/** What a job may use unless it asks for less: the handler clamps it to the role's own limits. */
 	budget: { maxTokens: number; maxMinutes: number };
 	/** Aborted at shutdown: running jobs are left as they are and picked up again at the next start. */
@@ -133,7 +135,8 @@ export class JobManager {
 	start(spec: JobSpec, id = newJobId()): JobEntry {
 		const existing = this.get(id);
 		if (existing) return existing;
-		const entry: JobEntry = { ...spec, id, state: "waiting", createdAt: this.#now() };
+		const resources = spec.resources ?? this.#deps.resourcesFor?.(spec.capability.id, spec.input);
+		const entry: JobEntry = { ...spec, ...(resources && resources.length > 0 ? { resources } : {}), id, state: "waiting", createdAt: this.#now() };
 		this.#deps.store.put(entry);
 		this.#launch(entry);
 		return entry;

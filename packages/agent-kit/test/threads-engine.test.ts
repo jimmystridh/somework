@@ -30,8 +30,10 @@ function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSetting
 	const messages = new Map<string, any>();
 	const sent: Sent[] = [];
 	const requests: AgentRequest[] = [];
+	const read = new Set<string>();
 	const client = {
 		get: async (path: string): Promise<any> => {
+			if (path.startsWith("/v1/inbox")) return { messages: [...messages.values()].filter((message) => !read.has(message.messageId)) };
 			const id = decodeURIComponent(path.split("/v1/messages/")[1] ?? "");
 			if (path.startsWith("/v1/messages/")) {
 				const message = messages.get(id);
@@ -40,7 +42,8 @@ function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSetting
 			}
 			return { messages: [] };
 		},
-		post: async (_path: string, body: any): Promise<any> => {
+		post: async (path: string, body: any): Promise<any> => {
+			if (path === "/v1/messages/read") return void body.messageIds.forEach((id: string) => read.add(id));
 			sent.push({ recipients: body.recipients, conversationId: body.conversationId, causationId: body.causationId, text: body.content.data });
 			return {};
 		},
@@ -97,7 +100,7 @@ function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSetting
 			content: { mediaType: "text/plain", data: extra.text ?? `hello from ${id}` },
 		});
 	};
-	return { engine, put, sent, requests, inbox, jobs, notes, dir, stop };
+	return { engine, put, sent, requests, inbox, jobs, notes, dir, stop, read };
 }
 
 describe("threads", () => {
@@ -283,5 +286,38 @@ describe("threads", () => {
 		assert.deepEqual(request.context, { conversationId: "conv/odd name", messageId: "m1", sender: { kind: "human", id: "user/jimmy" }, audience: [{ kind: "human", id: "user/jimmy" }] });
 		assert.equal(request.workspace, "/work/conv_odd_name");
 		assert.deepEqual(request.tools, ["read"]);
+	});
+
+	it("marks a message read once it is safely in the inbox", async () => {
+		const w = world();
+		w.put("m1");
+		await w.engine.accept("m1");
+		assert.ok(w.read.has("m1"));
+		await w.engine.idle();
+	});
+
+	it("takes in what the domain holds unread that no wake announced, once", async () => {
+		const first = world();
+		first.engine.start();
+		await first.engine.sweep();
+		const w = world({ dir: first.dir });
+		w.put("missed", { conversationId: "c_missed" });
+		assert.equal(await w.engine.sweep(), 1);
+		await w.engine.idle();
+		assert.equal(w.requests.length, 1);
+		assert.equal(await w.engine.sweep(), 0, "it is read now, and known");
+	});
+
+	it("treats what the domain holds for an agent that never had an inbox as history, not as a backlog", async () => {
+		const w = world();
+		assert.equal(w.inbox.fresh, true);
+		w.put("old1");
+		w.put("old2");
+		assert.equal(await w.engine.sweep(), 0);
+		await w.engine.idle();
+		assert.equal(w.requests.length, 0);
+		assert.ok(w.read.has("old1") && w.read.has("old2"));
+		const restarted = new DurableInbox(join(w.dir, "inbox.json"));
+		assert.equal(restarted.fresh, false, "the next start is a real one: whatever came while it was down is a backlog");
 	});
 });

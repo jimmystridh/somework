@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { BUDGET_LABEL, BUDGET_POOL_LABEL, BUDGET_TOKENS_LABEL, createBudgetIntercept } from "../src/budget-control.ts";
-import type { InboundMessage } from "../src/chat.ts";
+import type { InboundMessage } from "../src/threads/message.ts";
 import { DailyLedger } from "../src/ledger.ts";
 
 const path = () => join(mkdtempSync(join(tmpdir(), "budget-")), "ledger.json");

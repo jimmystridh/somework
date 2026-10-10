@@ -1,8 +1,4 @@
 // The shared agent runtime. Roles import from here (or from a subpath, see package.json `exports`) and never from each other.
-export * from "./chat.ts";
-export * from "./chat-artifacts.ts";
-export * from "./chat-model.ts";
-export * from "./chat-jobs.ts";
 export * from "./config.ts";
 export * from "./credentials.ts";
 export * from "./events/index.ts";
@@ -18,6 +14,9 @@ export * from "./log.ts";
 export * from "./metrics.ts";
 export * from "./observe/index.ts";
 export * from "./timers/index.ts";
+export * from "./threads/index.ts";
+export * from "./threads/helpers.ts";
+export * from "./threads/state.ts";
 export * from "./pi-runtime.ts";
 export * from "./usage-metrics.ts";
 export * from "./policy.ts";

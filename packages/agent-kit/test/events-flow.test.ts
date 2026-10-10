@@ -6,7 +6,11 @@ import { describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { runChatResponder } from "../src/chat.ts";
+import { Approvals } from "../src/threads/approvals.ts";
+import { ThreadEngine } from "../src/threads/engine.ts";
+import { MessageSender } from "../src/threads/message.ts";
+import { DEFAULT_THREAD_SETTINGS } from "../src/threads/settings.ts";
+import { DurableInbox } from "../src/threads/store.ts";
 import { createHealthServer } from "../src/health.ts";
 import { createControlIntercept } from "../src/events/control.ts";
 import { createEventActions } from "../src/events/actions.ts";
@@ -58,7 +62,7 @@ function rig(options: { handlers?: Record<string, string>; script?: Scripted; li
 		},
 		async submit(_event, task) {
 			calls.submit.push({ capability: task.capability.id, budget: task.budget });
-			return { taskId: "tsk_1" };
+			return { jobId: "job-1" };
 		},
 		async notify(text) {
 			calls.notify.push(text);
@@ -502,9 +506,10 @@ describe("the kit's side of a decision", () => {
 	const setup = (runtimeOutcome: AgentOutcome = outcome(), over: Partial<Parameters<typeof createEventActions>[0]> = {}) => {
 		const executed: { request: any; hooks: any }[] = [];
 		const posts: { path: string; body: any; options: any }[] = [];
-		const submitted: { body: any; key?: string }[] = [];
+		const submitted: { event: any; task: any }[] = [];
 		const actions = createEventActions({
-			client: { post: async (path: string, body: unknown, options: unknown) => void posts.push({ path, body, options }), submitTask: async (body: unknown, key?: string) => (submitted.push({ body, key }), { taskId: "tsk_9" }) } as any,
+			client: { post: async (path: string, body: unknown, options: unknown) => void posts.push({ path, body, options }) } as any,
+			startJob: async (startedBy, task) => (submitted.push({ event: startedBy, task }), { jobId: "job-9" }),
 			runtime: { execute: async (request: any, hooks: any) => (executed.push({ request, hooks }), runtimeOutcome) },
 			agentId: "agent/test",
 			workspace: "/work/events",
@@ -556,14 +561,14 @@ describe("the kit's side of a decision", () => {
 		assert.deepEqual(result, { tokens: 10 });
 	});
 
-	it("submits a task idempotently per event, with the budget inside the input", async () => {
+	it("starts a job for the event, with the budget inside the input", async () => {
 		const { actions, submitted } = setup();
 		const result = await actions.submit(event, { capability: { id: "code.review", version: "3" }, input: { repo: "r" }, budget: { maxTokens: 1000, maxMinutes: 2 } });
-		assert.deepEqual(result, { taskId: "tsk_9" });
-		assert.deepEqual(submitted[0]!.body, { capability: { id: "code.review", version: "3" }, input: { repo: "r", budget: { maxTokens: 1000, maxMinutes: 2 } }, causedByEvent: "evt_7" }, "the task says which event it was submitted because of");
-		assert.equal(submitted[0]!.key, "event:evt_7:agent/test:code.review");
+		assert.deepEqual(result, { jobId: "job-9" });
+		assert.equal(submitted[0]!.event.id, "evt_7", "the job says which event it was started because of");
+		assert.deepEqual(submitted[0]!.task.input, { repo: "r", budget: { maxTokens: 1000, maxMinutes: 2 } });
 		await actions.submit(event, { capability: { id: "code.review", version: "3" }, input: { budget: { maxTokens: 5, maxMinutes: 1 } }, budget: { maxTokens: 1000, maxMinutes: 2 } });
-		assert.deepEqual((submitted[1]!.body as any).input.budget, { maxTokens: 5, maxMinutes: 1 }, "a budget the handler put into the input itself is kept");
+		assert.deepEqual(submitted[1]!.task.input.budget, { maxTokens: 5, maxMinutes: 1 }, "a budget the handler put into the input itself is kept");
 	});
 
 	it("notifies the owner with a chat notice that wakes nobody and redacts secrets", async () => {
@@ -631,77 +636,50 @@ describe("the whole component", () => {
 	}
 });
 
-describe("the message wake is shared with the chat responder", () => {
-	const fakeClient = (messages: Record<string, any>, posts: any[]) => {
-		let delivered = false;
-		return {
-			identity: { agentId: "agent/me" },
-			tls: { requireTls: false },
-			async connection() {
-				return {};
-			},
-			async events() {
-				if (delivered) return { events: [], cursor: 9 };
-				delivered = true;
-				return { events: Object.keys(messages).map((id, i) => ({ seq: i + 1, eventId: `e${i}`, type: "message.created", wake: true, payload: { messageId: id } })), cursor: 9 };
-			},
-			async ackEvents() {},
-			async get(path: string) {
-				return messages[decodeURIComponent(path.split("/").pop()!)];
-			},
-			async post(path: string, body: unknown) {
-				posts.push({ path, body });
-			},
-		} as any;
-	};
-	const chat = (id: string, labels?: Record<string, string>, sender = "agent/manager") => ({ messageId: id, type: "chat.message", sender: { kind: "agent", id: sender }, conversationId: "c1", createdAt: new Date().toISOString(), ...(labels ? { labels } : {}) });
-
-	it("applies control messages and gives them no chat notice, while plain chat still gets one", async () => {
-		const dir = tmp();
-		const store = new HandlerStore(join(dir, "h"));
-		store.save("a", "export default () => 1;\n");
-		const posts: any[] = [];
-		const stop = new AbortController();
-		setTimeout(() => stop.abort(), 600);
-		await runChatResponder({
-			client: fakeClient({ m1: chat("m1", { eventControl: "disable", eventTarget: "a", eventReason: "noisy" }), m2: chat("m2", undefined, "agent/someone") }, posts),
+describe("control messages reach the event handlers before a conversation starts", () => {
+	const chat = (id: string, labels?: Record<string, string>, sender = "agent/manager") => ({ messageId: id, type: "chat.message", sender: { kind: "agent", id: sender }, recipients: [{ kind: "agent", id: "agent/me" }], conversationId: `c_${id}`, createdAt: new Date().toISOString(), content: { mediaType: "text/plain", data: "hello" }, ...(labels ? { labels } : {}) });
+	const engineFor = (messages: Record<string, any>, store: HandlerStore) => {
+		const runs: string[] = [];
+		const client = { get: async (path: string) => messages[decodeURIComponent(path.split("/").pop()!.split("?")[0]!)] ?? { messages: [] }, post: async () => ({}) };
+		const engine = new ThreadEngine({
+			client,
 			agentId: "agent/me",
-			role: "test",
-			capabilities: agent.capabilities,
-			signal: stop.signal,
-			log: () => {},
+			runtime: { execute: async (request) => (runs.push(request.requestId), { status: "done", answer: "NO_REPLY", usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 } }) },
+			jobs: { activeIn: () => [], note: async () => false } as any,
+			inbox: new DurableInbox(join(tmp(), "inbox.json")),
+			approvals: new Approvals({ client, log: () => {}, timeoutMinutes: 1, approvers: ["agent/manager"] }),
+			sender: new MessageSender(client),
+			settings: DEFAULT_THREAD_SETTINGS,
+			tools: [],
+			instructions: "",
+			state: async () => "",
+			workspace: async () => "/w",
+			ledger: { chatRemaining: () => 1_000_000, chatState: () => "ok", record: () => {} },
 			intercept: createControlIntercept({ store, controllers: ["agent/manager"], log: () => {} }),
-			wake: { mode: "poll", pollEveryMs: 20 },
+			signal: new AbortController().signal,
 		});
-		assert.equal(store.disabled("a")?.reason, "noisy");
-		assert.deepEqual(posts.map((post) => post.body.recipients[0].id), ["agent/someone"], "only the plain chat message got a notice");
-	});
+		return { engine, runs };
+	};
 
-	it("with the chat notice off, the responder still runs for the control messages and answers nobody", async () => {
+	it("applies a control message from a controller and starts no conversation for it, while plain chat still does", async () => {
 		const store = new HandlerStore(join(tmp(), "h"));
 		store.save("a", "export default () => 1;\n");
-		const posts: any[] = [];
-		const stop = new AbortController();
-		setTimeout(() => stop.abort(), 600);
-		await runChatResponder({
-			client: fakeClient({ m1: chat("m1", { eventControl: "disable-all" }), m2: chat("m2", undefined, "agent/someone") }, posts),
-			agentId: "agent/me",
-			role: "test",
-			capabilities: agent.capabilities,
-			signal: stop.signal,
-			log: () => {},
-			config: { autoReply: false },
-			intercept: createControlIntercept({ store, controllers: ["agent/manager"], log: () => {} }),
-			wake: { mode: "poll", pollEveryMs: 20 },
-		});
-		assert.ok(store.disabled("a"));
-		assert.deepEqual(posts, []);
+		const { engine, runs } = engineFor({ m1: chat("m1", { eventControl: "disable", eventTarget: "a", eventReason: "noisy" }), m2: chat("m2", undefined, "agent/someone") }, store);
+		await engine.accept("m1");
+		await engine.accept("m2");
+		await engine.idle();
+		assert.equal(store.disabled("a")?.reason, "noisy");
+		assert.deepEqual(runs, ["thread:m2"]);
 	});
 
-	it("still does nothing at all when the notice is off and there is no interceptor", async () => {
-		const posts: any[] = [];
-		await runChatResponder({ client: fakeClient({ m1: chat("m1") }, posts), agentId: "agent/me", role: "t", capabilities: [], signal: AbortSignal.abort(), log: () => {}, config: { autoReply: false } });
-		assert.deepEqual(posts, []);
+	it("ignores a control message from a sender that is not a controller", async () => {
+		const store = new HandlerStore(join(tmp(), "h"));
+		store.save("a", "export default () => 1;\n");
+		const { engine, runs } = engineFor({ m1: chat("m1", { eventControl: "disable-all" }, "agent/someone") }, store);
+		await engine.accept("m1");
+		await engine.idle();
+		assert.equal(store.disabled("a"), undefined);
+		assert.deepEqual(runs, [], "refused, and not taken for a conversation either");
 	});
 });
 

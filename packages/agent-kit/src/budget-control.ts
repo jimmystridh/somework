@@ -1,4 +1,4 @@
-import type { InboundMessage } from "./chat.ts";
+import type { InboundMessage } from "./threads/message.ts";
 import type { Log } from "./log.ts";
 import type { DailyLedger, Pool } from "./ledger.ts";
 

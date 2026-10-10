@@ -1,8 +1,8 @@
 import type { Extension } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import type { Failure, Outcome, ProgressUpdate, SomeWorkClient } from "@somework/sdk";
-import type { ChatConfig } from "./chat.ts";
-import { validateChatConfig, type ChatRoleHooks } from "./chat-model.ts";
+import type { ThreadRoleHooks } from "./threads/role.ts";
+import type { ThreadsConfig } from "./threads/settings.ts";
 import { validateEventsProfile } from "./events/config.ts";
 import type { EventsProfile } from "./events/types.ts";
 import type { FinalizeResult } from "./git.ts";
@@ -55,13 +55,8 @@ export interface AgentProfile {
 		/** Directory (on the service host) with `<skill>.md` overlays that state only the differences from the repository's skill. */
 		overlayDir?: string;
 	};
-	/**
-	 * What happens to a direct chat message sent to the agent. By default (`mode: "model"`) a message from the manager or a person is answered
-	 * by the model as a question, and a message from an instructor that starts with `instruct:` is carried out as a job of the role's normal
-	 * handler; every other sender gets one automatic notice. `mode: "notice"` or `CHAT_MODE=notice` goes back to the notice only. `CHAT_AUTOREPLY=0`
-	 * turns the notice off for a deployment. See `chat-model.ts`.
-	 */
-	chat?: ChatConfig;
+	/** How the agent takes part in conversations: how many at once, who approves, the budget of a run. Every message addressed to it is read by its model; see `threads/engine.ts`. */
+	chat?: ThreadsConfig;
 	/**
 	 * Events (see docs/EVENTS.md): when `enabled`, the agent receives the events its subscriptions wake it for, runs its own handlers on them
 	 * and has the handler tools. Off by default: a role that does not opt in behaves exactly as before.
@@ -152,8 +147,8 @@ export interface RoleHooks {
 	prepareInput?(input: any, context: { taskId: string; log: Log }): Promise<any> | any;
 	/** Turns the job input into the model's instruction. Throw `InvalidInput` to refuse the job. Default: `input.instruction`. */
 	instruction?(input: any, context: { taskId: string }): string;
-	/** What the role adds to chat: its own read-only tools, facts for the state summary, a read-only checkout, how an instruction becomes a task input. */
-	chat?: ChatRoleHooks;
+	/** What the role adds to conversations: its own tools, facts for the state summary, a checkout to read, and its capabilities as job tools. */
+	chat?: ThreadRoleHooks;
 	/** Pull request title and body for a task (called after `beforeFinalize`); `commitMessage` replaces the default `agent: <title>`, its first line is the subject. */
 	pullRequest?(input: any, context: { taskId: string; instruction: string }): { title: string; body: string; commitMessage?: string };
 	/**
@@ -223,12 +218,19 @@ export function validateProfile(profile: AgentProfile): AgentProfile {
 	if (profile.noRepository && profile.git.push) throw new Error(`profile ${profile.id}: a role without a repository has nothing to push`);
 	if (profile.git.pullRequest && !profile.git.push) throw new Error(`profile ${profile.id}: a pull request needs the branch to be pushed`);
 	if (!(profile.defaultBudget.maxTokens > 0) || !(profile.defaultBudget.maxMinutes > 0)) throw new Error(`profile ${profile.id}: defaultBudget must be positive`);
-	if (profile.chat !== undefined) {
-		if (typeof profile.chat !== "object" || profile.chat === null) throw new Error(`profile ${profile.id}: chat must be an object`);
-		if (profile.chat.autoReply !== undefined && typeof profile.chat.autoReply !== "boolean") throw new Error(`profile ${profile.id}: chat.autoReply must be true or false`);
-		if (profile.chat.replyTemplate !== undefined && typeof profile.chat.replyTemplate !== "function") throw new Error(`profile ${profile.id}: chat.replyTemplate must be a function`);
-	}
-	validateChatConfig(profile.id, profile.chat);
+	if (profile.chat !== undefined) validateThreadsConfig(profile.id, profile.chat);
 	validateEventsProfile(profile.id, profile.events);
 	return profile;
+}
+
+function validateThreadsConfig(id: string, config: ThreadsConfig): void {
+	if (typeof config !== "object" || config === null) throw new Error(`profile ${id}: chat must be an object`);
+	if (config.mode !== undefined && config.mode !== "on" && config.mode !== "off") throw new Error(`profile ${id}: chat.mode must be "on" or "off"`);
+	if (config.approvers !== undefined && !(Array.isArray(config.approvers) && config.approvers.every((entry) => typeof entry === "string" && entry !== ""))) throw new Error(`profile ${id}: chat.approvers must be a list of principal ids or kind:<kind>`);
+	for (const field of ["maxConversations", "liveWindowSeconds", "hardTokenCap", "approvalMinutes", "busyAfterSeconds", "share", "throttleAt", "historyMessages", "messageChars", "replyMaxBytes"] as const) {
+		const value = config[field];
+		if (value !== undefined && !(typeof value === "number" && value > 0)) throw new Error(`profile ${id}: chat.${field} must be a positive number`);
+	}
+	const budget = config.runBudget;
+	if (budget !== undefined && !(budget.maxTokens > 0 && budget.maxMinutes > 0)) throw new Error(`profile ${id}: chat.runBudget needs positive maxTokens and maxMinutes`);
 }

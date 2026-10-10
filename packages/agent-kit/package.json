@@ -9,8 +9,6 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./chat": "./src/chat.ts",
-    "./chat-model": "./src/chat-model.ts",
     "./config": "./src/config.ts",
     "./credentials": "./src/credentials.ts",
     "./egress/proxy": "./src/egress/proxy.ts",
@@ -39,6 +37,7 @@
     "./shards": "./src/shards.ts",
     "./skills": "./src/skills.ts",
     "./testing": "./src/testing.ts",
+    "./threads": "./src/threads/index.ts",
     "./windows": "./src/windows/index.ts"
   },
   "scripts": {

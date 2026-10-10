@@ -1,20 +1,24 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 /** A small table kept in one JSON file, written whole through a temporary file so a crash never leaves half of it. Volumes here are tens of rows. */
 export class DurableTable<T extends { id: string }> {
 	readonly #file: string;
 	readonly #rows = new Map<string, T>();
+	/** False when there was no file: this table is new. */
+	readonly existed: boolean;
 
 	constructor(file: string) {
 		this.#file = file;
 		mkdirSync(dirname(file), { recursive: true });
+		this.existed = existsSync(file);
 		try {
 			const stored = JSON.parse(readFileSync(file, "utf8"));
 			for (const row of Array.isArray(stored) ? stored : []) if (row && typeof row.id === "string") this.#rows.set(row.id, row as T);
 		} catch {
 			// no file yet, or one that cannot be read: start empty
 		}
+		if (!this.existed) this.#flush();
 	}
 
 	get(id: string): T | undefined {
@@ -69,6 +73,11 @@ export class DurableInbox {
 	constructor(file: string, now: () => number = Date.now) {
 		this.#table = new DurableTable(file);
 		this.#now = now;
+	}
+
+	/** True when this inbox was started empty, for the first time: whatever the domain holds for the agent then is history, not a backlog. */
+	get fresh(): boolean {
+		return !this.#table.existed;
 	}
 
 	has(id: string): boolean {

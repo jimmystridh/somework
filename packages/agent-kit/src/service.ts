@@ -1,18 +1,27 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createModels, type Models } from "@earendil-works/pi-ai";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { Identity, SomeWorkClient, Worker, type Handler } from "@somework/sdk";
-import { runChatResponder } from "./chat.ts";
-import { ChatArtifacts } from "./chat-artifacts.ts";
-import { createChatJobTools } from "./chat-jobs.ts";
-import { askToolNames, buildState, ChatApprovals, createStatusTool, instructToolNames, KIT_CHAT_RULES, KIT_OPEN_CHAT_RULES, ModelChatResponder, resolveChatMode, resolveChatModel } from "./chat-model.ts";
+import { Identity, runWakes, SomeWorkClient, type Handler } from "@somework/sdk";
+import { AGENT_STATUS_TOOL, buildState, createStatusTool } from "./threads/state.ts";
+import type { InboundMessage } from "./threads/message.ts";
 import { loadConfig, type Config } from "./config.ts";
 import { FileCredentialStore } from "./credentials.ts";
 import { createEventsComponent } from "./events/component.ts";
 import { resolveEvents } from "./events/config.ts";
 import { JobGate } from "./gate.ts";
+import { Approvals } from "./threads/approvals.ts";
+import { JobArtifacts } from "./threads/artifacts.ts";
+import { KIT_THREAD_RULES, ThreadEngine } from "./threads/engine.ts";
+import { JobManager, requestIdOf, type JobEntry } from "./threads/jobs.ts";
+import { MessageSender } from "./threads/message.ts";
+import { createJobReporter, topicSlug } from "./threads/reporter.ts";
+import { ResourceRegistry } from "./threads/resources.ts";
+import { resolveThreadSettings } from "./threads/settings.ts";
+import { DurableInbox, DurableTable } from "./threads/store.ts";
+import { createThreadTools, describeJob, type RunContext } from "./threads/tools.ts";
 import { GitHubAppCredentials } from "./github-app.ts";
 import { prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
@@ -97,10 +106,10 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					log("warn", "git_app_identity_failed", { error: error instanceof Error ? error.message : String(error) });
 				}
 			}
-			const chatSettings = resolveChatMode(profile.chat, env) === "model" ? resolveChatModel(profile.chat, env) : undefined;
-			// the client the role's code and the task handler use: an instruction given in chat is a job the domain has no task for, so its uploads are kept on this host instead
-			const chatArtifacts = chatSettings ? new ChatArtifacts({ dir: join(config.state.dir, "chat-artifacts"), log }) : undefined;
-			const taskClient = chatArtifacts ? chatArtifacts.wrap(client) : client;
+			const threadSettings = resolveThreadSettings(profile.chat, env);
+			// the client the role's code and the job handler use: a job is work the domain has no task for, so what it uploads goes without a source task and its references are kept for the result message
+			const jobArtifacts = new JobArtifacts({ log });
+			const taskClient = jobArtifacts.wrap(client);
 			const timers = createTimers({ env, agentId: identity.agentId, log });
 			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}) }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
@@ -112,9 +121,11 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				config.limits.dailyTokenLimit,
 				undefined,
 				eventsConfig.enabled ? { share: eventsConfig.tokenShare, weeklyTokens: eventsConfig.weeklyTokens, throttleAt: eventsConfig.throttleAt } : undefined,
-				chatSettings ? { share: chatSettings.share, throttleAt: chatSettings.throttleAt } : undefined,
+				{ share: threadSettings.share, throttleAt: threadSettings.throttleAt },
 			);
 			const journal = new JobJournal(join(config.state.dir, "jobs.json"));
+			let jobsRef: JobManager | undefined;
+			let engineRef: ThreadEngine | undefined;
 			// the event component needs the runtime for woken runs and the runtime needs the component's tools: the runtime is looked up late
 			let runtimeRef: PiDurableRuntime | undefined;
 			const events = eventsConfig.enabled
@@ -122,6 +133,15 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 						config: eventsConfig,
 						stateDir: config.state.dir,
 						client,
+						startJob: async (event, task) => {
+							if (!profile.capabilities.some((capability) => capability.id === task.capability.id && capability.version === String(task.capability.version))) throw new Error(`this agent does not serve ${task.capability.id}@${task.capability.version}`);
+							const notify = eventsConfig.notifyTo ? [{ kind: "agent", id: eventsConfig.notifyTo }] : [];
+							const entry = jobsRef!.start(
+								{ capability: { id: task.capability.id, version: String(task.capability.version) }, input: task.input, label: `${task.capability.id} for ${event.topic}`, requestedBy: { kind: "service", id: `event:${event.topic}` }, audience: notify, source: "event" },
+								`job-${createHash("sha256").update(`${event.id}\u0000${identity.agentId}\u0000${task.capability.id}`).digest("hex").slice(0, 12)}`,
+							);
+							return { jobId: entry.id };
+						},
 						runtime: { execute: (request, runHooks) => runtimeRef!.execute(request, runHooks) },
 						envFor,
 						workspaceRoot: config.sandbox.workspaceRoot,
@@ -132,25 +152,41 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					})
 				: undefined;
 			const skillAllow = config.skills.allow ?? profile.skills.allow;
-			const chatState = (): Promise<string> =>
-				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
-			const chatTools = chatSettings ? createStatusTool(chatState) : undefined;
-			// the role's capabilities as tools for the open chat tier: the responder exists only later, so the queue is looked up late
-			let chatResponderRef: ModelChatResponder | undefined;
-			const chatJobs = chatSettings?.open && hooks.chat?.jobTools?.length ? createChatJobTools(hooks.chat.jobTools, (tool, planned) => chatResponderRef?.queueJob(tool, planned) ?? { refuse: "chat is not running" }) : undefined;
 			const observe = createObserve({ profile: profile.observe, env, log, metrics, agentId: identity.agentId });
+			// the thread layer's pieces are made after the runtime and the tools need them: they are looked up late
+			const resources = new ResourceRegistry();
+			const sender = new MessageSender(client, threadSettings.replyMaxBytes);
+			const stateBase = (): Promise<string> =>
+				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
+			const threadState = async (): Promise<string> => {
+				const active = jobsRef?.active() ?? [];
+				const held = resources.holders() ?? [];
+				return [
+					await stateBase(),
+					"",
+					`jobs running or waiting (${active.length}):`,
+					...(active.length > 0 ? active.map((job) => `  ${describeJob(job)}`) : ["  (none)"]),
+					...(held.length > 0 ? ["resources held:", ...held.map((hold) => `  ${hold.resource}: ${hold.label}`)] : []),
+					`conversations in progress: ${engineRef?.active ?? 0}, waiting: ${engineRef?.queued ?? 0}`,
+				].join("\n");
+			};
+			const statusTool = createStatusTool(threadState);
+			const threadTools = createThreadTools(
+				{ context: (id) => runtimeRef?.contextOf(id) as RunContext | undefined, jobs: () => jobsRef!, resources: () => resources, sender: () => sender },
+				hooks.chat?.jobTools ?? [],
+			);
 			const extensions = [
 				...(hooks.extensions ?? []),
 				...(events ? [events.extension] : []),
-				...(chatTools ? [chatTools.extension] : []),
-				...(chatJobs ? [chatJobs.extension] : []),
+				statusTool.extension,
+				threadTools.extension,
 				...(observe ? [observe.extension] : []),
 				...(timers ? [timers.extension] : []),
-				...(chatSettings && hooks.chat?.extension ? [hooks.chat.extension] : []),
+				...(hooks.chat?.extension ? [hooks.chat.extension] : []),
 				...(skillAllow.length > 0 ? [skillsExtension({ allow: skillAllow, overlayDir: config.skills.overlayDir ?? profile.skills.overlayDir, log })] : []),
 			];
-			// the chat's own tools are registered with the runtime but offered only to chat sessions: a role that lists no tools gets the coding tools spelled out
-			const normalTools = profile.allowedTools ? [...profile.allowedTools, ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])] : chatTools ? ["read", "write", "edit", "bash", ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])] : undefined;
+			// the thread tools are registered with the runtime but offered only to conversations: jobs get the role's own tools, with the coding tools spelled out when it lists none
+			const normalTools = [...(profile.allowedTools ?? ["read", "write", "edit", "bash"]), ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])];
 			const llmUsage = llmUsageCounters(metrics, { agent: identity.agentId, role: profile.id });
 			llmUsage.start(model);
 			const runtime = new PiDurableRuntime({
@@ -194,64 +230,73 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				hooks,
 				journal,
 			};
-			const taskHandler = createHandler({ ...baseDeps, ledger, shards: config.shards ? { table: config.shards, agentId: identity.agentId } : undefined });
-			// requester tasks and chat instructions share the job slots: tasks first, nothing preempted
-			const gate = new JobGate(config.concurrency);
-			const handler: Handler = (job, control) => gate.run("task", () => taskHandler(job, control), control.signal);
+			const jobHandler = createHandler({ ...baseDeps, ledger, source: "job" });
 			const root = config.sandbox.workspaceRoot.replace(/\/$/, "");
-			// the open tier gives every role a shell and the file tools, whatever its job profile lists: the owner asked for agents that can run code
-			const OPEN_BASE_TOOLS = ["read", "write", "edit", "bash"];
-			let chatResponder: ModelChatResponder | undefined;
-			if (chatSettings) {
-				const known = new Set(runtime.knownTools());
-				// the observe tools only read (logs and alert states, in the role's own scope) and are allowed in both chat tiers
-				const ask = [...new Set([...askToolNames(profile.chat, hooks.chat), ...(observe?.toolNames ?? [])])];
-				const instruct = [...new Set([...instructToolNames(profile.chat, profile.allowedTools), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])])];
-				for (const name of [...ask, ...instruct]) if (!known.has(name)) throw new Error(`chat: the tool ${name} does not exist (known: ${[...known].join(", ")})`);
-				const instructHandler = hooks.chat?.instructInput || chatJobs
-					? createHandler({ ...baseDeps, source: "chat", requestTools: instruct, ledger: { remaining: () => ledger.chatRemaining(), record: (tokens) => ledger.record(tokens, "chat") } })
-					: undefined;
-				const approvals = new ChatApprovals({ client, log, timeoutMinutes: chatSettings.approvalMinutes });
-				const askWorkspace = async (): Promise<string> => {
-					const fallback = `${root}/.chat`;
-					await envFor(root).createDir(fallback, { recursive: true }, BACKGROUND_CONTEXT);
-					const target = hooks.chat?.checkout?.();
-					if (!target) return fallback;
-					const checkout = `${fallback}/checkout`;
-					await prepareWorkspace(session, { repoUrl: target.repoUrl, ref: target.ref ?? "HEAD", taskId: "chat", workspace: checkout, detach: true });
-					return checkout;
-				};
-				chatResponder = chatResponderRef = new ModelChatResponder({
-					client,
-					agentId: identity.agentId,
-					role: profile.id,
-					settings: chatSettings,
-					ledger,
-					ask: {
-						runtime,
-						tools: ask,
-						instructions: [hooks.chat?.instructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}.`, KIT_CHAT_RULES].join("\n\n"),
-						state: chatState,
-						checkout: askWorkspace,
-						fallbackWorkspace: `${root}/.chat`,
-					},
-					...(chatSettings.open
-						? {
-								open: {
-									runtime,
-									tools: [...new Set([...instruct, ...ask, ...OPEN_BASE_TOOLS, ...(chatJobs?.toolNames ?? [])])].filter((name) => known.has(name)),
-									instructions: [hooks.chat?.openInstructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}. In a conversation with your owner's manager you do whatever is asked with your tools.`, KIT_OPEN_CHAT_RULES].join("\n\n"),
-									workspace: askWorkspace,
-									approvals,
-									gate,
-								},
-							}
-						: {}),
-					...(instructHandler ? { instruct: { handler: instructHandler, input: hooks.chat?.instructInput ?? (() => ({ refuse: "this role takes no structured instructions: ask in plain words" })), ...(hooks.chat?.plainInstruct ? { plain: hooks.chat.plainInstruct } : {}), describe: hooks.chat?.describeResult, gate, approvals, ...(chatArtifacts ? { artifacts: chatArtifacts } : {}) } } : {}),
-					log,
-					metrics,
-				});
-			}
+			const approvals = new Approvals({ client, log, timeoutMinutes: threadSettings.approvalMinutes, approvers: threadSettings.approvers });
+			const slug = topicSlug(identity.agentId);
+			const stop = new AbortController();
+			const reporter = createJobReporter({
+				sender,
+				agentId: identity.agentId,
+				publish: async (state, payload) => {
+					await client.publishEvent({ topic: `agent.${slug}.job.${state}`, key: `${payload.jobId}:${state}`, source: slug, data: payload as unknown as Record<string, never> });
+				},
+				describeResult: hooks.chat?.describeResult,
+				log,
+			});
+			const jobs = new JobManager({
+				handler: jobHandler,
+				resources,
+				gate: new JobGate(config.concurrency),
+				store: new DurableTable<JobEntry>(join(config.state.dir, "threads", "jobs.json")),
+				reporter,
+				takeArtifacts: (jobId) => jobArtifacts.take(jobId),
+				steer: (jobId, text) => runtime.steer(requestIdOf(jobId), text),
+				approve: async (entry, request, signal) => {
+					const approver = approvals.approverFor(entry.requestedBy);
+					if (!approver) return { approved: false, reason: "nobody is set up to approve" };
+					return approvals.ask({ approver, ...(entry.conversationId ? { conversationId: entry.conversationId } : {}), ...(entry.replyTo ? { replyTo: entry.replyTo } : {}), agent: identity.agentId, tool: request.tool, summary: request.summary, signal });
+				},
+				resourcesFor: hooks.chat?.jobResources,
+				budget: profile.defaultBudget,
+				signal: stop.signal,
+				log,
+			});
+			jobsRef = jobs;
+			const knownTools = new Set(runtime.knownTools());
+			const conversationTools = [...new Set(["read", "write", "edit", "bash", ...(profile.allowedTools ?? []), AGENT_STATUS_TOOL, ...(hooks.chat?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? []), ...threadTools.toolNames])].filter((name) => knownTools.has(name));
+			const threadWorkspace = async (key: string): Promise<string> => {
+				const directory = `${root}/.threads/${key}`;
+				await envFor(root).createDir(directory, { recursive: true }, BACKGROUND_CONTEXT);
+				const target = hooks.chat?.checkout?.();
+				if (target) await prepareWorkspace(session, { repoUrl: target.repoUrl, ref: target.ref ?? "HEAD", taskId: "threads", workspace: `${root}/.threads/checkout`, detach: true }).catch((error) => log("warn", "checkout_failed", { error: String(error).slice(0, 200) }));
+				return directory;
+			};
+			const intercepts: ((message: InboundMessage) => Promise<boolean>)[] = [];
+			const engine = new ThreadEngine({
+				client,
+				agentId: identity.agentId,
+				runtime,
+				jobs,
+				inbox: new DurableInbox(join(config.state.dir, "threads", "inbox.json")),
+				approvals,
+				sender,
+				settings: threadSettings,
+				tools: conversationTools,
+				instructions: [hooks.chat?.instructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}.`, KIT_THREAD_RULES].join("\n\n"),
+				state: threadState,
+				workspace: threadWorkspace,
+				ledger,
+				intercept: async (message) => {
+					for (const intercept of intercepts) if (await intercept(message).catch(() => false)) return true;
+					return false;
+				},
+				signal: stop.signal,
+				log,
+				metrics,
+			});
+			engineRef = engine;
+
 
 			const description = withChangeMarker(
 				describeAgent({
@@ -272,7 +317,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 						identity: gitApp ? gitIdentity.name : undefined,
 						mirror: config.git.mirror ? { repositories: config.git.mirror.repositories, refreshMinutes: config.git.mirror.refreshMinutes } : undefined,
 					},
-					chat: chatSettings ? { mode: "model", askers: chatSettings.askers, instructors: chatSettings.instructors } : { mode: "notice" },
+					chat: { mode: threadSettings.enabled ? "threads" : "off", approvers: threadSettings.approvers },
 					events: { enabled: eventsConfig.enabled, notifyTo: eventsConfig.notifyTo },
 					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
 					timers: { enabled: Boolean(timers) },
@@ -285,18 +330,15 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				metrics,
 				profile: () => description,
 				history: (limit) => journal.recent(limit),
-				status: () => ({ ...(events ? events.status() : { handlers: [], tokenPools: ledger.usage() }), ...(chatResponder ? { chat: { mode: "model", askers: chatSettings!.askers, instructors: chatSettings!.instructors } } : {}), ...(observe ? { observe: observe.status() } : {}) }),
+				status: () => ({ ...(events ? events.status() : { handlers: [], tokenPools: ledger.usage() }), chat: { mode: threadSettings.enabled ? "threads" : "off", approvers: threadSettings.approvers, jobs: jobs.active().length, conversations: engine.active, queued: engine.queued }, ...(observe ? { observe: observe.status() } : {}) }),
 				checks: { ...(hooks.envFactory ? {} : { sandbox: async () => (await fetch(`${config.sandbox.url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok }), ...hooks.readinessChecks },
 			});
 			health.listen(config.healthPort, hooks.healthBind ?? "0.0.0.0");
 
-			const stop = new AbortController();
 			if (config.git.mirror && config.git.mirror.repositories.length > 0) {
 				startMirrorRefresh({ session, repositories: config.git.mirror.repositories, everyMinutes: config.git.mirror.refreshMinutes, signal: stop.signal, log: (level, event, fields) => log(level, event, fields) });
 			}
 			for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) process.once(signal, () => stop.abort());
-			const worker = new Worker(client, { handler, concurrency: config.concurrency, leaseSeconds: config.leaseSeconds, shutdownGraceMs: 20_000, logger: (level, message, fields) => log(level, message, fields) });
-			const chat = env.CHAT_AUTOREPLY === "0" ? false : profile.chat?.autoReply !== false;
 			const budgetIntercept = createBudgetIntercept({
 				ledger,
 				controllers: config.limits.budgetControllers ?? eventsConfig.controllers,
@@ -306,11 +348,38 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				},
 				log,
 			});
-			// answers to chat messages, the kill switch for event handlers and budget raises; it can never fail or delay the claim loop below
-			void runChatResponder({ client, agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, signal: stop.signal, log, metrics, config: chat ? profile.chat : { ...profile.chat, autoReply: false }, intercept: async (message) => (await budgetIntercept(message)) || (events ? await events.intercept(message) : false), ...(chatResponder ? { model: chatResponder } : {}) });
+			// the kill switch for event handlers and budget raises are looked at before a message becomes a conversation
+			intercepts.push(async (message) => (await budgetIntercept(message)) || (events ? await events.intercept(message) : false));
 			if (events) void events.run(stop.signal).catch((error) => log("error", "events_stopped", { error: error instanceof Error ? error.message : String(error) }));
-			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, chat, chatMode: chatSettings ? "model" : "notice", events: eventsConfig.enabled });
-			await worker.run(stop.signal);
+			if (threadSettings.enabled) {
+				const recovered = engine.start();
+				const resumed = jobs.recover();
+				log("info", "threads_recovered", { messages: recovered, jobs: resumed.length });
+				// the domain's inbox is the safety net under the wakes: what came while the agent was down, or whose wake was lost, is taken in here
+				const sweep = (): void => void engine.sweep().then((taken) => (taken > 0 ? log("info", "inbox_swept", { messages: taken }) : undefined)).catch((error) => log("warn", "inbox_sweep_failed", { error: String(error).slice(0, 160) }));
+				sweep();
+				const sweeping = setInterval(sweep, 60_000);
+				stop.signal.addEventListener("abort", () => clearInterval(sweeping), { once: true });
+				void runWakes(
+					client,
+					stop.signal,
+					(wake) => {
+						if (wake.kind !== "message") return void wake.ack().catch(() => {});
+						// acknowledged only once the message is safely in the inbox: an announcement that failed is made again
+						engine
+							.accept(wake.messageId)
+							.then(() => wake.ack())
+							.catch((error) => log("warn", "message_not_accepted", { messageId: wake.messageId, error: String(error).slice(0, 160) }));
+					},
+					{ kinds: ["message"], logger: (level, message, fields) => log(level, `message_wake: ${message}`, fields) },
+				).catch((error) => {
+					if (!stop.signal.aborted) log("error", "message_wakes_stopped", { error: String(error).slice(0, 160) });
+				});
+			}
+			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, threads: threadSettings.enabled, events: eventsConfig.enabled });
+			await new Promise<void>((resolve) => stop.signal.addEventListener("abort", () => resolve(), { once: true }));
+			// running jobs are left as they are (they are written to disk and taken up again at the next start); give them a moment to stop cleanly
+			await Promise.race([jobs.idle(), new Promise<void>((resolve) => setTimeout(resolve, 20_000))]);
 			health.close();
 			await runtime.close();
 			log("info", "service_stopped");

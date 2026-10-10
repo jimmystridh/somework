@@ -43,7 +43,7 @@ export interface HandlerDeps {
 	/** Where finished jobs are noted for the chat's state summary. */
 	journal?: JobJournal;
 	/** Which kind of job this handler runs, for the journal. */
-	source?: "task" | "chat";
+	source?: "job" | "task" | "chat";
 }
 
 /** The service's metrics, in one place so the names are stable. */
@@ -95,7 +95,7 @@ export function createHandler(deps: HandlerDeps): Handler {
 			}
 			try {
 				const described = describeOutcome(outcome);
-				if (journal && described) journal.record({ taskId: job.taskId, capability: `${job.capability?.id ?? "?"}@${job.capability?.version ?? "?"}`, source: deps.source ?? "task", at: new Date().toISOString(), startedAt: new Date(started).toISOString(), ms: Date.now() - started, ...described });
+				if (journal && described) journal.record({ taskId: job.taskId, capability: `${job.capability?.id ?? "?"}@${job.capability?.version ?? "?"}`, source: deps.source ?? "job", at: new Date().toISOString(), startedAt: new Date(started).toISOString(), ms: Date.now() - started, ...described });
 			} catch (error) {
 				(deps.log ?? silent)("warn", "journal_failed", { taskId: job.taskId, error: error instanceof Error ? error.message : String(error) });
 			}

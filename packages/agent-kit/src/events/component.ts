@@ -3,12 +3,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Extension } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import type { SomeWorkClient } from "@somework/sdk";
-import type { InboundMessage } from "../chat.ts";
+import type { InboundMessage } from "../threads/message.ts";
 import type { DailyLedger, PoolUsage } from "../ledger.ts";
 import type { Log } from "../log.ts";
 import type { Metrics } from "../metrics.ts";
 import type { AgentRuntime } from "../runtime.ts";
-import { createEventActions } from "./actions.ts";
+import { createEventActions, type ActionDeps } from "./actions.ts";
 import { createControlIntercept } from "./control.ts";
 import { HandlerGuard, type DroppedSample, type HandlerStatus } from "./guard.ts";
 import { EventInbox } from "./inbox.ts";
@@ -22,7 +22,9 @@ import type { ResolvedEvents } from "./types.ts";
 export interface EventsComponentDeps {
 	config: ResolvedEvents;
 	stateDir: string;
-	client: Pick<SomeWorkClient, "events" | "post" | "submitTask">;
+	client: Pick<SomeWorkClient, "events" | "post">;
+	/** Starts a job of this agent for a `submit` decision of a handler. */
+	startJob: ActionDeps["startJob"];
 	runtime: Pick<AgentRuntime, "execute">;
 	/** The agent's own execution environment (container sandbox or the role's confined environment). */
 	envFor: (cwd: string | undefined) => ExecutionEnv;
@@ -67,6 +69,7 @@ export function createEventsComponent(deps: EventsComponentDeps): EventsComponen
 	});
 	const actions = createEventActions({
 		client: deps.client,
+		startJob: deps.startJob,
 		runtime: deps.runtime,
 		agentId: deps.agent.id,
 		workspace: `${root}/events`,

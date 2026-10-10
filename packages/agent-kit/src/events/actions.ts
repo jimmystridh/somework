@@ -11,7 +11,9 @@ import type { HandlerEvent } from "./types.ts";
 export const EVENT_NOTICE_LABEL = "eventNotice";
 
 export interface ActionDeps {
-	client: Pick<SomeWorkClient, "post" | "submitTask">;
+	client: Pick<SomeWorkClient, "post">;
+	/** Starts a job of this agent for a `submit` decision. */
+	startJob: (event: HandlerEvent, task: { capability: { id: string; version: string }; input: Record<string, unknown>; budget?: Budget }) => Promise<{ jobId: string }>;
 	runtime: Pick<AgentRuntime, "execute">;
 	agentId: string;
 	workspace: string;
@@ -63,8 +65,7 @@ export function createEventActions(deps: ActionDeps): EventActions {
 
 		async submit(event, task) {
 			const input = { ...task.input, ...(task.budget && task.input.budget === undefined ? { budget: task.budget } : {}) };
-			const submitted = await deps.client.submitTask({ capability: task.capability, input, causedByEvent: event.id }, `event:${event.id}:${deps.agentId}:${task.capability.id}`);
-			return { taskId: typeof submitted?.taskId === "string" ? submitted.taskId : undefined };
+			return deps.startJob(event, { capability: task.capability, input, ...(task.budget ? { budget: task.budget } : {}) });
 		},
 
 		async notify(text) {

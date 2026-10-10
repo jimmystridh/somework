@@ -15,7 +15,7 @@ import type { Decision, FeedEvent, HandlerEvent, ResolvedEvents } from "./types.
 export interface EventActions {
 	/** Runs the agent on the event; resolves with the tokens it used. */
 	wake(event: HandlerEvent, options: { tier: "default" | "small"; note?: string }): Promise<{ tokens: number; answer?: string }>;
-	submit(event: HandlerEvent, task: NonNullable<Decision["task"]>): Promise<{ taskId?: string }>;
+	submit(event: HandlerEvent, task: NonNullable<Decision["task"]>): Promise<{ jobId: string }>;
 	notify(text: string): Promise<void>;
 }
 
@@ -155,7 +155,7 @@ export class EventProcessor {
 			case "submit":
 				try {
 					const submitted = await actions.submit(event, decision.task!);
-					log("info", "event_task_submitted", { eventId: event.id, topic: event.topic, handler, capability: decision.task!.capability.id, taskId: submitted.taskId });
+					log("info", "event_job_started", { eventId: event.id, topic: event.topic, handler, capability: decision.task!.capability.id, jobId: submitted.jobId });
 					return "submitted";
 				} catch (error) {
 					log("warn", "event_submit_failed", { eventId: event.id, handler, error: clip(String(error)) });

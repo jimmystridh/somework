@@ -106,23 +106,55 @@ export class ThreadEngine {
 	 * A message was announced to the agent. Resolves when it is safely accepted (and the announcement may be acknowledged); rejects when it
 	 * could not be read, so that it is announced again.
 	 */
-	async accept(messageId: string): Promise<void> {
+	async accept(messageId: string, record?: unknown): Promise<void> {
 		if (this.#deps.inbox.has(messageId)) return;
-		const message = asMessage(await this.#deps.client.get(`/v1/messages/${encodeURIComponent(messageId)}`));
+		const message = asMessage(record ?? (await this.#deps.client.get(`/v1/messages/${encodeURIComponent(messageId)}`)));
 		if (!message) {
 			this.#log("warn", "message_unreadable", { messageId });
 			return;
 		}
-		if (message.sender.id === this.#deps.agentId || message.type !== "chat.message") return;
-		if (this.#deps.approvals.offer(message)) return;
-		if (this.#deps.intercept && (await this.#deps.intercept(message).catch(() => false))) return;
+		if (message.sender.id === this.#deps.agentId || message.type !== "chat.message") return void (await this.#markRead([messageId]));
+		if (this.#deps.approvals.offer(message)) return void (await this.#markRead([messageId]));
+		if (this.#deps.intercept && (await this.#deps.intercept(message).catch(() => false))) return void (await this.#markRead([messageId]));
 		const sent = message.createdAt === undefined ? Number.NaN : Date.parse(message.createdAt);
 		const late = Number.isFinite(sent) && this.#now() - sent > this.#deps.settings.liveWindowMs;
 		const item: InboxItem = { id: message.messageId, ...(message.conversationId ? { conversationId: message.conversationId } : {}), sender: message.sender, ...(message.createdAt ? { sentAt: message.createdAt } : {}), receivedAt: this.#now(), status: "received", attempts: 0, ...(late ? { recovered: true } : {}) };
 		this.#deps.inbox.add(item);
+		await this.#markRead([messageId]);
 		this.#deps.metrics?.counter("somework_messages_total", "Messages received, by lane")({ lane: late ? "catch_up" : "live" });
 		await this.#noteToJobs(message);
 		this.#enqueue({ item, message, catchUp: late, queuedAt: this.#now() });
+	}
+
+	/**
+	 * Looks in the domain's inbox for messages addressed to the agent that it has not taken in: a wake that was lost, or one that came while the
+	 * agent was down and the transport kept nothing. The first time ever (an inbox that did not exist before) what is there is history and is only
+	 * marked read; after that every unread message is taken in. Returns how many were new.
+	 */
+	async sweep(): Promise<number> {
+		const body: any = await this.#deps.client.get("/v1/inbox?unread=true&limit=500");
+		const records: any[] = Array.isArray(body?.messages) ? body.messages : [];
+		if (this.#deps.inbox.fresh && !this.#baselined) {
+			this.#baselined = true;
+			await this.#markRead(records.map((record) => String(record?.messageId ?? "")).filter(Boolean));
+			this.#log("info", "inbox_baselined", { messages: records.length });
+			return 0;
+		}
+		this.#baselined = true;
+		let taken = 0;
+		for (const record of records) {
+			const id = typeof record?.messageId === "string" ? record.messageId : undefined;
+			if (!id || this.#deps.inbox.has(id)) continue;
+			await this.accept(id, record).then(() => void (taken += 1)).catch((error) => this.#log("warn", "sweep_accept_failed", { messageId: id, error: String(error).slice(0, 160) }));
+		}
+		return taken;
+	}
+
+	#baselined = false;
+
+	async #markRead(ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
+		await this.#deps.client.post("/v1/messages/read", { messageIds: ids }).catch((error) => this.#log("warn", "mark_read_failed", { error: String(error).slice(0, 160) }));
 	}
 
 	/** A message in a conversation with running jobs also goes to their models: they take it at their next turn boundary and decide. */
