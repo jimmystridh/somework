@@ -93,13 +93,13 @@ All `DD_*` unless noted; `deploy/.env.example` and `deploy/compose.yaml` list th
 
 The service refuses to start with `PI_CONCURRENCY` above 1, without a readable key file, or with a value out of range. The handler's settings are written into it when it is installed; a restart never overwrites the live copy.
 
-## Chat
+## Conversations
 
-The agent answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice).
+Every message sent to the agent is read by its model in a run of its own; it answers, or says `NO_REPLY` when there is nothing to add.
 
-* **Questions** (from `agent/manager` or a person): one read-only turn with `read`, `agent_status` and the six Datadog tools. **No bash and no python**: a question gets a short answer from live Datadog reads; the state summary carries the host's record of today's triages against the cap and the recent outcomes. The model cannot start a triage from a question.
-* **Instructions** (`instruct: triage monitor 12345`, from `agent/manager` only; an optional line `window: 120` first; anything else in the sentence is the requester's hint): an `ops.triage` task for that monitor, run by the same handler as an event's task with the same tools, command policy, limits and the same bash and python as a task. Exactly one monitor number must be named. The chat reply carries the result; no extra notice is sent.
-* **Observe.** The kit's `observe` module (the platform's own logs and alert states, read only) is a separate source of the same kind. It is not enabled here and not depended on; enabling it later is `observe` in the profile or `OBSERVE_ENABLED=1`, and its tools join both chat tiers and the task's tools without any code in this role.
+* **Questions** get a short answer from live Datadog reads: the six Datadog tools are the task's own tools, and the state summary carries the host's record of today's triages against the cap and the recent outcomes.
+* **A triage** is a job: the model calls `triage_monitor` (the monitor's number, optionally `windowMinutes` from 5 to 360 and a `hint`) which starts an `ops.triage` job in the background, run by the same handler as an event's job with the same tools, command policy, limits and the same bash and python. Exactly one monitor number must be named. The diagnosis is posted to the conversation by the job itself; no extra notice is sent. A triage an event starts is reported the same way, to the owner (`EVENTS_NOTIFY_TO`), by the job's result message; the service's own `eventNotice` is for tasks that are not jobs.
+* **Observe.** The kit's `observe` module (the platform's own logs and alert states, read only) is a separate source of the same kind. It is not enabled here and not depended on; enabling it later is `observe` in the profile or `OBSERVE_ENABLED=1`, and its tools join conversations and jobs without any code in this role.
 
 ## Decisions and limits
 
@@ -129,7 +129,7 @@ src/prompt.ts            standing orders and the instruction
 src/attempts.ts          the host-side ledger (cool-down, daily cap, outcomes)
 src/eligibility.ts       priority, monitor list, tags
 src/seed.ts              installs the handler
-src/chat.ts              chat: instructions, facts
+src/chat.ts              conversations: instructions, facts, the triage_monitor job tool
 handlers/datadog.mjs     the event handler template
 Dockerfile               targets agent and sandbox (the developer sandbox plus python3 and jq)
 deploy/                  compose.yaml, .env.example, README.md (runbook), (the rule itself is `rules/datadog-triage.yaml` in the repository root)

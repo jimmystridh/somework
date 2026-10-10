@@ -48,16 +48,10 @@ The model also has no `write` or `edit` tool. This is a policy, not a kernel bou
 The kit's environment (`SOMEWORK_URL`, `SOMEWORK_KEY_FILE`, `PI_PROVIDER`/`PI_MODEL`, `PI_ALLOWED_MODELS`, `BUDGET_MAX_*`, `DAILY_TOKEN_LIMIT`, `SKILLS_*`,
 `GIT_TOKEN_FILE`, `GIT_TOKEN_HOSTS`, `GITHUB_API`, …; see `packages/agent-kit/src/config.ts`). `GIT_TOKEN_FILE` here is a **read-only** token.
 
-## Chat
+## Conversations
 
-The reviewer answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice). A **question** from the manager or a person
-gets one bounded, read-only turn: tools `read, agent_status`, no commands, no changes, no approvals, an answer built from the service's own records
-(`agent_status`) and, where it has one, a read-only checkout. An **instruction** (`instruct: ...`, from `agent/manager` only) becomes a `code.review` v3 task: optional lines `repo:`, `ref:`, `pr:`, `ticket:`, the rest is the focus. It stays read-only (the guard on commands applies), and the reply says the verdict and the findings by severity.
-It runs as a job of the normal handler, with the role's own tools, guards and approvals, a chat budget of its own (150 000 tokens, 15 minutes by
-default, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES`) and the `chat` share of the daily token limit (`CHAT_TOKEN_SHARE`); a step that needs
-approval is asked of the manager in the conversation. Settings: `CHAT_MODE`, `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS`, `CHAT_REPOSITORY_URL`,
-`CHAT_REPOSITORY_REF`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
-`packages/agent-kit/README.md`).
+Every message sent to the reviewer is read by its model in a run of its own; it answers, or says `NO_REPLY` when there is nothing to add. A review is a **job**: the model calls `review_code` (a pull request number and/or a ref, a ticket key, a focus, optionally `repo`) which starts a `code.review` v3 job in the background and returns at once. The job stays read-only (the guard on commands applies); its verdict and the findings by severity, and the report as an attachment, are posted to the conversation when it is done. A step that needs approval is asked of an approver (the manager) in the conversation.
+Settings: `CHAT_REPOSITORY_URL`, `CHAT_REPOSITORY_REF`, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES` (the budget of one conversation run), `CHAT_TOKEN_SHARE`, `APPROVERS`, `THREADS_MAX_CONVERSATIONS` (all optional; the full table is in `packages/agent-kit/README.md`).
 
 ## Files
 | | |

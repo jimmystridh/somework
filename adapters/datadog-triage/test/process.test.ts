@@ -50,7 +50,7 @@ const ANSWER = '```json\n{"outcome":"inconclusive","severity":"low","summary":"s
 
 /** The real service process (the role's main.ts) with a real domain, a real sandbox daemon, a fake Datadog and a scripted model. */
 describe("the service process", () => {
-	it("boots without a repository or an egress proxy, seeds its handler, answers a question with the Datadog tools and runs an instruction as a triage", async () => {
+	it("boots without a repository or an egress proxy, seeds its handler, and runs a triage as a job that a conversation started", async () => {
 		const domain = await startDomain({ cardFile: join(here, "../card.json"), mayInvoke: "ops.*" });
 		cleanups.push(() => domain.stop());
 		const dir = mkdtempSync(join(tmpdir(), "dd-proc-"));
@@ -73,7 +73,7 @@ describe("the service process", () => {
 			SOMEWORK_KEY_FILE: join(domain.dir, "worker.key.json"),
 			PI_STATE_DIR: state,
 			PI_PROVIDER: "faux",
-			PI_FAUX_PLAN: JSON.stringify(['call:monitor_get:{"id":"12345"}', 'call:logs_search:{"query":"service:checkout","from":"now-1h","save":true}', `bash:python3 -c "import json; print(json.load(open('data/logs_search-1.json'))['count'])"`, `final:${ANSWER}`]),
+			PI_FAUX_PLAN: JSON.stringify(['call:triage_monitor:{"monitor":12345}', 'call:monitor_get:{"id":"12345"}', 'call:logs_search:{"query":"service:checkout","from":"now-1h","save":true}', `bash:python3 -c "import json; print(json.load(open('data/logs_search-1.json'))['count'])"`, `final:${ANSWER}`]),
 			SANDBOX_URL: `http://127.0.0.1:${sandboxPort}`,
 			SANDBOX_TOKEN_FILE: tokenFile,
 			SANDBOX_WORKSPACES: workspaces,
@@ -82,13 +82,13 @@ describe("the service process", () => {
 			DD_CREDENTIALS_FILE: keys,
 			DD_ALLOW_BASE_OVERRIDE: "1",
 			DD_API_BASE: datadogUrl,
-			CHAT_ALLOWED_SENDERS: "agent/ts-author",
-			CHAT_INSTRUCTORS: "agent/ts-author",
+			APPROVERS: "agent/ts-author",
 			CHAT_BUSY_AFTER_SECONDS: "60",
 		});
 		cleanups.push(() => void service.kill("SIGKILL"));
 		const status = async () => (await (await fetch(`http://127.0.0.1:${healthPort}/status`)).json()) as any;
-		await until("the service to report chat", async () => (await status()).chat?.mode === "model");
+		await until("the service to report chat", async () => (await status()).chat?.mode === "threads");
+		await sleep(500); // a service that has never run baselines the domain's inbox when it starts: ask after that
 		const ready = await fetch(`http://127.0.0.1:${healthPort}/ready`);
 		assert.equal(ready.ok, true, await ready.text());
 		assert.ok(new HandlerStore(handlersDir(state)).current("datadog"), "the shipped handler was installed");
@@ -96,19 +96,15 @@ describe("the service process", () => {
 		const replies = async () => (((await domain.author.get("/v1/inbox?limit=200")).messages ?? []) as any[]).filter((m) => m.type === "chat.message" && m.labels?.["chatReply"] === "true" && m.sender?.id === "agent/ts-worker");
 		const text = (message: any): string => (typeof message.content?.data === "string" ? message.content.data : JSON.stringify(message.content?.data));
 
-		// an instruction runs as a triage job of the real handler: no repository in the job, no clone, python and the Datadog tools offered
-		const instruct = await domain.author.post("/v1/messages", { recipients: [{ kind: "agent", id: "agent/ts-worker" }], content: { mediaType: "text/plain", data: "instruct: triage monitor 12345" }, triggerMode: "directed" });
-		const [done] = await until("the triage to be reported", async () => ((await replies()).length >= 1 ? await replies() : undefined), 60_000);
-		assert.match(text(done), /Triage inconclusive, severity low\.\nsmoke test answer\nhttps:\/\/app\.datadoghq\.eu\/monitors\/12345/);
-		assert.equal(done.replyTo, (instruct as any).messageId);
-
-		// a question gets the read-only Datadog tools
-		await sleep(16_000);
-		await domain.author.post("/v1/messages", { recipients: [{ kind: "agent", id: "agent/ts-worker" }], conversationId: (instruct as any).conversationId, content: { mediaType: "text/plain", data: "what is monitor 12345?" }, triggerMode: "directed" });
-		const both = await until("the answer", async () => ((await replies()).length >= 2 ? await replies() : undefined), 60_000);
-		assert.match(both.map(text).join("\n"), /smoke test answer/);
+		// asked in plain words, the model starts the triage job: the real handler, no repository in the job, no clone, python and the Datadog tools offered
+		const asked = await domain.author.post("/v1/messages", { recipients: [{ kind: "agent", id: "agent/ts-worker" }], content: { mediaType: "text/plain", data: "please triage monitor 12345" }, triggerMode: "directed" });
+		const results = await until("the triage to be reported", async () => ((await replies()).some((message) => message.labels?.jobId) ? await replies() : undefined), 90_000);
+		const done = results.find((message) => message.labels?.jobId)!;
+		assert.match(text(done), /^triage monitor 12345 \(job-[a-z0-9-]+\)\nTriage inconclusive, severity low\.\nsmoke test answer\nhttps:\/\/app\.datadoghq\.eu\/monitors\/12345/);
+		assert.equal(done.replyTo, (asked as any).messageId);
 		assert.deepEqual([...new Set(datadogRequests.map((request) => request.split("?")[0]))].sort(), ["GET /api/v1/monitor/12345", "POST /api/v2/logs/events/search"], "only reads reached Datadog");
 		assert.match(logs.get(service)!, /datadog_saved[^\n]*data\/logs_search-1\.json/, "save mode wrote its file into the workspace through the real sandbox daemon");
-		assert.equal((await status()).tokenPools.tasks.used, 0, "chat never touched the task pool");
+		const pools = (await status()).tokenPools;
+		assert.ok(pools.tasks.used > 0 && pools.chat.used > 0, "the job used the task pool and the conversation the chat pool");
 	});
 });

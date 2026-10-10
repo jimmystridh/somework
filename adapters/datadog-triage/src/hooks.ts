@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { CHAT_TASK_PREFIX, EVENT_NOTICE_LABEL, InvalidInput, silent, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
+import { EVENT_NOTICE_LABEL, InvalidInput, isJobId, silent, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
 import type { Outcome as TaskOutcome, SomeWorkClient } from "@somework/sdk";
 import { TriageLedger } from "./attempts.ts";
 import { triageChat } from "./chat.ts";
@@ -82,8 +82,8 @@ export function createTriageHooks(options: TriageOptions): { hooks: RoleHooks; l
 	};
 
 	const notify = async (taskId: string, triage: Triage, state: TaskState): Promise<void> => {
-		// a noisy alert needs no message, and a triage a person asked for in chat is answered in that chat
-		if (triage.outcome === "noise" || taskId.startsWith(CHAT_TASK_PREFIX)) return;
+		// a noisy alert needs no message, and a triage run as a job is reported by the job itself: its result message goes to whoever asked, or to the owner for an event
+		if (triage.outcome === "noise" || isJobId(taskId)) return;
 		const text = buildNotice(triage, { monitorId: state.monitor.id, monitorName: displayName(state.monitor.name, state.input.monitor.name), site: settings.site });
 		try {
 			await options.client.post(

@@ -80,16 +80,10 @@ the model's tools and the kit's git steps run in the agent's own process tree on
 If this role ever handles code that must not be able to reach the machine's other data, run it in a Windows container or a throwaway VM
 instead (the `ExecutionEnv` is the only thing that would change).
 
-## Chat
+## Conversations
 
-The Windows developer answers direct chat messages with the model (`CHAT_MODE=notice` goes back to the fixed notice). A **question** from the manager or a person
-gets one bounded, read-only turn: tools `read, agent_status`, no commands, no changes, no approvals, an answer built from the service's own records
-(`agent_status`) and, where it has one, a read-only checkout. An **instruction** (`instruct: ...`, from `agent/manager` only) becomes a `code.windows` task: optional lines `repo:`, `ref:`, `build: <profile>`, `tests: <profile>, <profile>` (names of profiles on the machine only, never commands), the rest is the instruction. It runs in the same confined environment with the same checks.
-It runs as a job of the normal handler, with the role's own tools, guards and approvals, a chat budget of its own (150 000 tokens, 15 minutes by
-default, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES`) and the `chat` share of the daily token limit (`CHAT_TOKEN_SHARE`); a step that needs
-approval is asked of the manager in the conversation. Settings: `CHAT_MODE`, `CHAT_ALLOWED_SENDERS`, `CHAT_INSTRUCTORS`, `CHAT_REPOSITORY_URL`,
-`CHAT_REPOSITORY_REF`, `CHAT_TOKEN_CAP`, `CHAT_TOKEN_SHARE`, `CHAT_INSTRUCT_TOKENS`, `CHAT_INSTRUCT_MINUTES` (all optional; the full table is in
-`packages/agent-kit/README.md`).
+Every message sent to the Windows developer is read by its model in a run of its own; it answers, or says `NO_REPLY` when there is nothing to add. A code change is a **job**: the model calls `windows_develop` (the instruction, optionally `build: <profile>`, `tests: [<profile>, …]` (names of profiles on the machine only, never commands), `repo` and `ref`) which starts a `code.windows` job in the background and returns at once. The machine builds one change at a time: the job holds the `windows-build` resource, so a second change waits and says so. The job runs in the same confined environment with the same checks; its pull request, patch and logs are posted to the conversation when it is done.
+Settings: `CHAT_REPOSITORY_URL`, `CHAT_REPOSITORY_REF`, `CHAT_INSTRUCT_TOKENS` and `CHAT_INSTRUCT_MINUTES` (the budget of one conversation run), `CHAT_TOKEN_SHARE`, `APPROVERS`, `THREADS_MAX_CONVERSATIONS` (all optional; the full table is in `packages/agent-kit/README.md`).
 
 ## Settings
 
@@ -125,9 +119,9 @@ Not verifiable without the machine, so `deploy/smoke.ps1` checks them there: Git
 the user-rights changes made with `secedit`, the firewall rules on the machine's Windows build, and a build profile that calls the real
 build tooling.
 
-## Budgets for an instruction in chat
+## Budgets
 
-An instruction in chat (`instruct:`) is the same kind of job as a task: a code change with builds and tests, and every step re-reads the whole conversation (30k tokens or more). It therefore gets 600k tokens and 30 minutes (hard cap 800k) from a chat pool of half the day's limit; `managed.env` sets the day's limit to 4M tokens. The kit's default (150k, 10 % of the day) ended such a job after a few steps with `budget_exceeded`.
+A change is a job with the budget of the profile (500k tokens, 30 minutes), charged to the day's task pool; every step re-reads the whole conversation (30k tokens or more), so the kit's conversation default (150k) would end it after a few steps. `managed.env` sets the day's limit to 4M tokens.
 
 ## Builds that keep their object files
 

@@ -22,7 +22,7 @@ describe("the hooks of the service", () => {
 		const hooks = await datadogTriageHooksFor(context);
 		assert.equal(hooks.extensions?.length, 1);
 		assert.deepEqual((hooks.extensions![0] as any).tools.map((tool: any) => tool.name), [...DATADOG_TOOLS]);
-		assert.deepEqual(hooks.chat?.askToolNames, [...DATADOG_TOOLS]);
+		assert.deepEqual(hooks.chat?.jobTools?.map((tool) => tool.name), ["triage_monitor"]);
 		assert.equal(await hooks.readinessChecks!.datadog_credentials!(), true);
 		assert.ok(hooks.prepareInput && hooks.instruction && hooks.beforeRun && hooks.result && hooks.wrapRuntime && hooks.onSettled);
 		assert.equal(hooks.envFactory, undefined, "the model's tools run in the sandbox");

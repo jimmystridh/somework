@@ -73,9 +73,8 @@ services:
       EVENTS_MAX_WAKES_PER_HOUR: ${EVENTS_MAX_WAKES_PER_HOUR:-20}
       EVENTS_HANDLER_TIMEOUT_SECONDS: ${EVENTS_HANDLER_TIMEOUT_SECONDS:-10}
       EVENTS_WAKE_MAX_TOKENS: ${EVENTS_WAKE_MAX_TOKENS:-100000}
-      CHAT_MODE: ${CHAT_MODE:-model}                         # model = chat is answered by the model (questions read-only, instructions as jobs); notice = the fixed notice only
-      CHAT_ALLOWED_SENDERS: ${CHAT_ALLOWED_SENDERS:-}        # who may ask: ids or kind:<kind>; empty = agent/manager and every human
-      CHAT_INSTRUCTORS: ${CHAT_INSTRUCTORS:-}                # who may instruct (messages starting with instruct:); empty = agent/manager
+      CHAT_MODE: ${CHAT_MODE:-on}                            # on = every message is read by the model; off = the agent takes no part in conversations
+      APPROVERS: ${APPROVERS:-}                              # who may decide an approval: ids or kind:<kind>; empty = agent/manager and every human
       CHAT_REPOSITORY_URL: ${CHAT_REPOSITORY_URL:-}          # the repository an instruction works on unless it says repo: (empty = it must say)
       CHAT_REPOSITORY_REF: ${CHAT_REPOSITORY_REF:-}
       CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.1}             # share of DAILY_TOKEN_LIMIT that chat may use; the model is not called when it is used up

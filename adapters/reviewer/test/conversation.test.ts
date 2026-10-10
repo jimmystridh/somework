@@ -1,29 +1,33 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { askToolNames, instructToolNames } from "@somework/agent-kit";
 import { reviewerChat } from "../src/chat.ts";
-import { profile } from "../src/profile.ts";
 
-describe("the reviewer in chat", () => {
+describe("the reviewer in conversations", () => {
 	const chat = reviewerChat({ CHAT_REPOSITORY_URL: "https://github.com/acme/app" } as NodeJS.ProcessEnv);
+	const [tool] = chat.jobTools!;
 
-	it("answers questions read-only and instructions with the reviewer's own read and bash, whose guard is kept", () => {
-		assert.deepEqual(askToolNames(profile.chat, chat), ["read", "agent_status"]);
-		assert.deepEqual(instructToolNames(profile.chat, profile.allowedTools), ["read", "bash"]);
+	it("offers the review as one job tool and says so in its standing orders", () => {
+		assert.deepEqual(chat.jobTools!.map((candidate) => candidate.name), ["review_code"]);
+		assert.match(chat.instructions!, /review_code/);
+		assert.doesNotMatch(chat.instructions!, /instruct:/);
 	});
 
-	it("turns an instruction into a code.review task with the focus, pull request and ticket", () => {
-		const planned = chat.instructInput!("pr: #42\nticket: ABC-7\nlook at the auth change") as any;
-		assert.deepEqual(planned.capability, { id: "code.review", version: "3" });
-		assert.deepEqual(planned.input, { repository: { url: "https://github.com/acme/app", ref: "HEAD" }, pullRequest: 42, ticket: "ABC-7", focus: "look at the auth change" });
+	it("plans a code.review job with the focus, pull request and ticket", async () => {
+		assert.deepEqual(await tool!.plan({ pullRequest: 42, ticket: "ABC-7", focus: "look at the auth change" }), {
+			capability: { id: "code.review", version: "3" },
+			input: { repository: { url: "https://github.com/acme/app", ref: "HEAD" }, pullRequest: 42, ticket: "ABC-7", focus: "look at the auth change" },
+			label: "review PR #42",
+		});
 	});
 
-	it("reviews without a focus, and refuses a bad pull request number or ticket", () => {
-		assert.deepEqual((chat.instructInput!("review it") as any).input.focus, "review it");
-		assert.equal((chat.instructInput!("pr: 3") as any).input.focus, undefined);
-		assert.ok("refuse" in chat.instructInput!("pr: abc\nreview"));
-		assert.ok("refuse" in chat.instructInput!("pr: 0\nreview"));
-		assert.ok("refuse" in chat.instructInput!("ticket: ; rm -rf /\nreview"));
+	it("reviews without a focus, and refuses a bad pull request number, ticket or repository", async () => {
+		const plain = (await tool!.plan({ ref: "feature" })) as any;
+		assert.equal(plain.input.focus, undefined);
+		assert.equal(plain.label, "review feature");
+		assert.ok("refuse" in (await tool!.plan({ pullRequest: 0 })));
+		assert.ok("refuse" in (await tool!.plan({ ticket: "; rm -rf /" })));
+		assert.ok("refuse" in (await tool!.plan({ repo: "http://x" })));
+		assert.ok("refuse" in ((await reviewerChat({} as NodeJS.ProcessEnv).jobTools![0]!.plan({}))));
 	});
 
 	it("says in words what the review found", () => {

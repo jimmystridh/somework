@@ -76,9 +76,8 @@ services:
       EVENTS_THROTTLE_AT: ${EVENTS_THROTTLE_AT:-0.8}
       EVENTS_MAX_FAILURES: ${EVENTS_MAX_FAILURES:-5}
       EVENTS_MAX_WAKES_PER_HOUR: ${EVENTS_MAX_WAKES_PER_HOUR:-20}
-      CHAT_MODE: ${CHAT_MODE:-model}                         # model = chat is answered by the model (questions: Datadog tools only; instructions run a triage); notice = the fixed notice only
-      CHAT_ALLOWED_SENDERS: ${CHAT_ALLOWED_SENDERS:-}        # who may ask: ids or kind:<kind>; empty = agent/manager and every human
-      CHAT_INSTRUCTORS: ${CHAT_INSTRUCTORS:-}                # who may instruct (messages starting with instruct:); empty = agent/manager
+      CHAT_MODE: ${CHAT_MODE:-on}                            # on = every message is read by the model; off = the agent takes no part in conversations
+      APPROVERS: ${APPROVERS:-}                              # who may decide an approval: ids or kind:<kind>; empty = agent/manager and every human
       CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.1}             # share of DAILY_TOKEN_LIMIT that chat may use; the model is not called when it is used up
       CHAT_TOKEN_CAP: ${CHAT_TOKEN_CAP:-40000}               # tokens of one answer to a question
       CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-150000}  # tokens of one instruction

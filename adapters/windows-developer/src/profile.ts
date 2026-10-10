@@ -18,8 +18,6 @@ export const profile: AgentProfile = validateProfile({
 	systemPrompt: SYSTEM_PROMPT,
 	approvalPatterns: WINDOWS_APPROVAL_PATTERNS,
 	defaultBudget: { maxTokens: 500_000, maxMinutes: 30 },
-	// an instruction in chat is the same job as a task (a code change with builds and tests): every step re-reads the conversation, so 150k tokens end after a few steps
-	chat: { instructBudget: { maxTokens: 600_000, maxMinutes: 30 }, hardTokenCap: 800_000, share: 0.5 },
 	requireBudget: true,
 	git: { push: true, pullRequest: true, branchPrefix: "agent" },
 	// the repository's own skills are loaded at the task's ref by the kit; the deployment names the ones this role may use (SKILLS_ALLOW)
