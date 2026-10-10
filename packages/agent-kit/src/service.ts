@@ -398,7 +398,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 							.then(() => wake.ack())
 							.catch((error) => log("warn", "message_not_accepted", { messageId: wake.messageId, error: String(error).slice(0, 160) }));
 					},
-					{ kinds: ["message"], logger: (level, message, fields) => log(level, `message_wake: ${message}`, fields) },
+					{ logger: (level, message, fields) => log(level, `message_wake: ${message}`, fields) },
 				).catch((error) => {
 					if (!stop.signal.aborted) log("error", "message_wakes_stopped", { error: String(error).slice(0, 160) });
 				});

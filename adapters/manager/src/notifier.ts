@@ -108,7 +108,7 @@ export class WakeFeed {
 	}
 
 	async #wakes(signal: AbortSignal): Promise<void> {
-		const wake = { ...this.#options.wake, kinds: ["message"] as const };
+		const wake = { ...this.#options.wake };
 		for await (const item of this.#options.source(this.#client, signal, wake)) {
 			try {
 				if (item.kind === "message") await this.#inbox.drain();
