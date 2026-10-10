@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
 import type { JobEntry, JobManager, JobSpec, Party } from "./jobs.ts";
-import type { MessageSender } from "./message.ts";
+import type { Sender } from "./message.ts";
 import type { ResourceRegistry } from "./resources.ts";
 
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
@@ -42,7 +42,7 @@ export interface ThreadToolHost {
 	saveAttachment(context: RunContext, request: { artifactId: string; version?: number; name?: string }): Promise<{ path: string; bytes: number }>;
 	jobs(): JobManager;
 	resources(): ResourceRegistry;
-	sender(): MessageSender;
+	sender(): Sender;
 }
 
 export const THREAD_TOOLS = { jobStatus: "job_status", jobStop: "job_stop", resources: "resources", send: "message_send", attachment: "attachment_get" } as const;

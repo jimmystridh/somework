@@ -6,7 +6,7 @@ import type { Metrics } from "../metrics.ts";
 import type { AgentRuntime } from "../runtime.ts";
 import type { Approvals } from "./approvals.ts";
 import type { JobManager } from "./jobs.ts";
-import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, repliesTo, type HistoryLine, type InboundMessage, type MessageSender } from "./message.ts";
+import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, repliesTo, type HistoryLine, type InboundMessage, type Sender } from "./message.ts";
 import type { ThreadSettings } from "./settings.ts";
 import type { DurableInbox, InboxItem } from "./store.ts";
 import { describeJob, threadKey, type RunContext } from "./tools.ts";
@@ -18,7 +18,7 @@ export interface ThreadEngineDeps {
 	jobs: JobManager;
 	inbox: DurableInbox;
 	approvals: Approvals;
-	sender: MessageSender;
+	sender: Sender;
 	settings: ThreadSettings;
 	/** The tools a conversation run is offered and its standing orders. */
 	tools: readonly string[];
@@ -30,11 +30,20 @@ export interface ThreadEngineDeps {
 	ledger: Pick<DailyLedger, "chatRemaining" | "chatState" | "record">;
 	/** Looks at a message before the engine does; true means it was dealt with (control messages of the event handlers, budget raises). */
 	intercept?: (message: InboundMessage) => Promise<boolean>;
+	/** Conversations that live outside the domain (a chat channel of the agent): their messages and history are read here, not from the domain. */
+	local?: LocalConversations;
 	signal: AbortSignal;
 	log?: Log;
 	metrics?: Metrics;
 	now?: () => number;
 	boundary?: () => string;
+}
+
+export interface LocalConversations {
+	/** True for the id of a conversation or a message that is kept here. */
+	owns(id: string | undefined): boolean;
+	message(id: string): InboundMessage | undefined;
+	history(conversationId: string, beforeMessageId: string, limit: number, chars: number): HistoryLine[];
 }
 
 interface Entry {
@@ -116,11 +125,24 @@ export class ThreadEngine {
 		if (message.sender.id === this.#deps.agentId || message.type !== "chat.message") return void (await this.#markRead([messageId]));
 		if (this.#deps.approvals.offer(message)) return void (await this.#markRead([messageId]));
 		if (this.#deps.intercept && (await this.#deps.intercept(message).catch(() => false))) return void (await this.#markRead([messageId]));
+		await this.#take(message, true);
+	}
+
+	/**
+	 * A message of a conversation that lives outside the domain (see `local`): written to the inbox like any other, handled once, answered through
+	 * the same sender. Nothing is marked read in the domain; an id that is already known adds nothing.
+	 */
+	async acceptLocal(message: InboundMessage): Promise<void> {
+		if (this.#deps.inbox.has(message.messageId)) return;
+		await this.#take(message, false);
+	}
+
+	async #take(message: InboundMessage, inDomain: boolean): Promise<void> {
 		const sent = message.createdAt === undefined ? Number.NaN : Date.parse(message.createdAt);
 		const late = Number.isFinite(sent) && this.#now() - sent > this.#deps.settings.liveWindowMs;
 		const item: InboxItem = { id: message.messageId, ...(message.conversationId ? { conversationId: message.conversationId } : {}), sender: message.sender, ...(message.createdAt ? { sentAt: message.createdAt } : {}), receivedAt: this.#now(), status: "received", attempts: 0, ...(late ? { recovered: true } : {}) };
 		this.#deps.inbox.add(item);
-		await this.#markRead([messageId]);
+		if (inDomain) await this.#markRead([message.messageId]);
 		this.#deps.metrics?.counter("somework_messages_total", "Messages received, by lane")({ lane: late ? "catch_up" : "live" });
 		await this.#noteToJobs(message);
 		this.#enqueue({ item, message, catchUp: late, queuedAt: this.#now() });
@@ -229,7 +251,7 @@ export class ThreadEngine {
 		const { settings, inbox } = this.#deps;
 		const id = entry.item.id;
 		inbox.start(id);
-		const message = entry.message ?? asMessage(await this.#deps.client.get(`/v1/messages/${encodeURIComponent(id)}`));
+		const message = entry.message ?? (this.#deps.local?.owns(id) ? this.#deps.local.message(id) : asMessage(await this.#deps.client.get(`/v1/messages/${encodeURIComponent(id)}`)));
 		if (!message) {
 			this.#log("warn", "message_unreadable", { messageId: id });
 			inbox.finish(id);
@@ -299,6 +321,7 @@ export class ThreadEngine {
 	async #history(message: InboundMessage): Promise<HistoryLine[]> {
 		const { settings } = this.#deps;
 		if (!message.conversationId || settings.historyMessages <= 0) return [];
+		if (this.#deps.local?.owns(message.conversationId)) return this.#deps.local.history(message.conversationId, message.messageId, settings.historyMessages, settings.messageChars);
 		const records: any[] = [];
 		let cursor: number | undefined;
 		try {

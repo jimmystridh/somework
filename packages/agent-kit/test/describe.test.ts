@@ -142,3 +142,10 @@ test("/history serves the newest jobs with a bounded limit and is absent when a 
 	assert.deepEqual(asked, [100, 25, 500, 100]);
 	assert.equal((await get(createHealthServer(base), "/history")).status, 404);
 });
+
+test("the Telegram channel is described by whether it runs and how many people may write to it, never by who", () => {
+	assert.equal(describeAgent(input()).telegram, undefined);
+	const on = describeAgent(input({ telegram: { enabled: true, allowedUsers: 2 } }));
+	assert.deepEqual(on.telegram, { enabled: true, allowedUsers: 2 });
+	assert.notEqual(on.hash, describeAgent(input()).hash, "switching it on is a change of the setup");
+});

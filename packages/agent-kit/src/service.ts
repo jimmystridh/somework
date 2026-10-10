@@ -17,7 +17,7 @@ import { Approvals } from "./threads/approvals.ts";
 import { JobArtifacts } from "./threads/artifacts.ts";
 import { KIT_THREAD_RULES, ThreadEngine } from "./threads/engine.ts";
 import { JobManager, requestIdOf, type JobEntry } from "./threads/jobs.ts";
-import { MessageSender } from "./threads/message.ts";
+import { MessageSender, type Sender } from "./threads/message.ts";
 import { createJobReporter, topicSlug } from "./threads/reporter.ts";
 import { ResourceRegistry } from "./threads/resources.ts";
 import { resolveThreadSettings } from "./threads/settings.ts";
@@ -44,6 +44,7 @@ import { skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
 import { llmUsageCounters } from "./usage-metrics.ts";
 import { createTimers } from "./timers/index.ts";
+import { resolveTelegram, RoutedSender, TelegramChannel, telegramApi, telegramApprovals, TelegramSender, TelegramStore, type TelegramStart } from "./telegram/index.ts";
 
 const read = (path: string): string => readFileSync(path, "utf8").trim();
 
@@ -156,7 +157,17 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const observe = createObserve({ profile: profile.observe, env, log, metrics, agentId: identity.agentId });
 			// the thread layer's pieces are made after the runtime and the tools need them: they are looked up late
 			const resources = new ResourceRegistry();
-			const sender = new MessageSender(client, threadSettings.replyMaxBytes);
+			const domainSender = new MessageSender(client, threadSettings.replyMaxBytes);
+			// the agent's own Telegram bot, when it has a token and a list of people who may write to it
+			const telegramStart: TelegramStart = threadSettings.enabled ? resolveTelegram(config.telegram) : { enabled: false };
+			if (!telegramStart.enabled && telegramStart.reason) log("warn", "telegram_disabled", { reason: telegramStart.reason });
+			const telegram = telegramStart.enabled ? (() => {
+				const store = new TelegramStore(join(config.state.dir, "telegram"), identity.agentId);
+				const api = telegramApi(telegramStart.token);
+				const telegramSender = new TelegramSender({ api, store, agentId: identity.agentId, maxBytes: 8192, log });
+				return { start: telegramStart, store, api, sender: telegramSender };
+			})() : undefined;
+			const sender: Sender = telegram ? new RoutedSender(domainSender, telegram.sender, telegram.store) : domainSender;
 			const stateBase = (): Promise<string> =>
 				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
 			const threadState = async (): Promise<string> => {
@@ -248,7 +259,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			};
 			const jobHandler = createHandler({ ...baseDeps, ledger, source: "job" });
 			const root = config.sandbox.workspaceRoot.replace(/\/$/, "");
-			const approvals = new Approvals({ client, log, timeoutMinutes: threadSettings.approvalMinutes, approvers: threadSettings.approvers });
+			const approvals = new Approvals({ client, log, timeoutMinutes: threadSettings.approvalMinutes, approvers: threadSettings.approvers, ...(telegram ? { channel: telegramApprovals(telegram.store, telegram.sender) } : {}) });
 			const slug = topicSlug(identity.agentId);
 			const stop = new AbortController();
 			const reporter = createJobReporter({
@@ -301,6 +312,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				tools: conversationTools,
 				instructions: [hooks.chat?.instructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}.`, KIT_THREAD_RULES].join("\n\n"),
 				state: threadState,
+				...(telegram ? { local: telegram.store } : {}),
 				workspace: threadWorkspace,
 				ledger,
 				intercept: async (message) => {
@@ -337,6 +349,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					events: { enabled: eventsConfig.enabled, notifyTo: eventsConfig.notifyTo },
 					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
 					timers: { enabled: Boolean(timers) },
+					telegram: { enabled: Boolean(telegram), allowedUsers: telegram?.start.allowed.size ?? 0 },
 					includePrompt: env.PROFILE_PROMPT !== "0",
 				}),
 				join(config.state.dir, "profile-hash.json"),
@@ -381,6 +394,24 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				stop.signal.addEventListener("abort", () => clearInterval(measuring), { once: true });
 				const recovered = engine.start();
 				const resumed = jobs.recover();
+				if (telegram) {
+					const channel = new TelegramChannel({
+						api: telegram.api,
+						store: telegram.store,
+						allowed: telegram.start.allowed,
+						agentId: identity.agentId,
+						accept: (message) => engine.acceptLocal(message),
+						about: () => `I am ${identity.agentId}, the ${profile.id} agent of this platform. I offer: ${profile.capabilities.map((capability) => `${capability.id}@${capability.version}`).join(", ")}.`,
+						status: threadState,
+						jobs,
+						approvals,
+						messagesPerHour: config.telegram.messagesPerHour,
+						pollSeconds: config.telegram.pollSeconds,
+						log,
+						metrics,
+					});
+					void channel.run(stop.signal).catch((error) => log("error", "telegram_stopped", { error: String(error).slice(0, 160) }));
+				}
 				log("info", "threads_recovered", { messages: recovered, jobs: resumed.length });
 				// the domain's inbox is the safety net under the wakes: what came while the agent was down, or whose wake was lost, is taken in here
 				const sweep = (): void => void engine.sweep().then((taken) => (taken > 0 ? log("info", "inbox_swept", { messages: taken }) : undefined)).catch((error) => log("warn", "inbox_sweep_failed", { error: String(error).slice(0, 160) }));
@@ -403,7 +434,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					if (!stop.signal.aborted) log("error", "message_wakes_stopped", { error: String(error).slice(0, 160) });
 				});
 			}
-			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, threads: threadSettings.enabled, events: eventsConfig.enabled });
+			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, threads: threadSettings.enabled, events: eventsConfig.enabled, telegram: Boolean(telegram) });
 			await new Promise<void>((resolve) => stop.signal.addEventListener("abort", () => resolve(), { once: true }));
 			// running jobs are left as they are (they are written to disk and taken up again at the next start); give them a moment to stop cleanly
 			await Promise.race([jobs.idle(), new Promise<void>((resolve) => setTimeout(resolve, 20_000))]);

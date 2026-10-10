@@ -2,7 +2,7 @@ import type { Outcome } from "../job-types.ts";
 import { describeOutcome } from "../journal.ts";
 import { silent, type Log } from "../log.ts";
 import type { JobEntry, JobReporter, Party } from "./jobs.ts";
-import type { MessageSender } from "./message.ts";
+import type { Sender } from "./message.ts";
 
 export type JobEventState = "started" | "waiting" | "finished";
 
@@ -18,7 +18,7 @@ export interface JobEventPayload {
 }
 
 export interface JobReporterDeps {
-	sender: MessageSender;
+	sender: Sender;
 	agentId: string;
 	/** Publishes `agent.<slug>.job.<state>`; failing to publish never disturbs a job. */
 	publish?: (state: JobEventState, payload: JobEventPayload) => Promise<void>;

@@ -70,8 +70,13 @@ export interface OutgoingMessage {
 	key: string;
 }
 
-/** Sends messages into conversations. */
-export class MessageSender {
+/** What the engine, the tools and the job reporter write messages with. */
+export interface Sender {
+	send(message: OutgoingMessage): Promise<void>;
+}
+
+/** Sends messages into conversations of the domain. */
+export class MessageSender implements Sender {
 	readonly #client: Pick<SomeWorkClient, "post">;
 	readonly #maxBytes: number;
 

@@ -31,7 +31,7 @@ async function until<T>(what: string, read: () => Promise<T | undefined | false>
 	}
 }
 
-async function boot(plan: string[]) {
+async function boot(plan: string[], extraEnv: Record<string, string> = {}) {
 	const domain = await startDomain({ cardFile: join(here, "../../../adapters/pi/card.json") });
 	cleanups.push(() => domain.stop());
 	const dir = mkdtempSync(join(tmpdir(), "threads-e2e-"));
@@ -58,6 +58,7 @@ async function boot(plan: string[]) {
 			SANDBOX_WORKSPACES: workspaces,
 			HEALTH_PORT: String(healthPort),
 			PI_CONCURRENCY: "2",
+			...extraEnv,
 		});
 		cleanups.push(() => void service.kill("SIGKILL"));
 		return service;
@@ -83,6 +84,17 @@ describe("conversations and jobs end to end (real domain, real sandbox, real ser
 		await world.say("thanks!");
 		await until("the message to be handled", async () => /thread_no_reply/.test([...logs.values()].join("")));
 		assert.ok(!(await world.texts()).some((text) => text.includes("NO_REPLY")));
+	});
+
+	it("keeps the Telegram channel off, and says why, when there is a bot token but nobody is allowed to write to it", async () => {
+		const world = await boot(["final:Hello from the worker."], { TELEGRAM_BOT_TOKEN: "123:not-a-real-token" });
+		await until("the refusal to be logged", async () => /telegram_disabled/.test([...logs.values()].join("")));
+		assert.match([...logs.values()].join(""), /TELEGRAM_ALLOWED_USER_IDS is required/);
+		assert.doesNotMatch([...logs.values()].join(""), /not-a-real-token/);
+		const profile = (await (await fetch(`http://127.0.0.1:${world.healthPort}/profile`)).json()) as any;
+		assert.deepEqual(profile.telegram, { enabled: false, allowedUsers: 0 });
+		await world.say("hi there");
+		await until("the answer", async () => (await world.texts()).some((text) => text.includes("Hello from the worker.")));
 	});
 
 	it("starts a job from a tool call, answers at once, and posts the job's result to the conversation by itself", async () => {

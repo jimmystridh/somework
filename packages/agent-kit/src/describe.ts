@@ -33,6 +33,8 @@ export interface AgentDescription {
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
+	/** The agent's own Telegram bot: whether it runs and how many people may write to it (never who). */
+	telegram?: { enabled: boolean; allowedUsers: number };
 	/** Of everything above; changes when the setup changes. */
 	hash: string;
 }
@@ -51,6 +53,7 @@ export interface DescribeInput {
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
+	telegram?: { enabled: boolean; allowedUsers: number };
 	/** False leaves out the prompt text (its hash and length stay). */
 	includePrompt: boolean;
 }
@@ -96,6 +99,7 @@ export function describeAgent(input: DescribeInput): AgentDescription {
 		events: input.events,
 		observe: input.observe,
 		...(input.timers ? { timers: input.timers } : {}),
+		...(input.telegram ? { telegram: input.telegram } : {}),
 	};
 	return { ...body, hash: sha256(JSON.stringify({ ...body, systemPrompt: { ...body.systemPrompt, text: undefined }, version: undefined })) };
 }

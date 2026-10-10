@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { allowlist, parseModelList, type ModelRef } from "./providers/allowlist.ts";
 import { parseSkillList } from "./skills.ts";
 import { validateTable, type ShardTable } from "./shards.ts";
+import { telegramSettingsFrom, type TelegramSettings } from "./telegram/config.ts";
 
 export interface Config {
 	somework: { url: string; keyFile: string; caFile?: string; requireTls: boolean };
@@ -34,6 +35,8 @@ export interface Config {
 	approvalPatterns: string[];
 	/** Deployment override of the role's skills: `SKILLS_ALLOW` replaces `profile.skills.allow` when it is set and not empty. */
 	skills: { allow?: string[]; overlayDir?: string };
+	/** The agent's own Telegram bot (`TELEGRAM_BOT_TOKEN_FILE` or `TELEGRAM_BOT_TOKEN`, with `TELEGRAM_ALLOWED_USER_IDS`); off without a token. */
+	telegram: TelegramSettings;
 }
 
 const required = (env: NodeJS.ProcessEnv, name: string): string => {
@@ -88,5 +91,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		leaseSeconds: integer(env, "SOMEWORK_LEASE_SECONDS", 60),
 		approvalPatterns: (env.APPROVAL_PATTERNS ?? "").split("\n").filter(Boolean),
 		skills: { allow: env.SKILLS_ALLOW ? parseSkillList(env.SKILLS_ALLOW) : undefined, overlayDir: env.SKILLS_OVERLAY_DIR || undefined },
+		telegram: telegramSettingsFrom(env),
 	};
 }

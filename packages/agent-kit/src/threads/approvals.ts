@@ -13,6 +13,15 @@ interface Pending {
 	resolve(decision: ApprovalDecision): void;
 }
 
+/** A chat channel outside the domain: a question to an approver who is on it goes there, and is answered there (`Approvals.decide`). */
+export interface ApprovalChannel {
+	/** True for a conversation the channel carries. */
+	owns(conversationId: string | undefined): boolean;
+	/** True for an approver the channel can reach (its principal ids). */
+	reaches(approver: Party): boolean;
+	say(conversationId: string, text: string): Promise<void>;
+}
+
 export interface ApprovalRequest {
 	approver: Party;
 	conversationId?: string;
@@ -34,8 +43,10 @@ export class Approvals {
 	readonly #log: Log;
 	readonly #timeoutMs: number;
 	readonly #approvers: readonly string[];
+	readonly #channel: ApprovalChannel | undefined;
 
-	constructor(options: { client: Pick<SomeWorkClient, "post">; log: Log; timeoutMinutes: number; approvers: readonly string[] }) {
+	constructor(options: { client: Pick<SomeWorkClient, "post">; log: Log; timeoutMinutes: number; approvers: readonly string[]; channel?: ApprovalChannel }) {
+		this.#channel = options.channel;
 		this.#client = options.client;
 		this.#log = options.log;
 		this.#timeoutMs = options.timeoutMinutes * 60_000;
@@ -55,6 +66,8 @@ export class Approvals {
 
 	async ask(request: ApprovalRequest): Promise<ApprovalDecision> {
 		const id = randomBytes(6).toString("hex");
+		const local = request.conversationId !== undefined && this.#channel?.owns(request.conversationId) === true;
+		const onChannel = local && this.#channel!.reaches(request.approver);
 		const decided = new Promise<ApprovalDecision>((resolve) => {
 			const done = (decision: ApprovalDecision): void => {
 				clearTimeout(timer);
@@ -65,15 +78,20 @@ export class Approvals {
 			const timer = setTimeout(() => done({ approved: false, reason: `nobody answered within ${Math.round(this.#timeoutMs / 60_000)} minutes` }), this.#timeoutMs);
 			const stopped = (): void => done({ approved: false, reason: "the work was stopped" });
 			request.signal.addEventListener("abort", stopped, { once: true });
-			this.#pending.set(id, { id, senderId: request.approver.id, conversationId: request.conversationId, resolve: done });
+			// an approver outside the channel answers in a conversation of its own: the domain does not know this one
+			this.#pending.set(id, { id, senderId: request.approver.id, conversationId: local && !onChannel ? undefined : request.conversationId, resolve: done });
 		});
 		try {
+			if (onChannel) {
+				await this.#channel!.say(request.conversationId!, `Approval needed (${request.agent}): ${request.tool}: ${request.summary}\nAnswer /approve ${id} or /deny ${id}. Without an answer in ${Math.round(this.#timeoutMs / 60_000)} minutes it is denied.`);
+				return await decided;
+			}
 			await this.#client.post(
 				"/v1/messages",
 				{
 					type: "chat.message",
 					recipients: [{ kind: request.approver.kind, id: request.approver.id }],
-					...(request.conversationId ? { conversationId: request.conversationId } : {}),
+					...(request.conversationId && !local ? { conversationId: request.conversationId } : {}),
 					...(request.replyTo ? { replyTo: request.replyTo } : {}),
 					triggerMode: "directed",
 					content: {
@@ -89,6 +107,19 @@ export class Approvals {
 			this.#log("warn", "approval_send_failed", { error: String(error).slice(0, 160) });
 		}
 		return decided;
+	}
+
+	/** The answer of a person on a chat channel (`/approve <id>`, `/deny <id>`). Only the approver the question was asked of, in its conversation, decides. */
+	decide(id: string, from: Party, conversationId: string, approved: boolean): "decided" | "unknown" | "rejected" {
+		const pending = this.#pending.get(id);
+		if (!pending) return "unknown";
+		if (from.id !== pending.senderId || pending.conversationId !== conversationId) {
+			this.#log("warn", "approval_rejected", { from: from.id, reason: "not the approver of this step" });
+			return "rejected";
+		}
+		this.#log("info", "approval_decided", { from: from.id, approved });
+		pending.resolve(approved ? { approved: true } : { approved: false, reason: "denied by the approver" });
+		return "decided";
 	}
 
 	/** True when `message` was a decision for a pending request (valid or not for the question, it is consumed); false for anything else. */

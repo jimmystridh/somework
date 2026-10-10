@@ -143,6 +143,24 @@ Agents do not take tasks. Every `chat.message` addressed to an agent (a person, 
 | `share` / `throttleAt` | 0.1 / 0.8 | `CHAT_TOKEN_SHARE` / `CHAT_THROTTLE_AT` |
 
 
+## Telegram: every agent can have its own bot
+
+Off unless the agent has a bot token. Create the bot with BotFather (one bot per agent), put the token in a file and set:
+
+| Environment | Meaning |
+|---|---|
+| `TELEGRAM_BOT_TOKEN_FILE` | path of the file with the bot token (preferred; `TELEGRAM_BOT_TOKEN` takes the token itself) |
+| `TELEGRAM_ALLOWED_USER_IDS` | **required with a token**: the numeric Telegram user ids that may write to the agent, separated by commas. Without a usable list the channel does not start (the log says `telegram_disabled` and why); the agent runs as before |
+| `TELEGRAM_MESSAGES_PER_HOUR` | messages one person may send to the model per hour (default 30; commands do not count) |
+| `TELEGRAM_POLL_SECONDS` | long-poll time of `getUpdates` (default 30) |
+
+* **Who is served.** Only private chats with an allowed person. Everyone else (strangers, bots, groups) is ignored without an answer. Text only (other content gets "I read text messages only"); at most 4000 characters a message.
+* **A message is a conversation message.** It becomes a message from `telegram/<userId>` (kind `human`, so people first) in the conversation `tg:<chatId>` and is handled by the same thread engine as any other: durable inbox, a model run of its own, the thread tools, jobs. The domain never sees these conversations. The answer (or `NO_REPLY`, which sends nothing) goes to the chat in chunks, with secrets scrubbed; a job started there reports its end into the same chat (attachments stay in the domain: their ids are named). `agent.<slug>.job.*` events are still published.
+* **Commands, no model run:** `/start` and `/help` (what the agent is and offers), `/status`, `/jobs`, `/stop <job>` (a signal, as `job_stop`), `/approve <id>` and `/deny <id>`. An approval that the agent needs for work started on Telegram is asked on the chat and answered there, by the person asked only; an approver outside Telegram is asked through the domain as before.
+* **Transport and state.** Long polling (`getUpdates`), no webhook, so nothing listens and nothing is exposed. `telegram/messages.json` (the chat history the model sees and what a restart needs) and `telegram/offset.json` (how far updates were read) are in the state directory. The offset moves only after a message is in the inbox, so a restart neither loses nor repeats a message; a reply that was sent just before a crash can be sent again after it. Errors back off from 1 s to 30 s; the token never appears in an error or a log.
+* `/profile` shows `telegram: {enabled, allowedUsers}` (a count, never the ids).
+
+
 ## `/profile`: how an agent is set up
 
 Next to `/status` the health port serves `/profile`, a read-only JSON document the service builds from its loaded profile and settings (`describe.ts`): role and agent id, the image tag (`AGENT_VERSION`), the capability card ids, model and allowed models, the system prompt with its SHA-256 and length (`PROFILE_PROMPT=0` leaves the text out), allowed tools, command approval patterns (the deployment's own patterns are only counted) and tools that wait for approval, budgets and caps, concurrency, repository settings (push, pull request, branch prefix, the credential kind `token`, `github-app` or `none`, the bot's GitHub login with an app, token hosts, mirror, `GIT_TOKEN_EXPIRES` when set to a plain date), skills, chat settings (who may ask and instruct), events and observe state. Live handlers and token pools stay on `/status`. It holds no key, token, file path or environment value. `hash` identifies the setup (the version and the prompt text are not part of it) and `changedAt` is when this hash was first seen, kept in `profile-hash.json` in the state directory, so a dashboard can mark "changed since last seen". The port is private to the cluster; the prompt is company wording, so show it only through the private gateway.
