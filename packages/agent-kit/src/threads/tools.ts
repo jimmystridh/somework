@@ -38,12 +38,17 @@ export interface RunContext {
 
 export interface ThreadToolHost {
 	context(conversationId: number): RunContext | undefined;
+	/** Writes an attachment of the domain into the scratch directory of the conversation; returns where it is. */
+	saveAttachment(context: RunContext, request: { artifactId: string; version?: number; name?: string }): Promise<{ path: string; bytes: number }>;
 	jobs(): JobManager;
 	resources(): ResourceRegistry;
 	sender(): MessageSender;
 }
 
-export const THREAD_TOOLS = { jobStatus: "job_status", jobStop: "job_stop", resources: "resources", send: "message_send" } as const;
+export const THREAD_TOOLS = { jobStatus: "job_status", jobStop: "job_stop", resources: "resources", send: "message_send", attachment: "attachment_get" } as const;
+
+/** The scratch directory of a conversation: its id, or the message when there is none, made safe for a path. */
+export const threadKey = (context: { conversationId?: string; messageId: string }): string => (context.conversationId ?? context.messageId).replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 60);
 
 const ago = (from: number | undefined, now: number): string => {
 	const seconds = Math.max(0, Math.round((now - (from ?? now)) / 1000));
@@ -165,6 +170,23 @@ export function createThreadTools(host: ThreadToolHost, jobTools: readonly JobTo
 		},
 	});
 
-	const all = [...starters, status, stop, resources, send];
+	const attachment = defineTool({
+		name: THREAD_TOOLS.attachment,
+		description: "Save an attachment of a message (it is named in the message, with its artifact id) into your scratch directory and say where it is, so you can read it with the other tools. Any attachment of this domain can be fetched.",
+		parameters: Type.Object({ artifactId: Type.String(), version: Type.Optional(Type.Integer({ minimum: 1 })), name: Type.Optional(Type.String({ maxLength: 100, description: "the file name to save it under" })) }),
+		replay: "safe",
+		execute: async (args: { artifactId: string; version?: number; name?: string }, api: any) => {
+			const context = contextOf(api);
+			if (!context) return failure("not saved: this call is not part of a conversation");
+			try {
+				const saved = await host.saveAttachment(context, args);
+				return text(`Saved ${saved.bytes} bytes to ${saved.path}.`);
+			} catch (error) {
+				return failure(`not saved: ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
+			}
+		},
+	});
+
+	const all = [...starters, status, stop, resources, send, attachment];
 	return { extension: defineExtension({ name: "threads", tools: all }), toolNames: all.map((tool) => tool.name) };
 }

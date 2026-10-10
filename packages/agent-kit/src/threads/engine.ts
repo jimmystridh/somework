@@ -9,7 +9,7 @@ import type { JobManager } from "./jobs.ts";
 import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, repliesTo, type HistoryLine, type InboundMessage, type MessageSender } from "./message.ts";
 import type { ThreadSettings } from "./settings.ts";
 import type { DurableInbox, InboxItem } from "./store.ts";
-import { describeJob, type RunContext } from "./tools.ts";
+import { describeJob, threadKey, type RunContext } from "./tools.ts";
 
 export interface ThreadEngineDeps {
 	client: Pick<SomeWorkClient, "get" | "post">;
@@ -255,7 +255,6 @@ export class ThreadEngine {
 		}
 		const [state, history] = await Promise.all([this.#deps.state().catch(() => "(the state summary could not be built)"), this.#history(message)]);
 		const context: RunContext = { ...(message.conversationId ? { conversationId: message.conversationId } : {}), messageId: id, sender: message.sender, audience: to };
-		const threadKey = (message.conversationId ?? id).replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 60);
 		const jobs = message.conversationId ? this.#deps.jobs.activeIn(message.conversationId).map((job) => describeJob(job, this.#now())) : [];
 		const instruction = frameThread({ self: this.#deps.agentId, state, history, message, text, boundary: (this.#deps.boundary ?? (() => randomBytes(8).toString("hex")))(), jobs, ...(describeAge(message.createdAt, this.#now()) ? { age: describeAge(message.createdAt, this.#now())! } : {}), now: new Date(this.#now()) });
 		const budget = { maxTokens: Math.min(settings.runBudget.maxTokens, settings.hardTokenCap, remaining), maxMinutes: settings.runBudget.maxMinutes };
@@ -264,7 +263,7 @@ export class ThreadEngine {
 		this.#deps.signal.addEventListener("abort", forward, { once: true });
 		try {
 			const outcome = await this.#deps.runtime.execute(
-				{ requestId: `thread:${id}`, agentKey: `thread:${id}`, instruction, workspace: await this.#deps.workspace(threadKey), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context },
+				{ requestId: `thread:${id}`, agentKey: `thread:${id}`, instruction, workspace: await this.#deps.workspace(threadKey(context)), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context },
 				{
 					signal: stop.signal,
 					onProgress: () => undefined,

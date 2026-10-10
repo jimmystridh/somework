@@ -14,6 +14,8 @@ export interface HttpResponse {
 	status: number;
 	headers: IncomingHttpHeaders;
 	body: string;
+	/** The body as received, for downloads of files. */
+	bytes: Buffer;
 }
 
 export interface HttpCall {
@@ -52,7 +54,10 @@ export function httpCall(options: HttpOptions, call: HttpCall): Promise<HttpResp
 				const chunks: Buffer[] = [];
 				res.on("data", (chunk: Buffer) => chunks.push(chunk));
 				res.on("error", (error) => reject(new TransportError(error.message)));
-				res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString("utf8") }));
+				res.on("end", () => {
+					const bytes = Buffer.concat(chunks);
+					resolve({ status: res.statusCode ?? 0, headers: res.headers, body: bytes.toString("utf8"), bytes });
+				});
 			},
 		);
 		req.setTimeout(call.timeoutMs ?? options.timeoutMs ?? 60_000, () => req.destroy(new Error("request timed out")));

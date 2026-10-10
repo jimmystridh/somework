@@ -182,6 +182,15 @@ export class SomeWorkClient {
 		return ref;
 	}
 
+	/** The bytes of an artifact (the domain issues a short-lived grant first). */
+	async downloadArtifact(ref: { artifactId: string; version?: number }, options: { maxBytes?: number } = {}): Promise<Buffer> {
+		const grant = await this.post(`/v1/artifacts/${segment(ref.artifactId)}/${ref.version ?? 1}/download-grants`, {});
+		const response = await httpCall(this.#http, { method: "GET", path: grant.url });
+		if (response.status < 200 || response.status >= 300) throw new SomeWorkError(response.status, "unavailable", `object download failed: ${response.status}`);
+		if (options.maxBytes !== undefined && response.bytes.length > options.maxBytes) throw new SomeWorkError(413, "validation_failed", `the artifact is larger than ${options.maxBytes} bytes`);
+		return response.bytes;
+	}
+
 	// ---- tasks (requester side) -------------------------------------------------------------------------------------
 	/** Answer a task that is waiting in `input_required`. */
 	provideInput(taskId: string, data: unknown): Promise<any> {

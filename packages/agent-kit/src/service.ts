@@ -21,7 +21,7 @@ import { createJobReporter, topicSlug } from "./threads/reporter.ts";
 import { ResourceRegistry } from "./threads/resources.ts";
 import { resolveThreadSettings } from "./threads/settings.ts";
 import { DurableInbox, DurableTable } from "./threads/store.ts";
-import { createThreadTools, describeJob, type RunContext } from "./threads/tools.ts";
+import { createThreadTools, describeJob, threadKey, type RunContext } from "./threads/tools.ts";
 import { GitHubAppCredentials } from "./github-app.ts";
 import { prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
@@ -172,7 +172,22 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			};
 			const statusTool = createStatusTool(threadState);
 			const threadTools = createThreadTools(
-				{ context: (id) => runtimeRef?.contextOf(id) as RunContext | undefined, jobs: () => jobsRef!, resources: () => resources, sender: () => sender },
+				{
+					context: (id) => runtimeRef?.contextOf(id) as RunContext | undefined,
+					saveAttachment: async (context, request) => {
+						const bytes = await client.downloadArtifact({ artifactId: request.artifactId, ...(request.version ? { version: request.version } : {}) }, { maxBytes: 50 * 1024 * 1024 });
+						const name = (request.name ?? request.artifactId).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^\.+/, "").slice(0, 100) || "attachment";
+						const directory = `${config.sandbox.workspaceRoot.replace(/\/$/, "")}/.threads/${threadKey(context)}`;
+						const target = envFor(config.sandbox.workspaceRoot);
+						await target.createDir(directory, { recursive: true }, BACKGROUND_CONTEXT);
+						const written = await target.writeFile(`${directory}/${name}`, bytes, BACKGROUND_CONTEXT);
+						if (!written.ok) throw new Error("it could not be written to the scratch directory");
+						return { path: `${directory}/${name}`, bytes: bytes.length };
+					},
+					jobs: () => jobsRef!,
+					resources: () => resources,
+					sender: () => sender,
+				},
 				hooks.chat?.jobTools ?? [],
 			);
 			const extensions = [
