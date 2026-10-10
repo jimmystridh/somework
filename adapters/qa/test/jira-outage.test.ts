@@ -58,6 +58,17 @@ describe("a ticket system that answers fast or not at all", () => {
 		client.close();
 	});
 
+	it("answers the readiness probe after one short try instead of retrying a ticket system that hangs", async () => {
+		const client = clientFor({ readAttempts: 4, readTimeoutMs: 10_000 });
+		jira.hang = 4;
+		const started = Date.now();
+		await assert.rejects(client.myself(), (error: unknown) => isUnreachable(error));
+		assert.equal(Date.now() - started < 6000, true, "one try of about four seconds, not four tries of ten");
+		jira.hang = 0;
+		assert.equal((await client.myself()).name, "qa-bot");
+		client.close();
+	});
+
 	it("sends a comment only once: a try that was lost may have been applied", async () => {
 		const client = clientFor();
 		jira.hang = 1;

@@ -67,6 +67,7 @@ export interface Transition {
 	to: { name: string; statusCategory?: { key?: string } };
 }
 
+const QUICK_TIMEOUT_MS = 4_000;
 const ISSUE_FIELDS = "summary,description,status,assignee,labels,components,issuetype,comment,attachment,issuelinks,reporter,priority,created,updated";
 
 /**
@@ -103,12 +104,12 @@ export class JiraClient {
 	 * answer in time or fails on its side; a comment, a transition or an upload is sent once, because a try that was lost after it was sent may
 	 * have been applied.
 	 */
-	async #call(method: string, path: string, options: { json?: unknown; body?: Buffer; headers?: Record<string, string> } = {}): Promise<{ status: number; body: string }> {
+	async #call(method: string, path: string, options: { json?: unknown; body?: Buffer; headers?: Record<string, string>; quick?: boolean } = {}): Promise<{ status: number; body: string }> {
 		const repeatable = method === "GET" || method === "PUT" || method === "DELETE";
-		const attempts = repeatable ? this.#readAttempts : 1;
+		const attempts = repeatable && !options.quick ? this.#readAttempts : 1;
 		for (let attempt = 1; ; attempt++) {
 			try {
-				const response = await this.#send(method, path, options, repeatable ? this.#readTimeout : this.#timeout);
+				const response = await this.#send(method, path, options, options.quick ? QUICK_TIMEOUT_MS : repeatable ? this.#readTimeout : this.#timeout);
 				if (response.status >= 500 && attempt < attempts) {
 					await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
 					continue;
@@ -208,9 +209,9 @@ export class JiraClient {
 		});
 	}
 
-	/** Who the token belongs to; the cheapest call that proves the certificate and the token work. */
+	/** Who the token belongs to; the cheapest call that proves the certificate and the token work. One short try: a readiness probe must answer, not wait for a ticket system that does not. */
 	myself(): Promise<{ name?: string; displayName?: string }> {
-		return this.#json("GET", "/rest/api/2/myself");
+		return this.#json("GET", "/rest/api/2/myself", { quick: true });
 	}
 
 	getIssue(key: string, expand?: "changelog"): Promise<Issue> {
