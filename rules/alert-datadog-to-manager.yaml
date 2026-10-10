@@ -1,5 +1,0 @@
-name: alert-datadog-to-manager
-description: A Datadog monitor alert wakes the manager, which decides whether and how to tell the owner.
-owner: agent/manager
-selector: datadog.monitor.alert
-wake: true

@@ -16,7 +16,7 @@ Datadog ──webhook──► receiver ─► hub ─► event datadog.monitor.
   service: shape + "every finding cites a tool call or is inference" ─► result ─► ONE notice to agent/manager (built by the service)
 ```
 
-The existing rule `alert-datadog-to-manager` (every `datadog.monitor.alert` wakes the manager) stays: the manager still hears about the alert itself, this agent adds the diagnosis.
+The manager no longer hears about raw Datadog events (the rule `alert-datadog-to-manager` is gone and `datadog.monitor.*` is not on its topic list): this agent is the one place that decides what a monitor event is worth, and the manager only relays what the agent chooses to say (the notice of a finished triage, or a `deliver` decision). To silence a monitor that only nags, set `DD_IGNORE_MONITORS` or `DD_IGNORE_NAMES`; `DD_REQUIRE_PRIORITY=1` makes `DD_MIN_PRIORITY` hold for monitors that have no priority too.
 
 ## The contract (`card.json`)
 
@@ -83,6 +83,9 @@ All `DD_*` unless noted; `deploy/.env.example` and `deploy/compose.yaml` list th
 | `DD_MONITOR_IDS` | empty | only these monitors |
 | `DD_TAG_FILTER` | empty | only monitors with one of these tags (`key:value`) |
 | `DD_IGNORE_WARN` | `0` | `1` triages the Alert transition only |
+| `DD_IGNORE_MONITORS` | empty | monitor ids that are never triaged: the way to silence a monitor that only nags |
+| `DD_IGNORE_NAMES` | empty | parts of monitor names (any case, separated by `;`) that are never triaged, for example `System load is high` |
+| `DD_REQUIRE_PRIORITY` | `0` | `1` also refuses monitors that have no priority, so `DD_MIN_PRIORITY` is a real minimum level (without it a monitor with no priority passes) |
 | `DD_COOLDOWN_MINUTES` | `60` | per monitor |
 | `DD_DAILY_CAP` | `20` | triages per UTC day |
 | `DD_WINDOW_MINUTES` | `60` | how far back an event-driven triage looks (5 to 360) |

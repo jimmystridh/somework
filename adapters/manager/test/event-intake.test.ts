@@ -23,12 +23,19 @@ test("an alert on the allow-list becomes one compact message; other topics and n
 
 test("an event is forwarded once even if the feed repeats it or the cursor is lost", async () => {
 	const b = build();
-	b.domain.feed = [publishedEvent(1, "datadog.monitor.alert", { title: "p95 high" })];
+	b.domain.feed = [publishedEvent(1, "grafana.alert.firing", { title: "p95 high" })];
 	await b.intake.poll();
 	await b.intake.poll();
 	b.state.eventCursor = undefined;
 	await b.intake.poll();
 	assert.equal(texts(b).length, 1);
+});
+
+test("Datadog monitor events are left to the Datadog agent: the manager only hears what that agent decides to say", async () => {
+	const b = build();
+	b.domain.feed = [publishedEvent(1, "datadog.monitor.alert", { title: "System load is high" }), publishedEvent(2, "datadog.monitor.no_data", { title: "No data" }), publishedEvent(3, "datadog.monitor.recovered", { title: "ok" })];
+	await b.intake.poll();
+	assert.equal(texts(b).length, 0);
 });
 
 test("text in an event is data: slash commands are defanged, secrets hidden, nothing is executed or sent to the model", async () => {
@@ -52,7 +59,7 @@ test("text in an event is data: slash commands are defanged, secrets hidden, not
 
 test("unverified events are marked", async () => {
 	const b = build();
-	b.domain.feed = [publishedEvent(1, "datadog.monitor.alert", { title: "x" }, { verified: false })];
+	b.domain.feed = [publishedEvent(1, "grafana.alert.firing", { title: "x" }, { verified: false })];
 	await b.intake.poll();
 	assert.ok(texts(b)[0]!.includes("(unverified)"));
 });
@@ -73,7 +80,7 @@ test("per-topic rate limit: the excess is counted and summarised once the window
 test("another topic is not affected by a noisy one", async () => {
 	const b = build({ events: { perTopicPerHour: 1 } });
 	b.domain.feed = [1, 2, 3].map((n) => publishedEvent(n, "grafana.alert.firing", { title: `a${n}` }));
-	b.domain.feed.push(publishedEvent(4, "datadog.monitor.alert", { title: "dd" }));
+	b.domain.feed.push(publishedEvent(4, "grafana.alert.resolved", { title: "dd" }));
 	await b.intake.poll();
 	assert.equal(texts(b).length, 2);
 });

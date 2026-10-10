@@ -117,7 +117,7 @@ docker compose down                                   # stops the agent; the dom
 ops admin --config /etc/somework/somework.toml set-agent-status --id agent/datadog-triage --status disabled   # the kill switch for the identity
 # a disabled agent stays in the catalog: also re-register its card with "capabilities": [] so nothing is routed to it
 ```
-Remove the rule (delete `rules/datadog-triage.yaml`; the pipeline's `apply` deletes it) so no more events wake it; `alert-datadog-to-manager` is untouched. To remove it for good: delete the `state` and `workspace` volumes and the `keys` directory, delete the application key and the API key in Datadog.
+Remove the rule (delete `rules/datadog-triage.yaml`; the pipeline's `apply` deletes it) so no more events wake it. To remove it for good: delete the `state` and `workspace` volumes and the `keys` directory, delete the application key and the API key in Datadog.
 
 ## Limits
 * The harness holds the credentials, so only audited code runs in the harness; the model's commands run only in the sandbox, which has nothing to steal and no network.

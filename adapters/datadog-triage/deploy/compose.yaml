@@ -58,6 +58,9 @@ services:
       DD_MONITOR_IDS: ${DD_MONITOR_IDS:-}                    # comma separated monitor ids; empty = every monitor
       DD_TAG_FILTER: ${DD_TAG_FILTER:-}                      # comma separated tags (key:value); empty = no filter, else a monitor needs one of them
       DD_IGNORE_WARN: ${DD_IGNORE_WARN:-0}                   # 1 = triage the Alert transition only, not Warn
+      DD_IGNORE_MONITORS: ${DD_IGNORE_MONITORS:-}            # comma separated monitor ids that are never triaged (a monitor that only nags)
+      DD_IGNORE_NAMES: ${DD_IGNORE_NAMES:-}                  # names (parts, any case) separated by ; whose monitors are never triaged
+      DD_REQUIRE_PRIORITY: ${DD_REQUIRE_PRIORITY:-0}         # 1 = a monitor with no priority is not triaged either, so DD_MIN_PRIORITY holds for every monitor
       DD_COOLDOWN_MINUTES: ${DD_COOLDOWN_MINUTES:-60}        # one triage per monitor per this many minutes
       DD_DAILY_CAP: ${DD_DAILY_CAP:-20}                      # triages per day, all monitors
       DD_WINDOW_MINUTES: ${DD_WINDOW_MINUTES:-60}            # how far back from the alert a triage looks (5 to 360)

@@ -14,6 +14,12 @@ export interface TriageSettings {
 	minPriority: Priority;
 	/** When set, only these monitors are triaged. */
 	monitorIds: string[];
+	/** Monitors that are never triaged, by id: the way to silence one that only nags. */
+	ignoreMonitorIds: string[];
+	/** Monitors whose name holds one of these (lower case) are never triaged. */
+	ignoreNames: string[];
+	/** An alert from a monitor that has no priority set is not triaged: the minimum level then applies to every monitor, not only to the ones that have a priority. */
+	requirePriority: boolean;
 	/** When set, only monitors with one of these tags (`key:value`, lower case) are triaged. */
 	tagFilter: string[];
 	/** Warn transitions are alerts too unless this is set. */
@@ -30,6 +36,9 @@ export interface TriageSettings {
 	notifyTo: string;
 	apiBase?: string;
 }
+
+/** Names hold spaces, so they are separated by `;` or a new line. */
+const names = (text: string | undefined): string[] => (text ?? "").split(/[;\n]/).map((name) => name.trim().toLowerCase()).filter(Boolean);
 
 const list = (text: string | undefined): string[] => (text === undefined || text.trim() === "" ? [] : text.split(/[\s,]+/).filter(Boolean));
 
@@ -58,12 +67,17 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): TriageSettin
 	if (!minPriority) throw new Error(`DD_MIN_PRIORITY must be one of ${PRIORITIES.join(", ")}`);
 	const monitorIds = list(env.DD_MONITOR_IDS);
 	for (const id of monitorIds) if (!/^[0-9]{1,15}$/.test(id)) throw new Error(`DD_MONITOR_IDS holds a value that is not a monitor id: ${id.slice(0, 30)}`);
+	const ignoreMonitorIds = list(env.DD_IGNORE_MONITORS);
+	for (const id of ignoreMonitorIds) if (!/^[0-9]{1,15}$/.test(id)) throw new Error(`DD_IGNORE_MONITORS holds a value that is not a monitor id: ${id.slice(0, 30)}`);
 	const override = env.DD_ALLOW_BASE_OVERRIDE === "1";
 	return {
 		site,
 		credentialsFile: env.DD_CREDENTIALS_FILE ?? "/run/secrets/datadog-keys.json",
 		minPriority,
 		monitorIds,
+		ignoreMonitorIds,
+		ignoreNames: names(env.DD_IGNORE_NAMES),
+		requirePriority: env.DD_REQUIRE_PRIORITY === "1",
 		tagFilter: list(env.DD_TAG_FILTER).map((tag) => tag.toLowerCase()),
 		ignoreWarn: env.DD_IGNORE_WARN === "1",
 		cooldownMinutes: integer(env, "DD_COOLDOWN_MINUTES", 60),

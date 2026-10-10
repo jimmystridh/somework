@@ -16,11 +16,11 @@ export interface EventIntakeConfig {
 }
 
 export const defaultEventIntake: EventIntakeConfig = {
-	topics: ["grafana.alert.*", "datadog.monitor.*", "clock.nightly_digest.tick"],
+	topics: ["grafana.alert.*", "clock.nightly_digest.tick"],
 	digestTopics: ["clock.nightly_digest.tick"],
 	perTopicPerHour: 6,
 	timeZone: "Europe/Stockholm",
-	urgentTopics: ["grafana.alert.firing", "datadog.monitor.alert"],
+	urgentTopics: ["grafana.alert.firing"],
 };
 
 /** Agents publish `agent.<slug>.job.finished` when a background job ends; the owner hears about each one. */

@@ -9,6 +9,9 @@ const TEMPLATE = new URL("../handlers/datadog.mjs", import.meta.url);
 export const handlerConfig = (settings: TriageSettings) => ({
 	minPriority: settings.minPriority,
 	monitorIds: settings.monitorIds,
+	ignoreMonitorIds: settings.ignoreMonitorIds,
+	ignoreNames: settings.ignoreNames,
+	requirePriority: settings.requirePriority,
 	tagFilter: settings.tagFilter,
 	ignoreWarn: settings.ignoreWarn,
 	cooldownMinutes: settings.cooldownMinutes,

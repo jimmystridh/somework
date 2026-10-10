@@ -72,6 +72,26 @@ describe("the shipped handler", () => {
 		assert.equal(decision.task.input.monitor.id, 98765);
 	});
 
+	it("never triages a monitor on the ignore list or with an ignored name, and says why", async () => {
+		const { decide } = await agent({ DD_IGNORE_MONITORS: "555", DD_IGNORE_NAMES: "System load is high; kubernetes pods restarting" });
+		const byId = await decide(alert({ monitorId: 555 }));
+		assert.deepEqual([byId.action, /on the list of monitors this agent ignores/.test(byId.reason)], ["drop", true]);
+		const byName = await decide(alert({ monitorId: 556, monitor: "System load is high for host aks-nplinux-1" }));
+		assert.deepEqual([byName.action, /which this agent ignores/.test(byName.reason)], ["drop", true]);
+		assert.equal((await decide(alert({ monitorId: 557, monitor: "[Kubernetes] Monitor Kubernetes Pods Restarting" }))).action, "drop");
+		assert.equal((await decide(alert({ monitorId: 558, monitor: "Checkout error rate" }))).action, "submit");
+	});
+
+	it("can require a priority: an unprioritised monitor is then dropped and a prioritised one still passes", async () => {
+		const { decide } = await agent({ DD_REQUIRE_PRIORITY: "1", DD_MIN_PRIORITY: "P2" });
+		for (const [index, priority] of [undefined, null, "", "urgent"].entries()) {
+			const decision = await decide(alert({ monitorId: 300 + index, priority }));
+			assert.deepEqual([decision.action, /has no priority/.test(decision.reason)], ["drop", true], String(priority));
+		}
+		assert.equal((await decide(alert({ monitorId: 310, priority: "P1" }))).action, "submit");
+		assert.equal((await decide(alert({ monitorId: 311, priority: "P3" }))).action, "drop");
+	});
+
 	it("filters by priority: P1 to P3 pass by default, P4 and P5 are dropped, an unknown priority passes", async () => {
 		const { decide } = await agent();
 		for (const [index, priority] of ["P1", "P2", "P3", "p3", "3", undefined, "", "urgent", null].entries()) assert.equal((await decide(alert({ monitorId: 100 + index, priority }))).action, "submit", String(priority));

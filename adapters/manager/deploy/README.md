@@ -39,7 +39,7 @@ PATCH /v1/admin/principals/agent/agent%2Fmanager
 Check with `GET /v1/admin/whoami` as the Manager. Without `rules.control` (the domain must be a build that knows it) `/rules`, `/pause` and
 the digest report a permission error in Telegram instead of data; without `message.read` for topics the job-finished subscription fails
 (logged as `job_subscription_failed`, tried again at the next start) and the owner only hears about jobs in the conversations they started.
-The Manager also receives the events of the rules that wake it (`alert-grafana-to-manager`, `alert-datadog-to-manager`, `nightly-digest`: their
+The Manager also receives the events of the rules that wake it (`alert-grafana-to-manager`, `nightly-digest`: their
 `owner` is `agent/manager`).
 
 Optional hub and handler controls, in `manager.env`: `MANAGER_HUB_URL` (the hub's listener, for `/sources` and `/pausesource`),

@@ -25,6 +25,14 @@ describe("settings", () => {
 		assert.throws(() => loadSettings({ DD_DAILY_CAP: "0" }), /positive integer/);
 	});
 
+	it("reads what to ignore: monitor ids, names (separated by semicolons, lower case) and whether a priority is required", () => {
+		const settings = loadSettings({ DD_IGNORE_MONITORS: "89853058, 89667590", DD_IGNORE_NAMES: "System load is high;\n Pods Restarting ;", DD_REQUIRE_PRIORITY: "1" });
+		assert.deepEqual([settings.ignoreMonitorIds, settings.ignoreNames, settings.requirePriority], [["89853058", "89667590"], ["system load is high", "pods restarting"], true]);
+		const defaults = loadSettings({});
+		assert.deepEqual([defaults.ignoreMonitorIds, defaults.ignoreNames, defaults.requirePriority], [[], [], false]);
+		assert.throws(() => loadSettings({ DD_IGNORE_MONITORS: "12,abc" }), /DD_IGNORE_MONITORS holds a value that is not a monitor id/);
+	});
+
 	it("keeps the budget, the window and the saved bytes under their hard caps", () => {
 		assert.throws(() => loadSettings({ DD_TRIAGE_BUDGET_TOKENS: "300001" }), /at most 300000/);
 		assert.throws(() => loadSettings({ DD_TRIAGE_BUDGET_MINUTES: "21" }), /at most 20/);
@@ -61,6 +69,16 @@ describe("eligibility", () => {
 			const verdict = eligibility(monitor({ priority }), settings);
 			assert.deepEqual([verdict.eligible, !verdict.eligible && verdict.code], [false, "priority"]);
 		}
+	});
+
+	it("refuses an ignored monitor by id or by name, and an unprioritised one when a priority is required", () => {
+		const named = (name: string, extra: Record<string, unknown> = {}) => monitor({ name, ...extra }) as never;
+		assert.deepEqual([eligibility(monitor(), { ...settings, ignoreMonitorIds: ["7"] })].map((verdict) => !verdict.eligible && verdict.code), ["ignored"]);
+		assert.match(JSON.stringify(eligibility(named("System load is high for host x"), { ...settings, ignoreNames: ["system load"] })), /holds \\"system load\\"/);
+		assert.equal(eligibility(named("Checkout"), { ...settings, ignoreNames: ["system load"] }).eligible, true);
+		const strict = { ...settings, requirePriority: true };
+		assert.deepEqual([eligibility(monitor(), strict)].map((verdict) => !verdict.eligible && verdict.code), ["priority"]);
+		assert.equal(eligibility(monitor({ priority: "P2" }), strict).eligible, true);
 	});
 
 	it("applies the monitor list and the tag filter", () => {

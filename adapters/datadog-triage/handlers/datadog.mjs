@@ -53,7 +53,12 @@ export default async function handle({ event, now }) {
 	if (!/^[0-9]{1,15}$/.test(id)) return deliver("the event carries no numeric Datadog monitor id, so no triage was started");
 
 	if (CONFIG.monitorIds.length > 0 && !CONFIG.monitorIds.includes(id)) return drop(`monitor ${id} is not on the list of monitors this agent triages`);
+	if ((CONFIG.ignoreMonitorIds ?? []).includes(id)) return drop(`monitor ${id} is on the list of monitors this agent ignores`);
+	const monitorName = typeof data.monitor === "string" ? data.monitor.toLowerCase() : "";
+	const ignoredName = (CONFIG.ignoreNames ?? []).find((part) => monitorName.includes(part));
+	if (ignoredName) return drop(`the monitor name holds "${ignoredName}", which this agent ignores`);
 	const priority = priorityNumber(data.priority);
+	if (priority === undefined && CONFIG.requirePriority) return drop(`the monitor has no priority and only ${CONFIG.minPriority} or higher is triaged`);
 	if (priority !== undefined && priority > priorityNumber(CONFIG.minPriority)) return drop(`priority P${priority} is below ${CONFIG.minPriority}`);
 	if (CONFIG.tagFilter.length > 0) {
 		const tags = Array.isArray(data.tags) ? data.tags.filter((tag) => typeof tag === "string").map((tag) => tag.toLowerCase()) : [];
