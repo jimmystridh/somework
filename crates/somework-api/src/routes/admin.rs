@@ -8,7 +8,6 @@ use serde_json::json;
 use somework_domain::{
     auth::CreatePrincipal,
     policy::{Permissions, PolicyDocument},
-    tasks::TaskFilter,
 };
 
 use crate::{http::*, state::AppState};
@@ -22,7 +21,6 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/admin/audit/verify", get(verify_audit))
         .route("/v1/admin/events", get(all_events))
         .route("/v1/admin/messages", get(audit_messages))
-        .route("/v1/admin/tasks", get(all_tasks))
         .route("/v1/admin/outbox", get(outbox))
         .route("/v1/admin/outbox/requeue", post(requeue))
         .route("/v1/admin/maintenance", post(maintenance))
@@ -64,14 +62,12 @@ async fn put_policy(State(s): State<AppState>, Auth(ctx): Auth, Body(doc): Body<
 
 #[derive(Deserialize)]
 struct AuditQuery {
-    #[serde(rename = "taskId")]
-    task_id: Option<String>,
     after: Option<i64>,
     limit: Option<i64>,
 }
 
 async fn audit(State(s): State<AppState>, Auth(ctx): Auth, Query(q): Query<AuditQuery>) -> ApiResult {
-    ok(json!({"events": s.domain.list_audit(&ctx, q.task_id.as_deref(), q.after.unwrap_or(0), q.limit.unwrap_or(200)).await?}))
+    ok(json!({"events": s.domain.list_audit(&ctx, q.after.unwrap_or(0), q.limit.unwrap_or(200)).await?}))
 }
 
 async fn verify_audit(State(s): State<AppState>, Auth(ctx): Auth) -> ApiResult {
@@ -82,32 +78,23 @@ async fn verify_audit(State(s): State<AppState>, Auth(ctx): Auth) -> ApiResult {
 
 #[derive(Deserialize)]
 struct AllEventsQuery {
-    #[serde(rename = "taskId")]
-    task_id: Option<String>,
     after: Option<i64>,
     limit: Option<i64>,
 }
 
 async fn all_events(State(s): State<AppState>, Auth(ctx): Auth, Query(q): Query<AllEventsQuery>) -> ApiResult {
-    ok(json!({"events": s.domain.list_all_events(&ctx, q.task_id.as_deref(), q.after.unwrap_or(0), q.limit.unwrap_or(200)).await?}))
+    ok(json!({"events": s.domain.list_all_events(&ctx, q.after.unwrap_or(0), q.limit.unwrap_or(200)).await?}))
 }
 
 #[derive(Deserialize)]
 struct MessagesQuery {
     #[serde(rename = "conversationId")]
     conversation_id: Option<String>,
-    #[serde(rename = "taskId")]
-    task_id: Option<String>,
     limit: Option<i64>,
 }
 
 async fn audit_messages(State(s): State<AppState>, Auth(ctx): Auth, Query(q): Query<MessagesQuery>) -> ApiResult {
-    ok(json!({"messages": s.domain.audit_messages(&ctx, q.conversation_id.as_deref(), q.task_id.as_deref(), q.limit.unwrap_or(200)).await?}))
-}
-
-async fn all_tasks(State(s): State<AppState>, Auth(ctx): Auth, Query(mut f): Query<TaskFilter>) -> ApiResult {
-    f.all = Some(true);
-    ok(s.domain.list_tasks(&ctx, f).await?)
+    ok(json!({"messages": s.domain.audit_messages(&ctx, q.conversation_id.as_deref(), q.limit.unwrap_or(200)).await?}))
 }
 
 async fn outbox(State(s): State<AppState>, Auth(ctx): Auth) -> ApiResult {

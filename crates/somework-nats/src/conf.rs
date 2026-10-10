@@ -37,7 +37,6 @@ pub fn account_name(domain_id: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct AgentGrant {
     pub agent_id: String,
-    pub pools: Vec<String>,
 }
 
 fn pull_subjects(stream: &str, consumer: &str) -> Vec<String> {
@@ -48,20 +47,15 @@ fn pull_subjects(stream: &str, consumer: &str) -> Vec<String> {
     ]
 }
 
-/// Subjects an agent may publish to: pull/ack on its own consumers, ephemeral streaming and its own presence.
+/// Subjects an agent may publish to: pull/ack on its own consumers and its own presence.
 pub fn agent_publish_allow(grant: &AgentGrant) -> Vec<String> {
     let mut out = vec![
         format!("$JS.API.STREAM.INFO.{}", subjects::STREAM_INBOX),
-        format!("$JS.API.STREAM.INFO.{}", subjects::STREAM_WORK),
         format!("$JS.API.STREAM.INFO.{}", subjects::STREAM_SUBSCRIPTIONS),
-        "somework.stream.task.*.*".to_string(),
         subjects::presence(&grant.agent_id),
     ];
     out.extend(pull_subjects(subjects::STREAM_INBOX, &subjects::inbox_consumer(&grant.agent_id)));
     out.extend(pull_subjects(subjects::STREAM_SUBSCRIPTIONS, &subscription_consumer(&grant.agent_id)));
-    for pool in &grant.pools {
-        out.extend(pull_subjects(subjects::STREAM_WORK, &subjects::pool_consumer(pool)));
-    }
     out
 }
 
@@ -180,9 +174,9 @@ mod tests {
     }
 
     #[test]
-    fn agent_cannot_publish_to_work_inbox_or_events() {
-        let allow = agent_publish_allow(&AgentGrant { agent_id: "agent/a".into(), pools: vec!["agent/a".into()] });
-        assert!(allow.iter().all(|s| !s.starts_with("somework.work") && !s.starts_with("somework.inbox") && !s.starts_with("somework.event")));
+    fn agent_cannot_publish_to_inbox_or_events() {
+        let allow = agent_publish_allow(&AgentGrant { agent_id: "agent/a".into() });
+        assert!(allow.iter().all(|s| !s.starts_with("somework.inbox") && !s.starts_with("somework.event")));
         assert!(allow.iter().any(|s| s.contains("CONSUMER.MSG.NEXT.SOMEWORK_INBOX.inbox_agent")));
     }
 }

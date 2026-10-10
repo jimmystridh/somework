@@ -23,7 +23,6 @@ somework-api = { version = "0.1.0", path = "../somework-api" }
 somework-client = { version = "0.1.0", path = "../somework-client" }
 somework-core = { version = "0.1.0", path = "../somework-core" }
 somework-domain = { version = "0.1.0", path = "../somework-domain" }
-somework-gateway = { version = "0.1.0", path = "../somework-gateway" }
 somework-matrix = { version = "0.1.0", path = "../somework-matrix" }
 somework-nats = { version = "0.1.0", path = "../somework-nats" }
 sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio"] }

@@ -32,7 +32,7 @@ impl Ca {
         params.distinguished_name.push(DnType::CommonName, dns);
         let cert = params.signed_by(&key, &self.issuer).expect("leaf cert");
         let cert_pem = cert.pem();
-        let thumbprint = somework_gateway::tls::thumbprint_of_pem(&cert_pem).expect("thumbprint");
+        let thumbprint = thumbprint_of(cert.der());
         Identity { cert_pem, key_pem: key.serialize_pem(), thumbprint }
     }
 
@@ -44,7 +44,13 @@ impl Ca {
         params.distinguished_name.push(DnType::CommonName, name);
         let cert = params.signed_by(&key, &self.issuer).expect("leaf cert");
         let cert_pem = cert.pem();
-        let thumbprint = somework_gateway::tls::thumbprint_of_pem(&cert_pem).expect("thumbprint");
+        let thumbprint = thumbprint_of(cert.der());
         Identity { cert_pem, key_pem: key.serialize_pem(), thumbprint }
     }
+}
+
+/// SHA-256 of the DER certificate, lower-case hex.
+pub fn thumbprint_of(der: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(der).iter().map(|byte| format!("{byte:02x}")).collect()
 }

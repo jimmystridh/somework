@@ -4,16 +4,9 @@ use std::time::Duration;
 
 use async_nats::jetstream::{self, consumer::pull};
 use futures::StreamExt;
-use serde_json::{Value, json};
-use somework_core::{contracts::SideEffects, subjects};
+use serde_json::Value;
 use somework_domain::policy::Permissions;
 use somework_testkit::{Agent, Stack, StackBuilder, capability, nats::NatsServer, process::eventually};
-
-pub fn worker_perms(se: SideEffects) -> Permissions {
-    let mut p = Permissions::default_agent();
-    p.side_effects_at_most = Some(se);
-    p
-}
 
 pub struct Env {
     pub nats: NatsServer,
@@ -37,11 +30,12 @@ pub fn review_cap() -> Value {
 }
 
 pub async fn reviewer(stack: &Stack, id: &str) -> Agent {
-    stack.worker(id, vec![review_cap()], worker_perms(SideEffects::Read)).await
+    stack.worker(id, vec![review_cap()], Permissions::default_agent()).await
 }
 
-pub fn submit_body() -> Value {
-    json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": "billing/import-service", "commit": "61a8d52"}})
+/// A directed message to `to`.
+pub fn hello(to: &str, text: &str) -> Value {
+    serde_json::json!({"type": "chat.message", "recipients": [{"kind": "agent", "id": to}], "content": {"mediaType": "text/plain", "data": text}})
 }
 
 /// An agent's own, scoped NATS connection obtained exactly like a sidecar would: `GET /v1/connection`.
@@ -84,11 +78,6 @@ impl AgentNats {
                 None => panic!("stream {stream} / consumer {name} were never provisioned"),
             }
         }
-    }
-
-    pub async fn pool_consumer(&self) -> jetstream::consumer::Consumer<pull::Config> {
-        let pool = &self.info["nats"]["poolConsumers"][0];
-        self.consumer(pool["stream"].as_str().unwrap(), pool["consumer"].as_str().unwrap()).await
     }
 
     pub async fn inbox_consumer(&self) -> jetstream::consumer::Consumer<pull::Config> {
@@ -138,12 +127,4 @@ pub async fn outbox_pending(stack: &Stack, sink: &str) -> i64 {
 
 pub async fn wait_outbox_empty(stack: &Stack, sink: &str) {
     eventually("outbox drained", Duration::from_secs(15), || async { (outbox_pending(stack, sink).await == 0).then_some(()) }).await;
-}
-
-pub fn pool_filter(info: &Value) -> String {
-    info["nats"]["poolConsumers"][0]["filter"].as_str().unwrap().to_string()
-}
-
-pub fn expected_pool_subject(agent_id: &str) -> String {
-    subjects::work_pool(agent_id)
 }

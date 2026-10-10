@@ -1,6 +1,6 @@
 use reqwest::{Client as Http, StatusCode};
 use serde_json::{Value, json};
-use somework_core::{contracts::SideEffects, jws};
+use somework_core::{contracts::ActorKind, jws};
 use somework_testkit::{Stack, StackBuilder, capability};
 
 async fn dev_stack() -> Stack {
@@ -77,21 +77,17 @@ async fn operator_read_models_are_closed_to_ordinary_principals() {
     let worker = stack
         .worker("agent/reviewer", vec![capability("code.review", "2.1", "read", "Review pull requests")], somework_domain::policy::Permissions::default_agent())
         .await;
-    let author = stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
-    author.client.submit_task(&json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": "r"}}), None).await.unwrap();
+    let author = stack.requester("agent/author").await;
+    let message = json!({"recipients": [{"kind": "agent", "id": "agent/reviewer"}], "content": {"mediaType": "text/plain", "data": "please review"}});
+    author.client.send_message(&message).await.unwrap();
     // an attempt that policy refuses leaves a denial for the decisions view
-    let denied = worker.client.submit_task(&json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": "r"}}), None).await;
-    assert!(denied.is_err());
+    let mut limited = somework_domain::policy::Permissions::default_agent();
+    limited.actions = vec!["catalog.read".into()];
+    let key = stack.create_principal(ActorKind::Agent, "agent/limited", limited).await;
+    let limited_client = somework_client::Client::assertion(&stack.url, (*key).clone(), "agent", "agent/limited", &stack.domain_id);
+    assert!(limited_client.send_message(&message).await.is_err());
 
-    for path in [
-        "/v1/admin/policy-decisions",
-        "/v1/admin/conversations",
-        "/v1/admin/catalog",
-        "/v1/admin/context-packs",
-        "/v1/admin/artifacts",
-        "/v1/admin/overview",
-        "/v1/admin/audit",
-    ] {
+    for path in ["/v1/admin/policy-decisions", "/v1/admin/conversations", "/v1/admin/catalog", "/v1/admin/artifacts", "/v1/admin/overview", "/v1/admin/audit"] {
         for (who, client) in [("worker", &worker.client), ("requester", &author.client)] {
             let err = client.get(path).await.expect_err(&format!("{who} must not read {path}"));
             assert_eq!(err.status, 403, "{who} {path}");
@@ -99,7 +95,7 @@ async fn operator_read_models_are_closed_to_ordinary_principals() {
     }
 
     let decisions = stack.admin.get("/v1/admin/policy-decisions?decision=deny").await.unwrap();
-    assert!(decisions["decisions"].as_array().unwrap().iter().any(|d| d["actor"] == "agent:agent/reviewer"));
+    assert!(decisions["decisions"].as_array().unwrap().iter().any(|d| d["actor"] == "agent:agent/limited"));
     let conversations = stack.admin.get("/v1/admin/conversations").await.unwrap();
     assert_eq!(conversations["conversations"].as_array().unwrap().len(), 1);
     let catalog = stack.admin.get("/v1/admin/catalog").await.unwrap();

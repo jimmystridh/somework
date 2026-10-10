@@ -6,8 +6,8 @@ How to run, back up, restore and reason about a SomeWork trust domain. The spec'
 ## 1. Database operating model (SQLite)
 
 * One domain = one SQLite file (`domain.db`) in WAL mode plus its `-wal`/`-shm` side files. Writers use
-  `BEGIN IMMEDIATE`, so concurrent `claim`s, ownership transfers and outbox claims serialize on SQLite's write lock
-  with a 15 s busy timeout. This is what gives "two workers racing for one task produce exactly one lease owner".
+  `BEGIN IMMEDIATE`, so concurrent message sends and outbox claims serialize on SQLite's write lock
+  with a 15 s busy timeout.
 * "Stateless Domain Service replicas" means **several processes on the same host sharing one volume** (rolling
   restarts, a separate outbox/maintenance process). It does **not** mean replicas on different hosts: SQLite needs
   working POSIX locking and shared memory for the WAL index.
@@ -17,7 +17,7 @@ How to run, back up, restore and reason about a SomeWork trust domain. The spec'
 * `synchronous = FULL` (default) fsyncs every commit: an acknowledged write survives a process or OS crash.
   `domain.synchronous_full = false` (WAL + NORMAL) survives process crashes but may lose the last commits on power
   loss; use it for development only.
-* Throughput budget from the spec (<= 100 messages/s, <= 20 task submissions/s) is well inside what one writer
+* Throughput budget from the spec (<= 100 messages/s) is well inside what one writer
   sustains; the load tests exercise it.
 
 ## 2. Backups (BAK-01)
@@ -39,15 +39,15 @@ A backup is a directory:
 | `somework.db` | `VACUUM INTO` snapshot: transactionally consistent while writers keep running, defragmented, `integrity_check`ed |
 | `objects/**` | filesystem artifact store (hard-linked: objects are immutable; copied across filesystems) |
 | `somework.masterkey` | only with `include_master_key`; **key material must be stored separately from the data in production** |
-| `manifest.json` | domain id, schema version, audit chain head, outstanding task counts, SHA-256 + size of every file |
+| `manifest.json` | domain id, schema version, audit chain head, message and artifact counts, SHA-256 + size of every file |
 
 The DB snapshot is taken first and objects after it, so every artifact referenced by the snapshot exists in the
 backup (extra objects are harmless). Scheduled backups are written to `.backup-*.partial` and renamed, so the backup
 directory only ever contains complete backups; the oldest beyond `backup_keep` are removed.
 
 JetStream and Matrix are deliberately **not** backed up (BAK-02): accepted work, the outbox and the event history are
-in the database. After a restore, run `somework admin republish-queued` (or let the NATS plane do it on start) and
-every queued task is announced again; duplicate notifications are harmless because claims are idempotent.
+in the database. Nothing is republished after a restore: agents find unread messages through their inbox
+(`GET /v1/inbox?unread=true`) and the outbox re-publishes undelivered rows.
 
 ### Meeting RPO <= 5 minutes
 
@@ -71,19 +71,17 @@ under a second, observed data-loss window about one backup interval (1.0 s measu
    * refuses to restore into a directory that already holds a database,
    * opens the restored database (this fails with *"the restored database could not be opened"* if the key is wrong,
      and with *"does not contain the master key"* if none was supplied; a new key is never invented),
-   * verifies the audit hash chain, compares the queued-task count with the manifest and re-hashes a sample of
+   * verifies the audit hash chain, compares the message count with the manifest and re-hashes a sample of
      artifact objects,
    * writes `somework.toml` next to the data.
 4. For an S3 artifact store, point `[objects.s3]` at the bucket (bytes are not part of the backup, see section 4).
 5. `somework serve --config /var/lib/somework/somework.toml`.
-6. Re-announce queued work: `somework admin republish-queued` if the broker was lost. Tasks whose lease expired
-   while the domain was down are re-queued automatically by the maintenance loop (irreversible actions go to
-   reconciliation, never to a blind retry).
-7. Smoke test: `GET /readyz`, `GET /v1/admin/audit/verify`, claim a queued task, fetch a ContextPack and an artifact.
+6. Agents reconnect on their own: unread messages are still unread (read receipts are in the database) and the outbox
+   re-publishes undelivered wake-ups.
+7. Smoke test: `GET /readyz`, `GET /v1/admin/audit/verify`, read an unread message from an inbox and fetch an artifact.
 
-A DR test only counts when an outstanding task submitted before the backup becomes claimable and its ContextPack and
-artifacts stay authorized and verifiable. `dr_restore.rs` proves exactly that, plus idempotency keys, fencing tokens
-that keep increasing, pending approvals that remain decidable and outbox rows that re-publish.
+A DR test only counts when a message acknowledged before the backup is still there and unread, and its artifacts stay
+authorized and verifiable. `dr_restore.rs` proves exactly that, plus idempotency keys and outbox rows that re-publish.
 
 ## 4. Artifact storage
 
@@ -100,9 +98,8 @@ Two `ObjectStore` implementations behind one trait:
 * Integrity is verified **by the domain**, not trusted from storage: `complete` streams the stored object, compares
   size and SHA-256 with what the uploader declared, and only then commits the artifact metadata. A mismatch marks the
   version `failed` (never usable), deletes the object and increments `somework_artifact_integrity_failures_total`.
-  Results can only reference verified artifacts (`artifact_not_ready` / `integrity_failure` otherwise).
-* If the store is unreachable, artifact-dependent completions return `unavailable` (retryable) and the task stays
-  `running`; they succeed once the store returns. Stale pending uploads are swept (`expire_stale_uploads`).
+  Messages can only attach verified artifacts (`artifact_not_ready` / `integrity_failure` otherwise).
+* If the store is unreachable, completing an upload returns `unavailable` (retryable); it succeeds once the store returns. Stale pending uploads are swept (`expire_stale_uploads`).
 
 Bucket guidance (the service cannot enforce these, the bucket policy must):
 
@@ -120,7 +117,7 @@ Bucket guidance (the service cannot enforce these, the bucket policy must):
 * The **master key** (AES-256-GCM) encrypts the domain signing keys at rest. It lives in `SOMEWORK_MASTER_KEY`,
   `domain.master_key`, or `<db>.masterkey` (mode 0600, created on first start of a *new* database only). Starting
   an existing database without its key fails loudly instead of minting a new key.
-* **Domain signing keys** (Ed25519) sign task grants and federation grants. `POST /v1/admin/signing-keys/rotate`
+* **Domain signing keys** (Ed25519) sign domain-issued tokens. `POST /v1/admin/signing-keys/rotate`
   retires the active key and creates a new one; retired public keys stay in `signing_keys` so old signatures remain
   verifiable for the audit retention period. In production the master key should be wrapped by a KMS/HSM (the
   `seal`/`open` interface in `secrets.rs` is the seam).

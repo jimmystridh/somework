@@ -1,5 +1,5 @@
-//! Load profile from the spec: provisional workload (<= 20 task submissions/s, <= 100 persistent messages/s) and a 10x
-//! stress profile. Acceptance: control-plane write p95 <= 250 ms excluding model/tool work. The strict assertions run
+//! Load profile from the spec: provisional workload (<= 20 conversations started per second, <= 100 persistent messages/s) and
+//! a 10x stress profile. Acceptance: control-plane write p95 <= 250 ms excluding model/tool work. The strict assertions run
 //! with `SOMEWORK_LOAD_STRICT=1` (use `cargo test --release`); debug builds assert a relaxed bound.
 
 use std::{
@@ -11,7 +11,6 @@ use std::{
 };
 
 use serde_json::json;
-use somework_core::contracts::SideEffects;
 use somework_domain::policy::Permissions;
 use somework_testkit::{Stack, capability};
 
@@ -36,29 +35,28 @@ struct Profile {
 
 async fn run_profile(profile: Profile) -> (f64, f64, usize) {
     let stack = Stack::start().await;
-    let mut perms = Permissions::default_agent();
-    perms.side_effects_at_most = Some(SideEffects::Read);
-    let _worker = stack.worker("agent/reviewer", vec![capability("code.review", "2.1", "read", "Review")], perms).await;
-    let author = Arc::new(stack.requester("agent/author", &["code.review"], SideEffects::Read).await);
-    let peer = Arc::new(stack.requester("agent/peer", &[], SideEffects::None).await);
+    let _reviewer = stack.worker("agent/reviewer", vec![capability("code.review", "2.1", "read", "Review")], Permissions::default_agent()).await;
+    let author = Arc::new(stack.requester("agent/author").await);
+    let peer = Arc::new(stack.requester("agent/peer").await);
 
-    let task_latencies = Arc::new(parking_lot_free::Samples::default());
+    let ask_latencies = Arc::new(parking_lot_free::Samples::default());
     let message_latencies = Arc::new(parking_lot_free::Samples::default());
     let errors = Arc::new(AtomicUsize::new(0));
     let started = Instant::now();
     let mut handles = vec![];
-    let total_tasks = profile.rate_per_second * profile.seconds;
-    for i in 0..total_tasks {
+    let total_asks = profile.rate_per_second * profile.seconds;
+    for i in 0..total_asks {
         let at = started + Duration::from_micros(i * 1_000_000 / profile.rate_per_second);
-        let (author, lat, errors) = (author.clone(), task_latencies.clone(), errors.clone());
+        let (author, lat, errors) = (author.clone(), ask_latencies.clone(), errors.clone());
         handles.push(tokio::spawn(async move {
             tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await;
             let t = Instant::now();
             match author
                 .client
-                .submit_task(
-                    &json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": format!("r{i}")}}),
-                    Some(&format!("load-{i}")),
+                .post_idem(
+                    "/v1/messages",
+                    &json!({"recipients": [{"kind": "agent", "id": "agent/reviewer"}], "content": {"mediaType": "text/plain", "data": format!("please review r{i}")}}),
+                    &format!("load-{i}"),
                 )
                 .await
             {
@@ -93,25 +91,25 @@ async fn run_profile(profile: Profile) -> (f64, f64, usize) {
     for h in handles {
         let _ = h.await;
     }
-    let mut tasks = task_latencies.take();
+    let mut tasks = ask_latencies.take();
     let mut messages = message_latencies.take();
-    let (p95_task, p95_msg) = (percentile(&mut tasks, 0.95), percentile(&mut messages, 0.95));
+    let (p95_ask, p95_msg) = (percentile(&mut tasks, 0.95), percentile(&mut messages, 0.95));
     let failed = errors.load(Ordering::Relaxed);
     println!(
-        "[{}] {} tasks @ {}/s + {} messages @ {}/s: task p50 {:.1} ms p95 {:.1} ms p99 {:.1} ms | message p95 {:.1} ms | errors {}",
+        "[{}] {} direct messages @ {}/s + {} peer messages @ {}/s: p50 {:.1} ms p95 {:.1} ms p99 {:.1} ms | peer p95 {:.1} ms | errors {}",
         profile.name,
         tasks.len(),
         profile.rate_per_second,
         messages.len(),
         profile.message_rate,
         percentile(&mut tasks, 0.5),
-        p95_task,
+        p95_ask,
         percentile(&mut tasks, 0.99),
         p95_msg,
         failed
     );
     stack.stop().await;
-    (p95_task, p95_msg, failed)
+    (p95_ask, p95_msg, failed)
 }
 
 mod parking_lot_free {
@@ -136,18 +134,18 @@ static ONE_PROFILE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn provisional_load_meets_the_control_plane_write_latency_target() {
     let _alone = ONE_PROFILE_AT_A_TIME.lock().await;
-    let (p95_task, p95_msg, failed) = run_profile(Profile { name: "provisional", rate_per_second: 20, seconds: 15, message_rate: 100 }).await;
+    let (p95_ask, p95_msg, failed) = run_profile(Profile { name: "provisional", rate_per_second: 20, seconds: 15, message_rate: 100 }).await;
     assert_eq!(failed, 0, "no request fails at the provisional load");
     let limit = if strict() { 250.0 } else { 1500.0 };
-    assert!(p95_task <= limit, "task submit p95 {p95_task:.1} ms exceeds {limit} ms");
+    assert!(p95_ask <= limit, "direct message p95 {p95_ask:.1} ms exceeds {limit} ms");
     assert!(p95_msg <= limit, "message send p95 {p95_msg:.1} ms exceeds {limit} ms");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ten_times_stress_degrades_gracefully_without_errors() {
     let _alone = ONE_PROFILE_AT_A_TIME.lock().await;
-    let (p95_task, _p95_msg, failed) = run_profile(Profile { name: "10x stress", rate_per_second: 200, seconds: 8, message_rate: 1000 }).await;
+    let (p95_ask, _p95_msg, failed) = run_profile(Profile { name: "10x stress", rate_per_second: 200, seconds: 8, message_rate: 1000 }).await;
     assert_eq!(failed, 0, "the 10x profile completes without a single failed request (back-pressure shows up as latency, not errors)");
     let limit = if strict() { 2000.0 } else { 15000.0 };
-    assert!(p95_task <= limit, "10x stress p95 {p95_task:.1} ms exceeds {limit} ms");
+    assert!(p95_ask <= limit, "10x stress p95 {p95_ask:.1} ms exceeds {limit} ms");
 }

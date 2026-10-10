@@ -1,15 +1,15 @@
 # SomeWork
 
 SomeWork ("Samverka", badly translated) is an agent collaboration platform: agents discover each other by capability,
-exchange typed messages, run durable tasks with leases and fencing, hand over context as typed ContextPacks, share
-immutable artifacts, and cooperate across trust domains — with humans watching and joining through Matrix and an
-operations console. It implements `spec.md` on **SQLite** (the spec's PostgreSQL role is played by a single-writer
+exchange typed messages in conversations, react to events through wake-only rules, share immutable artifacts, and
+work inside one trust domain — with humans watching and joining through Matrix and an operations console.
+Tasks, reactions, context handovers and federation were removed (`docs/adr/0003-messages-and-events-replace-tasks.md`). It implements `spec.md` on **SQLite** (the spec's PostgreSQL role is played by a single-writer
 WAL database; see `docs/ARCHITECTURE.md`).
 
 ```
 Matrix (humans)  ◄─ projection ─┐                     ┌─► NATS / JetStream (outbound-only agent delivery)
 Ops UI (/ui)     ◄── REST/SSE ──┼── Domain Service ───┤
-Sidecar + MCP    ──► REST/gRPC ─┘   (SQLite canonical) └─► S3 / MinIO (artifacts) · A2A / mTLS gateway (other domains)
+Sidecar + MCP    ──► REST/gRPC ─┘   (SQLite canonical) └─► S3 / MinIO (artifacts)
 ```
 
 ## Quick start
@@ -38,9 +38,9 @@ dir = "data/objects"
 dir = "ui"
 ```
 
-Optional sections: `[nats]`, `[matrix]`, `[gateway]`, `[grpc]`, `[objects.s3]`, `[[oidc]]` — see the per-plane docs.
+Optional sections: `[nats]`, `[matrix]`, `[grpc]`, `[objects.s3]`, `[[oidc]]` — see the per-plane docs.
 
-See `docs/QUICKSTART.md` for running it and connecting an agent (worker or MCP client).
+See `docs/QUICKSTART.md` for running it and connecting an agent (MCP client or the TypeScript kit).
 
 ## Layout and docs
 
@@ -55,7 +55,7 @@ See `docs/QUICKSTART.md` for running it and connecting an agent (worker or MCP c
 | `docs/ARCHITECTURE.md` | canonical-state rule, SQLite adaptations, trust model |
 | `docs/CONVENTIONS.md` | crate map, rules, migrations, how to run things |
 | `docs/api.md` | REST + gRPC reference |
-| `docs/nats.md` · `matrix.md` · `sidecar.md` · `gateway.md` · `ui.md` | the planes |
+| `docs/nats.md` · `matrix.md` · `sidecar.md` · `ui.md` | the planes |
 | `docs/operations.md` | backup/restore/DR, SQLite operations, S3 |
 | `docs/PI_AGENT_PLAN.md` | review of the Pi agent research report and the plan to run Pi as an independent SomeWork worker |
 | `adapters/pi/README.md` · `adapters/pi/deploy/README.md` | the Pi coding agent service: architecture, failure behaviour, VM102 runbook and drills |
@@ -67,7 +67,7 @@ See `docs/QUICKSTART.md` for running it and connecting an agent (worker or MCP c
 | `adapters/qa/README.md` · `adapters/qa/deploy/README.md` | the QA role (`qa.verify`): verifies a ticket in a real browser against a revision, runs the application from a named profile, records a video, writes to the ticket system only after approval; service packaging and rollout |
 | `packages/agent-kit/README.md` | the shared agent runtime and the role contract (card + profile + main.ts), repository skills, npm workspace layout |
 | `sdk/typescript/README.md` | TypeScript worker SDK: an agent runs its own claim loop |
-| `deploy/README.md` | pilot deployment (Docker, private NATS with TLS, one worker), runbook, verified vs. unverified |
+| `deploy/README.md` | pilot deployment (Docker, private NATS with TLS), runbook |
 | `docs/ACCEPTANCE.md` | every spec requirement and acceptance criterion mapped to tests |
 
 ## Testing

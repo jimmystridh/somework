@@ -3641,7 +3641,6 @@ dependencies = [
  "somework-client",
  "somework-core",
  "somework-domain",
- "somework-gateway",
  "somework-matrix",
  "somework-nats",
  "tempfile",
@@ -3736,42 +3735,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "somework-gateway"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "async-trait",
- "axum",
- "bytes",
- "chrono",
- "ed25519-dalek 3.0.0",
- "futures",
- "hex",
- "http",
- "hyper",
- "hyper-util",
- "parking_lot",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "somework-core",
- "somework-domain",
- "sqlx",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "tower",
- "tower-http 0.7.1",
- "tracing",
- "urlencoding",
- "x509-parser",
-]
-
-[[package]]
 name = "somework-it"
 version = "0.1.0"
 dependencies = [
@@ -3796,10 +3759,8 @@ dependencies = [
  "somework-client",
  "somework-core",
  "somework-domain",
- "somework-gateway",
  "somework-matrix",
  "somework-nats",
- "somework-sidecar",
  "somework-testkit",
  "sqlx",
  "tempfile",
@@ -3910,7 +3871,6 @@ dependencies = [
  "somework-client",
  "somework-core",
  "somework-domain",
- "somework-gateway",
  "somework-matrix",
  "somework-nats",
  "sqlx",

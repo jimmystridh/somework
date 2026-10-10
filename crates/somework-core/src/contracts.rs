@@ -6,8 +6,6 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::fsm::TaskState;
-
 pub const SCHEMA_VERSION: &str = "1.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -65,9 +63,6 @@ impl SideEffects {
     }
 }
 
-/// Tag an action contract carries when repeating it with the same idempotency key is proven safe (TASK-06).
-pub const IDEMPOTENT_TAG: &str = "contract:idempotent";
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Capability {
@@ -94,12 +89,6 @@ pub struct Capability {
     pub timeout_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_hint: Option<Value>,
-}
-
-impl Capability {
-    pub fn is_idempotent(&self) -> bool {
-        self.tags.iter().any(|t| t == IDEMPOTENT_TAG)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -306,8 +295,6 @@ pub struct ArtifactRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_task_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption: Option<Value>,
@@ -334,30 +321,12 @@ pub enum MessageType {
     ChatNotice,
     #[serde(rename = "event.notification")]
     EventNotification,
-    #[serde(rename = "task.request")]
-    TaskRequest,
-    #[serde(rename = "task.status")]
-    TaskStatus,
-    #[serde(rename = "task.input")]
-    TaskInput,
-    #[serde(rename = "task.result")]
-    TaskResult,
-    #[serde(rename = "context.offer")]
-    ContextOffer,
-    #[serde(rename = "context.accepted")]
-    ContextAccepted,
     #[serde(rename = "artifact.published")]
     ArtifactPublished,
-    #[serde(rename = "approval.request")]
-    ApprovalRequest,
-    #[serde(rename = "approval.decision")]
-    ApprovalDecision,
     #[serde(rename = "catalog.changed")]
     CatalogChanged,
     #[serde(rename = "policy.denied")]
     PolicyDenied,
-    #[serde(rename = "stream.chunk")]
-    StreamChunk,
     #[serde(rename = "presence.changed")]
     PresenceChanged,
 }
@@ -368,7 +337,6 @@ pub enum TriggerMode {
     Never,
     Directed,
     Subscription,
-    TaskState,
 }
 
 impl TriggerMode {
@@ -377,7 +345,6 @@ impl TriggerMode {
             TriggerMode::Never => "never",
             TriggerMode::Directed => "directed",
             TriggerMode::Subscription => "subscription",
-            TriggerMode::TaskState => "task-state",
         }
     }
 }
@@ -400,15 +367,6 @@ pub struct MessageContent {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ContextRef {
-    pub context_pack_id: String,
-    pub version: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sections: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MessageEnvelope {
     pub schema_version: String,
     pub message_id: String,
@@ -419,8 +377,6 @@ pub struct MessageEnvelope {
     pub domain_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -436,8 +392,6 @@ pub struct MessageEnvelope {
     pub content: MessageContent,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactRef>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context_refs: Vec<ContextRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_token_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -456,64 +410,12 @@ pub struct CapabilityRef {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Lease {
-    pub lease_id: String,
-    pub runtime_instance_id: String,
-    pub fencing_token: u64,
-    pub expires_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Failure {
     pub code: String,
     pub message: String,
     pub retryable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Task {
-    pub task_id: String,
-    pub domain_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conversation_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_task_id: Option<String>,
-    pub capability: CapabilityRef,
-    pub requester: ActorRef,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_agent_id: Option<String>,
-    #[serde(default)]
-    pub assignee: Option<ActorRef>,
-    pub state: TaskState,
-    pub revision: u64,
-    pub attempt: u64,
-    pub input: Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context_refs: Vec<ContextRef>,
-    #[serde(default)]
-    pub lease: Option<Lease>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authorization_token_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy_decision_id: Option<String>,
-    #[serde(default)]
-    pub result: Option<Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub result_artifacts: Vec<ArtifactRef>,
-    #[serde(default)]
-    pub failure: Option<Failure>,
-    pub created_at: String,
-    pub updated_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deadline_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -524,49 +426,13 @@ pub enum Action {
     MessageSend,
     #[serde(rename = "message.read")]
     MessageRead,
-    #[serde(rename = "task.submit")]
-    TaskSubmit,
-    #[serde(rename = "task.read")]
-    TaskRead,
-    #[serde(rename = "task.claim")]
-    TaskClaim,
-    #[serde(rename = "task.update")]
-    TaskUpdate,
-    #[serde(rename = "task.delegate")]
-    TaskDelegate,
-    #[serde(rename = "task.cancel")]
-    TaskCancel,
     #[serde(rename = "artifact.read")]
     ArtifactRead,
     #[serde(rename = "artifact.write")]
     ArtifactWrite,
-    #[serde(rename = "context.read")]
-    ContextRead,
-    #[serde(rename = "context.write")]
-    ContextWrite,
-    #[serde(rename = "approval.grant")]
-    ApprovalGrant,
-    #[serde(rename = "capability.invoke")]
-    CapabilityInvoke,
 }
 
-pub const TOKEN_ACTIONS: [Action; 15] = [
-    Action::CatalogRead,
-    Action::MessageSend,
-    Action::MessageRead,
-    Action::TaskSubmit,
-    Action::TaskRead,
-    Action::TaskClaim,
-    Action::TaskUpdate,
-    Action::TaskDelegate,
-    Action::TaskCancel,
-    Action::ArtifactRead,
-    Action::ArtifactWrite,
-    Action::ContextRead,
-    Action::ContextWrite,
-    Action::ApprovalGrant,
-    Action::CapabilityInvoke,
-];
+pub const ACTIONS: [Action; 5] = [Action::CatalogRead, Action::MessageSend, Action::MessageRead, Action::ArtifactRead, Action::ArtifactWrite];
 
 impl Action {
     pub fn as_str(self) -> &'static str {
@@ -575,112 +441,12 @@ impl Action {
             CatalogRead => "catalog.read",
             MessageSend => "message.send",
             MessageRead => "message.read",
-            TaskSubmit => "task.submit",
-            TaskRead => "task.read",
-            TaskClaim => "task.claim",
-            TaskUpdate => "task.update",
-            TaskDelegate => "task.delegate",
-            TaskCancel => "task.cancel",
             ArtifactRead => "artifact.read",
             ArtifactWrite => "artifact.write",
-            ContextRead => "context.read",
-            ContextWrite => "context.write",
-            ApprovalGrant => "approval.grant",
-            CapabilityInvoke => "capability.invoke",
         }
     }
 
     pub fn parse(raw: &str) -> Option<Self> {
-        TOKEN_ACTIONS.into_iter().find(|a| a.as_str() == raw)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DelegationClaim {
-    pub allowed: bool,
-    pub remaining_depth: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Confirmation {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certificate_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_thumbprint: Option<String>,
-}
-
-/// Signed claims payload of an authorization grant. `issued_at`/`not_before`/`expires_at` are RFC 3339 strings in
-/// the schema; the JWS wire form additionally carries `iat`/`nbf`/`exp` as NumericDate (see [`crate::jws`]).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuthorizationToken {
-    pub jti: String,
-    pub issuer: String,
-    pub subject: ActorRef,
-    pub audience: Vec<String>,
-    pub domain_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
-    pub actions: Vec<Action>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resources: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub constraints: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub classification_max: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegation: Option<DelegationClaim>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub confirmation: Option<Confirmation>,
-    pub policy_version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_jti: Option<String>,
-    pub issued_at: String,
-    pub not_before: String,
-    pub expires_at: String,
-}
-
-pub const CONTEXT_SECTIONS: [&str; 14] = [
-    "objective",
-    "acceptanceCriteria",
-    "currentState",
-    "facts",
-    "hypotheses",
-    "decisions",
-    "openQuestions",
-    "workspace",
-    "evidence",
-    "artifacts",
-    "requestedContinuation",
-    "executionConstraints",
-    "security",
-    "provenance",
-];
-
-/// Sections that are always disclosed with a manifest because the receiver cannot interpret the pack without them.
-pub const CONTEXT_MANIFEST_SECTIONS: [&str; 4] = ["objective", "requestedContinuation", "security", "provenance"];
-
-/// ContextPack top-level keys that make up a named section. `evidence` is the conversation/tool evidence references.
-pub fn context_section_keys(section: &str) -> &'static [&'static str] {
-    match section {
-        "objective" => &["objective"],
-        "acceptanceCriteria" => &["acceptanceCriteria"],
-        "currentState" => &["currentState"],
-        "facts" => &["facts"],
-        "hypotheses" => &["hypotheses"],
-        "decisions" => &["decisions"],
-        "openQuestions" => &["openQuestions"],
-        "workspace" => &["workspace"],
-        "evidence" => &["conversationRefs", "toolResultRefs"],
-        "artifacts" => &["artifacts"],
-        "requestedContinuation" => &["requestedContinuation"],
-        "executionConstraints" => &["executionConstraints"],
-        "security" => &["security"],
-        "provenance" => &["provenance"],
-        _ => &[],
+        ACTIONS.into_iter().find(|a| a.as_str() == raw)
     }
 }

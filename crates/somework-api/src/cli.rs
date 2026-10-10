@@ -7,10 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use somework_core::{
-    contracts::{ActorKind, SideEffects},
-    jws,
-};
+use somework_core::{contracts::ActorKind, jws};
 use somework_domain::{Domain, auth::CreatePrincipal, policy::Permissions};
 
 use crate::config::ServerConfig;
@@ -98,13 +95,11 @@ pub enum AdminCommand {
     EnrollAgent {
         #[arg(long)]
         id: String,
-        #[arg(long, default_value = "read")]
-        side_effects: String,
         #[arg(long, default_value = "internal")]
         classification: String,
-        /// Capability id patterns the agent may invoke as a requester.
-        #[arg(long = "may-invoke")]
-        may_invoke: Vec<String>,
+        /// Topic globs the agent may publish events under (`events.publish:<glob>` grants); repeat or separate with commas.
+        #[arg(long = "publish", value_delimiter = ',')]
+        publish: Vec<String>,
         #[arg(long, conflicts_with = "public_key", required_unless_present = "public_key")]
         key_out: Option<PathBuf>,
         /// Base64 Ed25519 public key generated on the worker host.
@@ -157,18 +152,15 @@ pub enum AdminCommand {
         #[arg(long)]
         public_key: String,
     },
-    /// Replace an agent's permissions (same fields and defaults as `enroll-agent`); use it to let an enrolled agent invoke
-    /// more capabilities without re-enrolling it.
+    /// Replace an agent's permissions (same fields and defaults as `enroll-agent`) without re-enrolling it.
     SetAgentPermissions {
         #[arg(long)]
         id: String,
-        #[arg(long, default_value = "read")]
-        side_effects: String,
         #[arg(long, default_value = "internal")]
         classification: String,
-        /// Capability id patterns the agent may invoke as a requester.
-        #[arg(long = "may-invoke")]
-        may_invoke: Vec<String>,
+        /// Topic globs the agent may publish events under (`events.publish:<glob>` grants); repeat or separate with commas.
+        #[arg(long = "publish", value_delimiter = ',')]
+        publish: Vec<String>,
     },
     /// Disable or re-enable an agent. A disabled agent cannot authenticate: the kill switch for a lost key.
     SetAgentStatus {
@@ -191,8 +183,6 @@ pub enum AdminCommand {
         /// `admin`, `auditor`, `operator` (repeatable).
         #[arg(long = "role")]
         roles: Vec<String>,
-        #[arg(long = "approves")]
-        approves: Vec<String>,
         #[arg(long, default_value = "internal")]
         classification: String,
     },
@@ -213,8 +203,6 @@ pub enum AdminCommand {
         approve: bool,
     },
     VerifyAudit,
-    /// Re-enqueue work-ready notifications for every queued task (after losing JetStream state).
-    RepublishQueued,
     /// Render `nats-server.conf` (and an initial `users.conf`) for a deployed broker from the `[nats]` section of the
     /// server config. All paths are as the broker process sees them (inside its container).
     RenderNatsConf {
@@ -328,6 +316,10 @@ fn render_nats_conf(cfg: &ServerConfig, command: AdminCommand) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn publish_grants(globs: &[String]) -> impl Iterator<Item = String> + '_ {
+    globs.iter().map(|glob| format!("{}{glob}", somework_domain::policy::EVENTS_PUBLISH_PREFIX))
+}
+
 async fn enroll_service(
     domain: &Domain,
     ctx: &somework_domain::Ctx,
@@ -391,7 +383,7 @@ pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
             key.write(&key_out)?;
             println!("administrator {name} ready; key written to {}", key_out.display());
         }
-        AdminCommand::EnrollAgent { id, side_effects, classification, may_invoke, key_out, public_key } => {
+        AdminCommand::EnrollAgent { id, classification, publish, key_out, public_key } => {
             let generated = match (&public_key, key_out) {
                 (None, Some(out)) => Some((KeyFile::generate("agent", &id, &domain_id), out)),
                 (Some(_), None) => None,
@@ -403,9 +395,8 @@ pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
                 (None, None) => unreachable!("one of the two is always present"),
             };
             let mut perms = Permissions::default_agent();
-            perms.side_effects_at_most = Some(SideEffects::parse(&side_effects).context("side-effects must be none, read, write or irreversible")?);
             perms.classification_max = Some(classification);
-            perms.capabilities = may_invoke;
+            perms.actions.extend(publish_grants(&publish));
             domain
                 .create_principal(
                     &ctx,
@@ -430,15 +421,11 @@ pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
             }
         }
         AdminCommand::EnrollProducer { id, publish, clearance, key_out, public_key } => {
-            let actions = publish.iter().map(|glob| format!("{}{glob}", somework_domain::policy::EVENTS_PUBLISH_PREFIX)).collect();
+            let actions = publish_grants(&publish).collect();
             enroll_service(&domain, &ctx, &domain_id, &id, actions, clearance, key_out, public_key, "producer").await?;
         }
         AdminCommand::SetPublishPermissions { id, publish, clearance } => {
-            let perms = Permissions {
-                actions: publish.iter().map(|glob| format!("{}{glob}", somework_domain::policy::EVENTS_PUBLISH_PREFIX)).collect(),
-                classification_max: Some(clearance),
-                ..Default::default()
-            };
+            let perms = Permissions { actions: publish_grants(&publish).collect(), classification_max: Some(clearance), ..Default::default() };
             domain.update_principal(&ctx, ActorKind::Service, &id, Some(perms), None, None).await?;
             println!("producer {id}: publish grants replaced with {}", publish.join(", "));
         }
@@ -449,11 +436,10 @@ pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
             domain.update_principal(&ctx, ActorKind::Agent, &id, None, None, Some(public_key)).await?;
             println!("agent {id}: public key replaced; the previous key no longer authenticates");
         }
-        AdminCommand::SetAgentPermissions { id, side_effects, classification, may_invoke } => {
+        AdminCommand::SetAgentPermissions { id, classification, publish } => {
             let mut perms = Permissions::default_agent();
-            perms.side_effects_at_most = Some(SideEffects::parse(&side_effects).context("side-effects must be none, read, write or irreversible")?);
             perms.classification_max = Some(classification);
-            perms.capabilities = may_invoke;
+            perms.actions.extend(publish_grants(&publish));
             domain.update_principal(&ctx, ActorKind::Agent, &id, Some(perms), None, None).await?;
             println!("agent {id}: permissions replaced");
         }
@@ -461,10 +447,9 @@ pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
             domain.update_principal(&ctx, ActorKind::Agent, &id, None, Some(status.clone()), None).await?;
             println!("agent {id}: status {status}");
         }
-        AdminCommand::EnrollHuman { id, matrix_user, oidc_issuer, oidc_subject, roles, approves, classification } => {
+        AdminCommand::EnrollHuman { id, matrix_user, oidc_issuer, oidc_subject, roles, classification } => {
             let mut perms = Permissions::default_human();
             perms.roles = roles;
-            perms.approves = approves;
             perms.classification_max = Some(classification);
             domain
                 .create_principal(
@@ -511,10 +496,6 @@ pub async fn run_admin(config: &Path, command: AdminCommand) -> Result<()> {
                 domain.approve_entry(&ctx, &entry.entry_id, approval).await?;
             }
             println!("registered {} ({})", entry.agent_card.agent_id, if approve { "approved" } else { "draft" });
-        }
-        AdminCommand::RepublishQueued => {
-            let n = domain.republish_queued_tasks().await?;
-            println!("re-enqueued {n} queued task(s)");
         }
         AdminCommand::RenderNatsConf { .. } => unreachable!("handled before the domain is opened"),
     }

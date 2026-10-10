@@ -3,10 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
-use somework_core::{
-    contracts::{ActorKind, SideEffects},
-    jws,
-};
+use somework_core::{contracts::ActorKind, jws};
 use somework_domain::{auth::CreatePrincipal, config::MatrixProfile, policy::Permissions};
 use somework_matrix::MatrixConfig;
 use somework_testkit::{Agent, Human, Stack, StackBuilder, capability, matrix::MockMatrix, process::eventually};
@@ -90,16 +87,11 @@ impl MxEnv {
 }
 
 pub fn human_perms() -> Permissions {
-    let mut p = Permissions::default_human();
-    p.actions.push("task.update".into());
-    p.capabilities = vec!["code.review".into()];
-    p
+    Permissions::default_human()
 }
 
-pub fn worker_perms(se: SideEffects) -> Permissions {
-    let mut p = Permissions::default_agent();
-    p.side_effects_at_most = Some(se);
-    p
+pub fn worker_perms() -> Permissions {
+    Permissions::default_agent()
 }
 
 pub fn review_cap() -> Value {

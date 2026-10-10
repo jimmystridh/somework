@@ -15,10 +15,7 @@ use crate::{
 };
 
 pub const TRANSPORT: &str = "matrix";
-pub const EV_TASK: &str = "dev.somework.task.v1";
-pub const EV_CONTEXT: &str = "dev.somework.context.v1";
 pub const EV_ARTIFACT: &str = "dev.somework.artifact.v1";
-pub const EV_APPROVAL: &str = "dev.somework.approval.v1";
 pub const EV_ROOM: &str = "dev.somework.room";
 pub const REF_KEY: &str = "dev.somework.ref";
 
@@ -257,22 +254,5 @@ impl Bridge {
             content[REF_KEY] = r;
         }
         self.send(room_id, &self.cfg.bot_user_id(), "m.room.message", txn_id, content, "somework://").await
-    }
-
-    pub async fn task_root(&self, room_id: &str, task_id: &str) -> Result<String, Error> {
-        if let Some(m) = self.domain.mapping_by_object(TRANSPORT, "task", task_id).await? {
-            return Ok(m.external_id);
-        }
-        let _guard = self.structure_lock.lock().await;
-        if let Some(m) = self.domain.mapping_by_object(TRANSPORT, "task", task_id).await? {
-            return Ok(m.external_id);
-        }
-        let view = self.domain.get_task(&self.ctx(), task_id).await?;
-        let summary = format!("Task {} — {}@{}", task_id, view.task.capability.id, view.task.capability.version);
-        let content = json!({"msgtype": "m.notice", "body": summary, REF_KEY: {"type": "task", "id": task_id}});
-        let event_id =
-            self.send(room_id, &self.cfg.bot_user_id(), "m.room.message", &format!("root:{task_id}"), content, &format!("somework://tasks/{task_id}")).await?;
-        self.domain.put_mapping(&Mapping::new(TRANSPORT, &event_id, "task", task_id, json!({"roomId": room_id}))).await?;
-        Ok(event_id)
     }
 }

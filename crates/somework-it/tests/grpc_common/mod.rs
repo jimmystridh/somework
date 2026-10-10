@@ -3,9 +3,9 @@
 use std::{sync::Arc, time::Duration};
 
 use ed25519_dalek::SigningKey;
-use serde_json::{Value, json};
+use serde_json::Value;
 use somework_api::grpc::{GrpcSection, pb};
-use somework_core::{contracts::SideEffects, jws};
+use somework_core::jws;
 use somework_domain::policy::Permissions;
 use somework_testkit::{Agent, Stack, StackBuilder, capability};
 use tonic::{
@@ -59,10 +59,6 @@ impl GrpcStack {
         Self { stack, channel }
     }
 
-    pub fn tasks(&self, creds: &Creds) -> pb::task_service_client::TaskServiceClient<Authed> {
-        pb::task_service_client::TaskServiceClient::with_interceptor(self.channel.clone(), creds.clone())
-    }
-
     pub fn catalog(&self, creds: &Creds) -> pb::catalog_service_client::CatalogServiceClient<Authed> {
         pb::catalog_service_client::CatalogServiceClient::with_interceptor(self.channel.clone(), creds.clone())
     }
@@ -75,10 +71,6 @@ impl GrpcStack {
         pb::message_service_client::MessageServiceClient::with_interceptor(self.channel.clone(), creds.clone())
     }
 
-    pub fn contexts(&self, creds: &Creds) -> pb::context_service_client::ContextServiceClient<Authed> {
-        pb::context_service_client::ContextServiceClient::with_interceptor(self.channel.clone(), creds.clone())
-    }
-
     pub fn artifacts(&self, creds: &Creds) -> pb::artifact_service_client::ArtifactServiceClient<Authed> {
         pb::artifact_service_client::ArtifactServiceClient::with_interceptor(self.channel.clone(), creds.clone())
     }
@@ -87,29 +79,19 @@ impl GrpcStack {
         pb::subscription_service_client::SubscriptionServiceClient::with_interceptor(self.channel.clone(), creds.clone())
     }
 
-    pub fn authorization(&self, creds: &Creds) -> pb::authorization_service_client::AuthorizationServiceClient<Authed> {
-        pb::authorization_service_client::AuthorizationServiceClient::with_interceptor(self.channel.clone(), creds.clone())
-    }
-
-    /// worker + requester pair offering `code.review@2.1` (read).
+    /// An agent that advertises `code.review@2.1` and a plain agent that talks to it.
     pub async fn review_pair(&self) -> (Agent, Agent) {
-        let worker = self
+        let reviewer = self
             .stack
             .worker(
                 "agent/reviewer",
                 vec![capability("code.review", "2.1", "read", "Review pull requests for correctness and security")],
-                worker_perms(SideEffects::Read),
+                Permissions::default_agent(),
             )
             .await;
-        let author = self.stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
-        (worker, author)
+        let author = self.stack.requester("agent/author").await;
+        (reviewer, author)
     }
-}
-
-pub fn worker_perms(se: SideEffects) -> Permissions {
-    let mut p = Permissions::default_agent();
-    p.side_effects_at_most = Some(se);
-    p
 }
 
 pub fn with_md<T>(message: T, pairs: &[(&'static str, &str)]) -> Request<T> {
@@ -134,18 +116,6 @@ pub fn expect_err<T: std::fmt::Debug>(result: Result<tonic::Response<T>, Status>
 
 pub fn struct_of(v: Value) -> prost_types::Struct {
     somework_api::grpc::json_to_struct(&v).expect("object")
-}
-
-pub fn review_input() -> prost_types::Struct {
-    struct_of(json!({"repository": "billing/import-service", "commit": "61a8d52"}))
-}
-
-pub fn submit_req() -> pb::SubmitTaskRequest {
-    pb::SubmitTaskRequest {
-        capability: Some(pb::CapabilityRef { id: "code.review".into(), version: "2.1".into() }),
-        input: Some(review_input()),
-        ..Default::default()
-    }
 }
 
 pub fn pctl(mut samples: Vec<Duration>, p: f64) -> Duration {

@@ -32,7 +32,6 @@ serde_json = "1.0.151"
 sha2 = "0.11.0"
 somework-core = { version = "0.1.0", path = "../somework-core" }
 somework-domain = { version = "0.1.0", path = "../somework-domain" }
-somework-gateway = { version = "0.1.0", path = "../somework-gateway" }
 somework-matrix = { version = "0.1.0", path = "../somework-matrix" }
 somework-nats = { version = "0.1.0", path = "../somework-nats" }
 tokio = { version = "1.53.2", features = ["full"] }

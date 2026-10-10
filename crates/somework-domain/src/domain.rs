@@ -59,11 +59,6 @@ pub struct Actor {
     /// Effective permissions: stored grants narrowed by any presented token.
     pub permissions: Permissions,
     pub runtime_instance_id: Option<String>,
-    pub grant_jti: Option<String>,
-    /// Set when the caller authenticated with a task-bound grant.
-    pub task_scope: Option<String>,
-    /// Set for requests that entered through the federation gateway on behalf of a peer domain.
-    pub peer_domain: Option<String>,
 }
 
 impl Actor {
@@ -110,16 +105,13 @@ pub struct Ctx {
     pub actor: Actor,
     pub trace: TraceContext,
     pub idempotency_key: Option<String>,
-    pub if_match: Option<u64>,
     pub transport: String,
     pub transport_event_id: Option<String>,
-    /// Set when the request is a reaction submitting a task on behalf of a rule.
-    pub origin: Option<crate::rules::TaskOrigin>,
 }
 
 impl Ctx {
     pub fn new(actor: Actor) -> Self {
-        Self { actor, trace: TraceContext::new_root(), idempotency_key: None, if_match: None, transport: "rest".into(), transport_event_id: None, origin: None }
+        Self { actor, trace: TraceContext::new_root(), idempotency_key: None, transport: "rest".into(), transport_event_id: None }
     }
 
     pub fn with_trace(mut self, trace: TraceContext) -> Self {
@@ -139,16 +131,6 @@ impl Ctx {
 
     pub fn with_transport_event(mut self, id: impl Into<String>) -> Self {
         self.transport_event_id = Some(id.into());
-        self
-    }
-
-    pub fn with_origin(mut self, origin: crate::rules::TaskOrigin) -> Self {
-        self.origin = Some(origin);
-        self
-    }
-
-    pub fn with_if_match(mut self, revision: u64) -> Self {
-        self.if_match = Some(revision);
         self
     }
 }
@@ -353,9 +335,6 @@ impl Domain {
             display_name: Some("SomeWork system".into()),
             permissions: Permissions::admin(),
             runtime_instance_id: None,
-            grant_jti: None,
-            task_scope: None,
-            peer_domain: None,
         }
     }
 
@@ -387,14 +366,14 @@ impl Domain {
 
     fn decide(&self, policy: &PolicyDocument, ctx: &Ctx, req: &AuthzRequest) -> Decision {
         let started = std::time::Instant::now();
-        let (allow, reasons, obligations) = evaluate(policy, &ctx.actor.label(), &ctx.actor.permissions, req);
+        let (allow, reasons) = evaluate(policy, &ctx.actor.label(), &ctx.actor.permissions, req);
         self.metrics.policy_latency.observe(started.elapsed().as_secs_f64());
         if allow {
             self.metrics.policy_allow_count.inc();
         } else {
             self.metrics.policy_deny_count.inc();
         }
-        Decision { decision_id: ids::decision_id(), allow, reasons, obligations, policy_version: policy.version.clone() }
+        Decision { decision_id: ids::decision_id(), allow, reasons, policy_version: policy.version.clone() }
     }
 
     fn denial(&self, decision: &Decision, req: &AuthzRequest) -> Error {
@@ -402,7 +381,6 @@ impl Domain {
             "decision": decision,
             "action": req.action,
             "resource": req.resource,
-            "taskId": req.task_id,
         }))
     }
 
@@ -431,8 +409,8 @@ impl Domain {
 
     pub async fn persist_decision(&self, conn: &mut SqliteConnection, ctx: &Ctx, req: &AuthzRequest, decision: &Decision) -> Result<(), Error> {
         sqlx::query(
-            "INSERT INTO policy_decisions(decision_id, domain_id, occurred_at, actor_principal_id, actor, action, resource, decision, reasons, policy_version, task_id, trace_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO policy_decisions(decision_id, domain_id, occurred_at, actor_principal_id, actor, action, resource, decision, reasons, policy_version, trace_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&decision.decision_id)
         .bind(&self.cfg.domain_id)
@@ -444,7 +422,6 @@ impl Domain {
         .bind(if decision.allow { "allow" } else { "deny" })
         .bind(serde_json::to_string(&decision.reasons)?)
         .bind(&decision.policy_version)
-        .bind(&req.task_id)
         .bind(&ctx.trace.trace_id)
         .execute(conn)
         .await
@@ -456,7 +433,7 @@ impl Domain {
     /// event) after the operation's own transaction has rolled back, and tracks metrics.
     pub async fn run<T>(&self, ctx: &Ctx, op: &'static str, fut: impl std::future::Future<Output = Result<T, Error>>) -> Result<T, Error> {
         use tracing::Instrument;
-        // Every operation is a span named after the spec's recommended span list (task.submit, message.send, ...),
+        // Every operation is a span named after the spec's recommended span list (message.send, ...),
         // carrying the W3C trace id so logs and traces can be joined across transports.
         let span = tracing::info_span!("somework.op", op, trace_id = %ctx.trace.trace_id, span_id = %ctx.trace.span_id, actor = %ctx.actor.label(), transport = %ctx.transport);
         let result = fut.instrument(span).await;
@@ -475,7 +452,6 @@ impl Domain {
         let req = AuthzRequest {
             action: details["action"].as_str().unwrap_or(op).to_string(),
             resource: details["resource"].as_str().map(String::from),
-            task_id: details["taskId"].as_str().map(String::from),
             ..Default::default()
         };
         let ctx = ctx.clone();
@@ -488,10 +464,7 @@ impl Domain {
                     this.audit(
                         tx,
                         &ctx,
-                        crate::audit::AuditRecord::new(&op, req.resource.clone(), "denied")
-                            .task(req.task_id.clone())
-                            .decision(&decision)
-                            .detail(json!({"reasons": decision.reasons})),
+                        crate::audit::AuditRecord::new(&op, req.resource.clone(), "denied").decision(&decision).detail(json!({"reasons": decision.reasons})),
                     )
                     .await?;
                     this.emit_policy_denied(tx, &ctx, &decision, &req).await?;

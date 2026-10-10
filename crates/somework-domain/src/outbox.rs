@@ -184,7 +184,7 @@ impl Domain {
                         "SELECT * FROM outbox_events o WHERE o.sink = ? AND o.status IN ('pending','failed') AND o.next_attempt_at <= ?
                            AND (o.claimed_by IS NULL OR o.claim_expires_at <= ?)
                            AND (o.coalesce_key IS NULL OR NOT EXISTS (SELECT 1 FROM outbox_events p WHERE p.sink = o.sink AND p.coalesce_key = o.coalesce_key AND p.status = 'published' AND p.published_at > ?))
-                         ORDER BY (o.subject LIKE 'somework.work.%') DESC, o.id ASC LIMIT ?",
+                         ORDER BY o.id ASC LIMIT ?",
                     )
                     .bind(&sink_name)
                     .bind(&now_ts)
@@ -262,39 +262,6 @@ impl Domain {
         Ok(res.rows_affected())
     }
 
-    /// Re-enqueue work-ready notifications for every queued task, e.g. after losing JetStream (BAK-02).
-    pub async fn republish_queued_tasks(&self) -> Result<u64, Error> {
-        let ctx = self.system_ctx();
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT task_id FROM tasks WHERE state = 'queued' ORDER BY created_at").fetch_all(self.db.pool()).await.db()?;
-        let mut n = 0;
-        for id in ids {
-            let this = self.clone();
-            let ctx = ctx.clone();
-            let ok = self
-                .write(move |tx| {
-                    Box::pin(async move {
-                        let row = this.load_task(tx, &id).await?;
-                        if row.state != somework_core::fsm::TaskState::Queued {
-                            return Ok(false);
-                        }
-                        let mut spec = crate::events::EventSpec::new("task.work_ready", serde_json::json!({"taskId": row.task_id, "revision": row.revision, "state": "queued"})).task(&row.task_id, row.revision);
-                        spec.capability_id = Some(row.capability_id.clone());
-                        for (subject, pool) in this.work_subjects_pub(tx, &row).await? {
-                            spec = spec.nats(subject, serde_json::json!({"taskId": row.task_id, "revision": row.revision, "capabilityId": row.capability_id, "capabilityVersion": row.capability_version, "poolId": pool}));
-                        }
-                        this.emit(tx, &ctx, spec).await?;
-                        Ok(true)
-                    })
-                })
-                .await?;
-            if ok {
-                n += 1;
-            }
-        }
-        Ok(n)
-    }
-
     pub fn spawn_outbox(&self, sink: Arc<dyn OutboxSink>, cfg: OutboxConfig, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
         let domain = self.clone();
         let worker_id = format!("{}-{}", sink.name(), somework_core::ids::jti());
@@ -323,7 +290,7 @@ impl Domain {
         })
     }
 
-    /// Periodic maintenance: leases, deadlines, approvals, stale uploads, retention and gauge refresh.
+    /// Periodic maintenance: idempotency expiry, stale uploads, retention and gauge refresh.
     pub fn spawn_maintenance(&self, interval: Duration, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
         let domain = self.clone();
         tokio::spawn(async move {
@@ -349,10 +316,6 @@ impl Domain {
     }
 
     pub async fn refresh_gauges(&self) -> Result<(), Error> {
-        let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE state = 'queued'").fetch_one(self.db.pool()).await.db()?;
-        self.metrics.tasks_queued.set(queued);
-        let oldest: Option<String> = sqlx::query_scalar("SELECT MIN(updated_at) FROM tasks WHERE state = 'queued'").fetch_one(self.db.pool()).await.db()?;
-        self.metrics.task_queue_age.set(oldest.as_deref().and_then(parse_ts).map(|t| (self.now() - t).num_seconds().max(0)).unwrap_or(0));
         for stat in self.outbox_stats().await? {
             self.metrics.outbox_backlog.with_label_values(&[stat.sink.as_str()]).set(stat.pending + stat.failed);
             self.metrics.outbox_oldest_age.with_label_values(&[stat.sink.as_str()]).set(stat.oldest_pending_age_seconds);

@@ -22,6 +22,7 @@ pub struct DomainSection {
     pub catalog_auto_approve: bool,
     pub audit_plaintext: bool,
     pub matrix_profile: MatrixProfile,
+    /// Accepted for configuration files written before tasks were removed; they have no effect.
     pub lease_seconds: i64,
     pub max_lease_seconds: i64,
     pub max_task_attempts: u64,
@@ -98,7 +99,8 @@ pub struct ServerConfig {
     pub ui: UiSection,
     pub nats: Option<somework_nats::NatsConfig>,
     pub matrix: Option<somework_matrix::MatrixConfig>,
-    pub gateway: Option<somework_gateway::GatewayConfig>,
+    /// Accepted for configuration files written before federation was removed; it has no effect.
+    pub gateway: Option<toml::Table>,
     pub allow_failpoint_admin: bool,
     pub grpc: Option<crate::grpc::GrpcSection>,
 }
@@ -118,9 +120,6 @@ impl ServerConfig {
         cfg.catalog_auto_approve = d.catalog_auto_approve;
         cfg.audit_plaintext = d.audit_plaintext;
         cfg.matrix_profile = d.matrix_profile;
-        cfg.default_lease_seconds = d.lease_seconds;
-        cfg.max_lease_seconds = d.max_lease_seconds;
-        cfg.max_task_attempts = d.max_task_attempts;
         cfg.inline_payload_limit_bytes = d.inline_payload_limit_bytes;
         cfg.max_artifact_bytes = d.max_artifact_bytes;
         cfg.db_synchronous_full = d.synchronous_full;
@@ -133,9 +132,6 @@ impl ServerConfig {
         }
         if self.matrix.is_some() {
             sinks.push(somework_domain::config::SINK_MATRIX.to_string());
-        }
-        if self.gateway.is_some() {
-            sinks.push(somework_domain::config::SINK_GATEWAY.to_string());
         }
         cfg.outbox_sinks = sinks;
         cfg

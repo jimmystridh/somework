@@ -4,26 +4,17 @@ pub fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", Ulid::generate())
 }
 
-pub fn task_id() -> String {
-    new_id("task")
-}
 pub fn message_id() -> String {
     new_id("msg")
 }
 pub fn conversation_id() -> String {
     new_id("conv")
 }
-pub fn context_pack_id() -> String {
-    new_id("ctxp")
-}
 pub fn artifact_id() -> String {
     new_id("art")
 }
 pub fn event_id() -> String {
     new_id("evt")
-}
-pub fn lease_id() -> String {
-    new_id("lease")
 }
 pub fn runtime_instance_id() -> String {
     new_id("rt")
@@ -34,14 +25,8 @@ pub fn decision_id() -> String {
 pub fn audit_id() -> String {
     new_id("aud")
 }
-pub fn approval_id() -> String {
-    new_id("appr")
-}
 pub fn subscription_id() -> String {
     new_id("sub")
-}
-pub fn offer_id() -> String {
-    new_id("offer")
 }
 pub fn upload_id() -> String {
     new_id("upl")
@@ -109,9 +94,9 @@ mod tests {
 
     #[test]
     fn ids_are_prefixed_and_unique() {
-        let a = task_id();
-        let b = task_id();
-        assert!(a.starts_with("task_"));
+        let a = message_id();
+        let b = message_id();
+        assert!(a.starts_with("msg_"));
         assert_ne!(a, b);
     }
 }

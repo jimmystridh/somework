@@ -1,5 +1,7 @@
 # Events and reactions: acceptance of the first version
 
+> Recorded before ADR 0003. Reactions, `maxDepth` and `causedBy*` were removed from the domain; rows 2 and 4 describe behaviour that no longer exists, and rows that rely on tasks need re-running against the kit.
+
 Status as of 2026-10-06. Each row is one bullet of "Acceptance for the first version" in `docs/EVENTS.md`. "Live" means shown on the pilot; the scripts are in `scripts/events-acceptance/` (run from the repository root through the SSH tunnel to the domain proxy). "Tests" means the automated suites: domain 327, receiver 22, hub 143, agent kit 294, manager 92, rules tool 61, SDK 46, dashboard 46.
 
 | # | Acceptance bullet | Status | Evidence |

@@ -6,10 +6,10 @@ Status: 2026-10-06. This is the map. It describes the whole system as it runs on
 
 | Layer | What it is | Detail |
 |---|---|---|
-| **Platform** | A single-writer SQLite domain service: tasks with leases and fencing, messages, capability cards, approvals, artifacts, audit, a transactional outbox, NATS/JetStream delivery | `ARCHITECTURE.md`, `api.md`, `nats.md`, `operations.md` |
+| **Platform** | A single-writer SQLite domain service: messages and conversations, events and wake-only rules, capability cards (advertisement only), artifacts, audit, a transactional outbox, NATS/JetStream delivery | `ARCHITECTURE.md`, `api.md`, `nats.md`, `operations.md` |
 | **Agent runtime** | `@somework/sdk` (client, worker loop, wake) and `@somework/agent-kit` (shared runtime: sandboxed Pi Durable, git workflow, approvals, budgets, skills, health, chat notice, event handlers) | `AGENT_FLEET.md`, `packages/agent-kit/README.md` |
 | **Agents** | Developer, Windows developer, reviewer, QA, manager. Thin roles on the kit; they never import each other | `AGENT_FLEET.md` |
-| **Events and reactions** | Webhooks and a clock become events; rules turn events into tasks (reactions) or wake agents, which may run their own handler code | `EVENTS.md`, `RULES.md`, `adr/0001` |
+| **Events and rules** | Webhooks and a clock become events; rules wake agents, which may run their own handler code (reactions and tasks were removed by `adr/0003`) | `EVENTS.md`, `RULES.md`, `adr/0001` |
 | **CI** | Woodpecker validates and deploys the rules and runs the repository checks | `CI.md`, `adr/0002` |
 | **Observability** | Logs to Loki through Alloy, Grafana dashboard and alert rules, a fleet dashboard with a SomeWork section | `FLEET_DASHBOARD.md` |
 | **Infrastructure** | A hypervisor with private VM networks, a DMZ for the public edge, a tailnet for administration, Windows machines cloned from one template | section 9 |
@@ -64,19 +64,19 @@ All agents connect outward only. The domain never calls an agent.
 
 Each agent has its own identity, key, model login and (where needed) its own scoped repository token. Budgets are mandatory per job; a daily ledger refuses jobs it cannot cover.
 
-## 5. Events and reactions
+## 5. Events and rules
 
-An **event** is a durable `event.notification` on a **topic** (`<source>.<object>.<change>`). Producers publish; **subscriptions** select topics; a match either only records the event for the subscriber, **wakes** an agent, or fires a **reaction** (a task submitted from a template under an automation principal, once per event, with depth and rate caps). The vocabulary is in `CONTEXT.md`.
+An **event** is a durable `event.notification` on a **topic** (`<source>.<object>.<change>`). Producers publish; **subscriptions** select topics; a match either only records the event for the subscriber or **wakes** an agent (the former **reaction**, which submitted a task from a template, is removed). The vocabulary is in `CONTEXT.md`.
 
 ```
-webhook ─► receiver ─► (pull) ─► hub ─► publish ─► domain ─┬─► reaction ─► task ─► agent
-clock ───────────────────────────► hub                      ├─► wake ─► agent ─► handler ─► drop · deliver · wake · submit · notify · rewrite
+webhook ─► receiver ─► (pull) ─► hub ─► publish ─► domain ─┬─► wake ─► agent ─► handler ─► drop · deliver · wake · submit · notify · rewrite
+clock ───────────────────────────► hub                      │
 alert (internal) ────────────────► hub                      └─► recorded for the subscriber
 ```
 
-* Sources today: GitHub, the issue tracker, Datadog, Grafana alerts, an Aikido source with a first-cut mapping, the clock, and the domain's own task events.
+* Sources today: GitHub, the issue tracker, Datadog, Grafana alerts, an Aikido source with a first-cut mapping, the clock, and the domain's own events.
 * Authentication of webhooks: a per-source token derived from one hub secret, a signature check where the sender can sign, Cloudflare Authenticated Origin Pulls with our own client certificate, and a WAF rule that lets only `POST /hook/*` through.
-* Guard rails: 30-day de-duplication per producer and key, depth cap, hourly rate cap, write-class reactions always wait for approval, event text is quoted untrusted data and never an instruction, handlers run in the agent's sandbox with timeouts and caps and cannot reach credentials, auto-disable after repeated failures, kill switch, and a per-agent token pool for event-driven runs.
+* Guard rails: 30-day de-duplication per producer and key, event text is quoted untrusted data and never an instruction, handlers run in the agent's sandbox with timeouts and caps and cannot reach credentials, auto-disable after repeated failures, kill switch, and a per-agent token pool for event-driven runs.
 * Rules are files in git (`rules/`), validated and applied by `somework-rules` from CI. Runtime control is pause and resume only, through the `rules.control` permission.
 
 ## 6. CI

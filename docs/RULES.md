@@ -1,11 +1,11 @@
 # Writing and deploying rules
 
-A **rule** (see `CONTEXT.md`) is one file under `rules/` that becomes a subscription, with or without a reaction. This page is the workflow; the syntax, the payload pointers and the safety notes are in `rules/README.md`, the design in `docs/EVENTS.md`.
+A **rule** (see `CONTEXT.md`) is one file under `rules/` that becomes a wake-only subscription (reactions were removed by ADR 0003). This page is the workflow; the syntax, the payload pointers and the safety notes are in `rules/README.md`, the design in `docs/EVENTS.md`.
 
 ## Day to day
 
 1. Write or change `rules/<name>.yaml`. One selector per rule.
-2. If the rule has a reaction, make sure `rules/samples/` has a recorded event for its selector (the full payload, `{topic, source, key, data, classification, verified, depth, causedByTask, publishedBy}`).
+2. Make sure `rules/samples/` has a recorded event for its selector (the full payload, `{topic, source, key, data, classification, verified, occurredAt, publishedBy}`).
 3. `node packages/rules-cli/src/main.ts validate --card adapters --strict`.
 4. Open a pull request. CI posts the plan as a comment: which rules would be created, replaced or deleted, and which fields differ.
 5. The owner reviews (`rules/` is covered by CODEOWNERS) and merges. A push to `main` that touches `rules/` runs `apply`.
@@ -16,7 +16,7 @@ A **rule** (see `CONTEXT.md`) is one file under `rules/` that becomes a subscrip
 
 | Command | Does |
 |---|---|
-| `validate` | YAML 1.2 parse (duplicate keys and aliases refused), JSON-schema check against `rules/schema.json`, then the conventions: name equals file name, reactions are owned by `automation/...`, agent subscriptions have `wake: true`, pointers start at a payload field, budget, depth and rate within limits, the capability exists on a card at that version and the rendered input satisfies its schema |
+| `validate` | YAML 1.2 parse (duplicate keys and aliases refused), JSON-schema check against `rules/schema.json`, then the conventions: name equals file name, subscriptions have `wake: true`, pointers start at a payload field (the CLI in `packages/rules-cli` still validates reaction fields until it is updated for the cut-over) |
 | `plan` | `validate`, then compare with `GET /v1/rules`: create, replace, delete, pause, resume, unchanged. Markdown for the pull request (`--out`), JSON for tools (`--json-out`). Exit 0 with changes, 1 for invalid files, 2 for operational failures |
 | `apply` | `validate`, then create and replace, correct pause state, delete the rules no file declares. `--dry-run` shows the plan. Exit 2 if any change failed or the domain does not match afterwards |
 | `comment` | posts or updates the plan comment on a pull request (`GITHUB_TOKEN`) |

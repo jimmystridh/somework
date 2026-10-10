@@ -9,7 +9,7 @@ use tower_http::{compression::CompressionLayer, services::ServeDir};
 
 use crate::{http::trace_layer, routes, state::AppState};
 
-/// Builds the full router. `extra` lets other planes (gateway, A2A, Matrix appservice) mount their routes.
+/// Builds the full router. `extra` lets other planes (the Matrix appservice) mount their routes.
 pub fn build_router(state: AppState, extra: Vec<Router>) -> Router {
     let mut app: Router = routes::router().with_state(state.clone());
     for r in extra {

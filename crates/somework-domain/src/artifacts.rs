@@ -15,7 +15,6 @@ use crate::{
     events::EventSpec,
     objects::{CompletedPart, PutPlan, storage_key},
     policy::AuthzRequest,
-    tasks::TaskRow,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,7 +28,6 @@ pub struct BeginUpload {
     /// Hex SHA-256 the uploaded bytes must hash to.
     pub sha256: Option<String>,
     pub classification: Option<String>,
-    pub source_task_id: Option<String>,
     pub provenance: Option<Value>,
     pub expires_at: Option<String>,
     pub conversation_id: Option<String>,
@@ -61,14 +59,6 @@ pub struct DownloadGrant {
     pub expires_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub struct DownloadRequest {
-    /// Read the artifact as part of this task (authority = effective task authority).
-    pub task_id: Option<String>,
-    pub fencing_token: Option<u64>,
-}
-
 fn is_hex_sha256(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -90,7 +80,6 @@ pub fn artifact_ref_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<ArtifactRef,
         created_by,
         created_at: scol(r, "created_at"),
         expires_at: scol_opt(r, "expires_at"),
-        source_task_id: scol_opt(r, "source_task_id"),
         provenance: Some(jcol(r, "provenance")).filter(|v| v.as_object().is_some_and(|o| !o.is_empty())),
         encryption: Some(jcol(r, "encryption")).filter(|v| v.as_object().is_some_and(|o| !o.is_empty())),
     })
@@ -119,20 +108,7 @@ impl Domain {
                     if !policy.scale().is_known(&classification) {
                         return Err(Error::invalid(format!("unknown classification {classification}")));
                     }
-                    let mut authz = AuthzRequest::action(Action::ArtifactWrite).classification(&classification);
-                    let mut effective = ctx.actor.clone();
-                    if let Some(task_id) = &req.source_task_id {
-                        let row = this.require_task_participant(conn, &ctx, task_id).await?;
-                        if row.assignee_principal_id.as_deref() == Some(&ctx.actor.principal_id)
-                            && let Some(auth) = &row.effective_authority {
-                                effective.permissions = auth.as_permissions();
-                                effective.permissions.resources = vec![];
-                            }
-                        authz = authz.task(task_id).resource(format!("task://{task_id}"));
-                    }
-                    let mut task_ctx = ctx.clone();
-                    task_ctx.actor = effective;
-                    this.enforce(conn, &task_ctx, authz).await?;
+                    this.enforce(conn, &ctx, AuthzRequest::action(Action::ArtifactWrite).classification(&classification)).await?;
 
                     let used: i64 = sqlx::query_scalar("SELECT COALESCE(SUM(COALESCE(size_bytes, declared_size)), 0) FROM artifacts WHERE domain_id = ? AND status IN ('pending','complete')").bind(&this.cfg.domain_id).fetch_one(&mut *conn).await.db()?;
                     if used as u64 + size > this.cfg.artifact_quota_bytes {
@@ -155,8 +131,8 @@ impl Domain {
                     let plan = store.plan_upload(&key, size, &media_type, ttl).await?;
                     let now = this.now_ts();
                     sqlx::query(
-                        "INSERT INTO artifacts(artifact_id, version, domain_id, status, filename, media_type, declared_size, declared_digest, classification, created_by, created_by_principal_id, source_task_id, provenance, storage_key, upload, created_at, expires_at)
-                         VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO artifacts(artifact_id, version, domain_id, status, filename, media_type, declared_size, declared_digest, classification, created_by, created_by_principal_id, provenance, storage_key, upload, created_at, expires_at)
+                         VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(&artifact_id)
                     .bind(version)
@@ -168,7 +144,6 @@ impl Domain {
                     .bind(&classification)
                     .bind(serde_json::to_string(&ctx.actor.actor_ref())?)
                     .bind(&ctx.actor.principal_id)
-                    .bind(&req.source_task_id)
                     .bind(req.provenance.clone().unwrap_or_else(|| json!({})).to_string())
                     .bind(&key)
                     .bind(json!({"store": store.kind(), "state": plan.state, "conversationId": req.conversation_id}).to_string())
@@ -260,11 +235,7 @@ impl Domain {
                         let r = sqlx::query("SELECT * FROM artifacts WHERE artifact_id = ? AND version = ?").bind(&artifact_id).bind(version).fetch_one(&mut *conn).await.db()?;
                         let aref = artifact_ref_from_row(&r)?;
                         let payload = json!({"artifactId": artifact_id, "version": version, "uri": aref.uri, "sizeBytes": aref.size_bytes, "classification": aref.classification});
-                        let mut spec = EventSpec::new("artifact.published", payload).matrix().recipient(ctx2.actor.principal_id.clone(), false);
-                        if let Some(task_id) = aref.source_task_id.clone()
-                            && let Ok(t) = this.load_task(conn, &task_id).await {
-                                spec = spec.task(&t.task_id, t.revision).conversation(t.conversation_id.clone());
-                            }
+                        let spec = EventSpec::new("artifact.published", payload).matrix().recipient(ctx2.actor.principal_id.clone(), false);
                         this.emit(conn, &ctx2, spec).await?;
                         this.audit(conn, &ctx2, AuditRecord::new("artifact.complete_upload", Some(aref.uri.clone()), "success").detail(json!({"sizeBytes": aref.size_bytes, "sha256": aref.digest.value}))).await?;
                         this.metrics.artifact_upload_bytes.inc_by(aref.size_bytes);
@@ -294,118 +265,47 @@ impl Domain {
             .ok_or_else(|| Error::not_found("artifact"))
     }
 
-    /// Whether `ctx` may read the artifact, optionally while acting under `task` (effective task authority).
-    async fn authorize_artifact_read(
-        &self,
-        conn: &mut SqliteConnection,
-        ctx: &Ctx,
-        row: &sqlx::sqlite::SqliteRow,
-        task: Option<&TaskRow>,
-    ) -> Result<(), Error> {
+    /// Whether `ctx` may read the artifact: inside a domain every principal holding `artifact.read` may read any artifact it
+    /// is cleared for, whoever made it and wherever it was attached.
+    async fn authorize_artifact_read(&self, conn: &mut SqliteConnection, ctx: &Ctx, row: &sqlx::sqlite::SqliteRow) -> Result<(), Error> {
         let policy = self.active_policy(conn).await?;
         let scale = policy.scale();
         let classification = scol(row, "classification");
         let uri = artifact_uri(&scol(row, "domain_id"), &scol(row, "artifact_id"), icol(row, "version") as u64);
-        let mut actor_ctx = ctx.clone();
-        if let Some(t) = task {
-            let authority = t.effective_authority.as_ref().ok_or_else(|| Error::denied("task has no authority"))?;
-            if !authority.permits_classification(&scale, &classification) {
-                let denied = crate::policy::Decision {
-                    decision_id: ids::decision_id(),
-                    allow: false,
-                    reasons: vec![format!("task authority ({}) does not cover {classification} artifacts", authority.classification_max)],
-                    obligations: vec![],
-                    policy_version: policy.version,
-                };
-                let mut err = Error::denied(denied.reasons.join("; "));
-                err.details = Some(json!({"decision": denied, "action": "artifact.read", "resource": uri, "taskId": t.task_id}));
-                return Err(err);
-            }
-            actor_ctx.actor.permissions = authority.as_permissions();
-            actor_ctx.actor.permissions.actions.retain(|a| a == "artifact.read");
-            if !self.artifact_in_task_scope(conn, t, row).await? {
-                return Err(Error::not_found("artifact"));
-            }
-        } else {
-            let owner = scol(row, "created_by_principal_id") == ctx.actor.principal_id;
-            if !owner && !ctx.actor.permissions.allows_action("artifact.read") {
-                return Err(Error::denied("artifact.read is not granted"));
-            }
-            if !owner && !ctx.actor.permissions.resource_allowed(&uri) {
-                return Err(Error::not_found("artifact"));
-            }
-            if !scale.permits(ctx.actor.permissions.classification_limit(), &classification) && !owner {
-                let denied = crate::policy::Decision {
-                    decision_id: ids::decision_id(),
-                    allow: false,
-                    reasons: vec![format!("classification {classification} exceeds the caller's clearance")],
-                    obligations: vec![],
-                    policy_version: policy.version,
-                };
-                let mut err = Error::denied(denied.reasons.join("; "));
-                err.details = Some(json!({"decision": denied, "action": "artifact.read", "resource": uri}));
-                return Err(err);
-            }
+        let owner = scol(row, "created_by_principal_id") == ctx.actor.principal_id;
+        if !owner && !ctx.actor.permissions.allows_action("artifact.read") {
+            return Err(Error::denied("artifact.read is not granted"));
+        }
+        if !owner && !ctx.actor.permissions.resource_allowed(&uri) {
+            return Err(Error::not_found("artifact"));
+        }
+        if !owner && !scale.permits(ctx.actor.permissions.classification_limit(), &classification) {
+            let denied = crate::policy::Decision {
+                decision_id: ids::decision_id(),
+                allow: false,
+                reasons: vec![format!("classification {classification} exceeds the caller's clearance")],
+                policy_version: policy.version,
+            };
+            let mut err = Error::denied(denied.reasons.join("; "));
+            err.details = Some(json!({"decision": denied, "action": "artifact.read", "resource": uri}));
+            return Err(err);
         }
         let req = AuthzRequest::action(Action::ArtifactRead).classification(classification).resource(uri);
-        self.enforce(conn, &actor_ctx, req).await?;
+        self.enforce(conn, ctx, req).await?;
         Ok(())
     }
 
-    /// Artifacts a task may touch: referenced by its input/context, produced within its lineage, or its own results.
-    async fn artifact_in_task_scope(&self, conn: &mut SqliteConnection, task: &TaskRow, row: &sqlx::sqlite::SqliteRow) -> Result<bool, Error> {
-        let uri = artifact_uri(&scol(row, "domain_id"), &scol(row, "artifact_id"), icol(row, "version") as u64);
-        if task.input.to_string().contains(&uri) {
-            return Ok(true);
-        }
-        if let Some(src) = scol_opt(row, "source_task_id") {
-            let mut current = Some(task.task_id.clone());
-            let mut depth = 0;
-            while let Some(id) = current {
-                if id == src {
-                    return Ok(true);
-                }
-                depth += 1;
-                if depth > 16 {
-                    break;
-                }
-                current = sqlx::query_scalar::<_, Option<String>>("SELECT parent_task_id FROM tasks WHERE task_id = ?")
-                    .bind(&id)
-                    .fetch_optional(&mut *conn)
-                    .await
-                    .db()?
-                    .flatten();
-            }
-        }
-        for cref in &task.context_refs {
-            let manifest: Option<String> = sqlx::query_scalar("SELECT manifest FROM context_packs WHERE context_pack_id = ? AND version = ?")
-                .bind(&cref.context_pack_id)
-                .bind(cref.version as i64)
-                .fetch_optional(&mut *conn)
-                .await
-                .db()?;
-            if manifest.is_some_and(|m| m.contains(&uri)) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    pub async fn get_artifact(&self, ctx: &Ctx, artifact_id: &str, version: u64, task_id: Option<&str>) -> Result<ArtifactRef, Error> {
+    pub async fn get_artifact(&self, ctx: &Ctx, artifact_id: &str, version: u64) -> Result<ArtifactRef, Error> {
         let mut conn = self.db.pool().acquire().await.db()?;
         let row = self.artifact_row(&mut conn, artifact_id, version).await.map_err(|_| Error::not_found("artifact"))?;
-        let task = match task_id {
-            Some(id) => Some(self.require_task_participant(&mut conn, ctx, id).await?),
-            None => None,
-        };
-        self.authorize_artifact_read(&mut conn, ctx, &row, task.as_ref()).await?;
+        self.authorize_artifact_read(&mut conn, ctx, &row).await?;
         if scol(&row, "status") != "complete" && scol(&row, "created_by_principal_id") != ctx.actor.principal_id {
             return Err(Error::not_found("artifact"));
         }
         artifact_ref_from_row(&row)
     }
 
-    pub async fn artifact_download_grant(&self, ctx: &Ctx, artifact_id: &str, version: u64, req: DownloadRequest) -> Result<DownloadGrant, Error> {
+    pub async fn artifact_download_grant(&self, ctx: &Ctx, artifact_id: &str, version: u64) -> Result<DownloadGrant, Error> {
         self.run(ctx, "artifact.download_grant", async {
             let store = self.object_store()?;
             let this = self.clone();
@@ -416,23 +316,12 @@ impl Domain {
                     Box::pin(async move {
                         let conn: &mut SqliteConnection = tx;
                         let row = this.artifact_row(conn, &artifact_id, version).await.map_err(|_| Error::not_found("artifact"))?;
-                        let task = match &req.task_id {
-                            Some(id) => {
-                                let t = this.require_task_participant(conn, &ctx2, id).await?;
-                                if t.assignee_principal_id.as_deref() == Some(&ctx2.actor.principal_id) {
-                                    this.verify_lease(&t, &ctx2, req.fencing_token)?;
-                                }
-                                Some(t)
-                            }
-                            None => None,
-                        };
-                        this.authorize_artifact_read(conn, &ctx2, &row, task.as_ref()).await?;
+                        this.authorize_artifact_read(conn, &ctx2, &row).await?;
                         if scol(&row, "status") != "complete" {
                             return Err(Error::new(ErrorCode::ArtifactNotReady, "the artifact upload has not completed verification"));
                         }
                         let aref = artifact_ref_from_row(&row)?;
-                        this.audit(conn, &ctx2, AuditRecord::new("artifact.download_grant", Some(aref.uri.clone()), "success").task(req.task_id.clone()))
-                            .await?;
+                        this.audit(conn, &ctx2, AuditRecord::new("artifact.download_grant", Some(aref.uri.clone()), "success")).await?;
                         this.metrics.artifact_download_bytes.inc_by(aref.size_bytes);
                         Ok((aref, scol(&row, "storage_key")))
                     })
@@ -449,22 +338,13 @@ impl Domain {
         .await
     }
 
-    /// Failure mode "S3 unavailable": artifact-dependent completions wait (retryable) instead of failing the task.
-    pub(crate) async fn require_object_store_healthy(&self) -> Result<(), Error> {
-        let store = self.object_store()?;
-        if store.healthy().await {
-            Ok(())
-        } else {
-            Err(Error::unavailable("the object store is unavailable; the task stays running until its artifacts can be verified"))
-        }
-    }
-
-    /// ART-03: result artifacts must be complete, digest-verified and within the task's authority.
-    pub(crate) async fn verify_result_artifacts(
+    /// Attachments of a message must exist in this domain, be complete and digest-verified, be readable by the sender and fit the
+    /// conversation's classification. The stored references replace whatever the sender wrote.
+    pub(crate) async fn verify_message_artifacts(
         &self,
         conn: &mut SqliteConnection,
         ctx: &Ctx,
-        task: &TaskRow,
+        conversation_classification: &str,
         refs: &[ArtifactRef],
     ) -> Result<Vec<ArtifactRef>, Error> {
         let policy = self.active_policy(conn).await?;
@@ -474,7 +354,7 @@ impl Domain {
             let row = self
                 .artifact_row(conn, &r.artifact_id, r.version)
                 .await
-                .map_err(|_| Error::new(ErrorCode::ArtifactNotReady, format!("artifact {} v{} does not exist", r.artifact_id, r.version)))?;
+                .map_err(|_| Error::new(ErrorCode::ArtifactNotReady, format!("artifact {} v{} does not exist in this domain", r.artifact_id, r.version)))?;
             if scol(&row, "status") != "complete" {
                 return Err(Error::new(
                     ErrorCode::ArtifactNotReady,
@@ -488,13 +368,12 @@ impl Domain {
                     format!("artifact {} v{}: the referenced digest differs from the verified digest", r.artifact_id, r.version),
                 ));
             }
-            if scol(&row, "created_by_principal_id") != ctx.actor.principal_id && !self.artifact_in_task_scope(conn, task, &row).await? {
-                return Err(Error::new(ErrorCode::ArtifactNotReady, format!("artifact {} v{} was not produced for this task", r.artifact_id, r.version)));
-            }
-            if let Some(authority) = &task.effective_authority
-                && !authority.permits_classification(&scale, &stored.classification)
-            {
-                return Err(Error::denied(format!("task authority does not cover {} artifacts", stored.classification)));
+            self.authorize_artifact_read(conn, ctx, &row).await?;
+            if !scale.permits(conversation_classification, &stored.classification) {
+                return Err(Error::denied(format!(
+                    "artifact {} v{} is {}, which the {conversation_classification} conversation may not carry",
+                    r.artifact_id, r.version, stored.classification
+                )));
             }
             out.push(stored);
         }

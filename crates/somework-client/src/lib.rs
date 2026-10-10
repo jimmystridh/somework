@@ -6,15 +6,15 @@ use std::{sync::Arc, time::Duration};
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use reqwest::{Method, StatusCode};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use somework_core::{ErrorCode, contracts::*, fsm::TaskState, jws};
+use somework_core::{ErrorCode, contracts::*, jws};
 
 #[derive(Clone)]
 pub enum Credentials {
     /// Mint a fresh short-lived assertion per request from the principal's private key.
     Assertion { key: Arc<SigningKey>, issuer: String, audience: String, runtime_instance_id: Option<String> },
-    /// A pre-obtained bearer token (OIDC token, task grant).
+    /// A pre-obtained bearer token (OIDC token).
     Bearer(String),
 }
 
@@ -47,57 +47,6 @@ impl From<ClientError> for somework_core::Error {
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskInfo {
-    pub task_id: String,
-    pub state: TaskState,
-    pub revision: u64,
-    pub attempt: u64,
-    #[serde(default)]
-    pub conversation_id: Option<String>,
-    #[serde(default)]
-    pub parent_task_id: Option<String>,
-    pub capability: CapabilityRef,
-    #[serde(default)]
-    pub input: Value,
-    #[serde(default)]
-    pub result: Option<Value>,
-    #[serde(default)]
-    pub failure: Option<Failure>,
-    #[serde(default)]
-    pub lease: Option<Lease>,
-    #[serde(default)]
-    pub assignee: Option<ActorRef>,
-    #[serde(default)]
-    pub context_refs: Vec<ContextRef>,
-    #[serde(default)]
-    pub result_artifacts: Vec<ArtifactRef>,
-    #[serde(default)]
-    pub blocker: Option<Value>,
-    #[serde(default)]
-    pub approval_id: Option<String>,
-    #[serde(default)]
-    pub pending_approval: Option<Value>,
-    #[serde(default)]
-    pub trace_id: Option<String>,
-    /// Set when a reaction or an event-driven agent submitted the task: `{kind, rule?, eventId, depth}`.
-    #[serde(default)]
-    pub origin: Option<Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClaimInfo {
-    pub task: TaskInfo,
-    pub lease: Lease,
-    pub fencing_token: u64,
-    pub authorization_token: String,
-    pub capability: Capability,
-    #[serde(default)]
-    pub authority: Value,
-}
 
 #[derive(Clone)]
 pub struct Client {
@@ -166,7 +115,7 @@ impl Client {
     }
 
     /// Raw request with retries on transport errors and 502/503/504/429. `idempotency_key` makes mutations safe to retry.
-    pub async fn raw(&self, method: Method, path: &str, body: Option<&Value>, idempotency_key: Option<&str>, if_match: Option<u64>) -> Result<Value> {
+    pub async fn raw(&self, method: Method, path: &str, body: Option<&Value>, idempotency_key: Option<&str>) -> Result<Value> {
         let url = format!("{}{}", self.base, path);
         let mut attempt = 0;
         loop {
@@ -177,9 +126,6 @@ impl Client {
                 .header("traceparent", somework_core::trace::TraceContext::new_root().traceparent());
             if let Some(key) = idempotency_key {
                 req = req.header("Idempotency-Key", key);
-            }
-            if let Some(rev) = if_match {
-                req = req.header("If-Match", format!("\"{rev}\""));
             }
             if let Some(b) = body {
                 req = req.json(b);
@@ -222,19 +168,19 @@ impl Client {
     }
 
     pub async fn get(&self, path: &str) -> Result<Value> {
-        self.raw(Method::GET, path, None, None, None).await
+        self.raw(Method::GET, path, None, None).await
     }
 
     pub async fn post(&self, path: &str, body: &Value) -> Result<Value> {
-        self.raw(Method::POST, path, Some(body), None, None).await
+        self.raw(Method::POST, path, Some(body), None).await
     }
 
     pub async fn post_idem(&self, path: &str, body: &Value, key: &str) -> Result<Value> {
-        self.raw(Method::POST, path, Some(body), Some(key), None).await
+        self.raw(Method::POST, path, Some(body), Some(key)).await
     }
 
     pub async fn put(&self, path: &str, body: &Value) -> Result<Value> {
-        self.raw(Method::PUT, path, Some(body), None, None).await
+        self.raw(Method::PUT, path, Some(body), None).await
     }
 
     pub async fn typed<T: DeserializeOwned>(&self, mut v: Value) -> Result<T> {
@@ -266,81 +212,6 @@ impl Client {
 
     pub async fn runtime_heartbeat(&self) -> Result<Value> {
         self.post("/v1/runtimes/heartbeat", &json!({})).await
-    }
-
-    // ---- tasks --------------------------------------------------------------------------------------------------------
-    pub async fn submit_task(&self, req: &Value, idempotency_key: Option<&str>) -> Result<TaskInfo> {
-        let v = self.raw(Method::POST, "/v1/tasks", Some(req), idempotency_key, None).await?;
-        self.typed(v).await
-    }
-
-    /// Submits a task that reacts to `event_id`, an event this principal received. The domain verifies the event and records
-    /// it (with its depth) as the task's origin.
-    pub async fn submit_task_for_event(&self, event_id: &str, req: &Value, idempotency_key: Option<&str>) -> Result<TaskInfo> {
-        let mut body = req.clone();
-        body["causedByEvent"] = json!(event_id);
-        self.submit_task(&body, idempotency_key).await
-    }
-
-    pub async fn get_task(&self, task_id: &str) -> Result<TaskInfo> {
-        let v = self.get(&format!("/v1/tasks/{task_id}")).await?;
-        self.typed(v).await
-    }
-
-    pub async fn claim_task(&self, task_id: &str, lease_seconds: Option<i64>) -> Result<ClaimInfo> {
-        let v = self.post(&format!("/v1/tasks/{task_id}/claim"), &json!({"leaseSeconds": lease_seconds})).await?;
-        self.typed(v).await
-    }
-
-    pub async fn heartbeat_task(&self, task_id: &str, fencing_token: u64, lease_seconds: Option<i64>) -> Result<Value> {
-        self.post(&format!("/v1/tasks/{task_id}/heartbeat"), &json!({"fencingToken": fencing_token, "leaseSeconds": lease_seconds})).await
-    }
-
-    pub async fn progress_task(&self, task_id: &str, body: &Value) -> Result<TaskInfo> {
-        let v = self.post(&format!("/v1/tasks/{task_id}/progress"), body).await?;
-        self.typed(v).await
-    }
-
-    pub async fn complete_task(&self, task_id: &str, fencing_token: u64, result: &Value, artifacts: &[ArtifactRef]) -> Result<TaskInfo> {
-        let v = self.post(&format!("/v1/tasks/{task_id}/complete"), &json!({"fencingToken": fencing_token, "result": result, "artifacts": artifacts})).await?;
-        self.typed(v).await
-    }
-
-    pub async fn fail_task(&self, task_id: &str, fencing_token: u64, failure: &Failure) -> Result<TaskInfo> {
-        let v = self.post(&format!("/v1/tasks/{task_id}/fail"), &json!({"fencingToken": fencing_token, "failure": failure})).await?;
-        self.typed(v).await
-    }
-
-    pub async fn cancel_task(&self, task_id: &str, reason: Option<&str>) -> Result<TaskInfo> {
-        let v = self.post(&format!("/v1/tasks/{task_id}/cancel"), &json!({"reason": reason})).await?;
-        self.typed(v).await
-    }
-
-    pub async fn ack_cancel(&self, task_id: &str, fencing_token: u64) -> Result<TaskInfo> {
-        let v = self.post(&format!("/v1/tasks/{task_id}/cancel"), &json!({"acknowledge": true, "fencingToken": fencing_token})).await?;
-        self.typed(v).await
-    }
-
-    pub async fn provide_input(&self, task_id: &str, data: &Value) -> Result<TaskInfo> {
-        let v = self.post(&format!("/v1/tasks/{task_id}/input"), &json!({"data": data})).await?;
-        self.typed(v).await
-    }
-
-    pub async fn next_tasks(&self, wait_seconds: u64) -> Result<Vec<Value>> {
-        let v = self.get(&format!("/v1/tasks/next?wait={wait_seconds}")).await?;
-        Ok(v["tasks"].as_array().cloned().unwrap_or_default())
-    }
-
-    /// Polls until the task reaches a terminal state or `timeout` elapses.
-    pub async fn wait_terminal(&self, task_id: &str, timeout: Duration) -> Result<TaskInfo> {
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            let t = self.get_task(task_id).await?;
-            if t.state.is_terminal() || tokio::time::Instant::now() >= deadline {
-                return Ok(t);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
     }
 
     // ---- messages & events --------------------------------------------------------------------------------------------
@@ -378,7 +249,7 @@ impl Client {
     }
 
     pub async fn delete_rule(&self, name: &str) -> Result<()> {
-        self.raw(Method::DELETE, &format!("/v1/rules/{name}"), None, None, None).await.map(|_| ())
+        self.raw(Method::DELETE, &format!("/v1/rules/{name}"), None, None).await.map(|_| ())
     }
 
     pub async fn pause_rule(&self, name: &str) -> Result<Value> {
@@ -391,18 +262,14 @@ impl Client {
 
     // ---- artifacts ----------------------------------------------------------------------------------------------------
     /// Full upload flow: begin -> PUT bytes with the grant -> complete (digest verification). Returns the verified ref.
-    pub async fn upload_artifact(
-        &self,
-        filename: &str,
-        media_type: &str,
-        classification: &str,
-        bytes: &[u8],
-        source_task_id: Option<&str>,
-    ) -> Result<ArtifactRef> {
+    pub async fn upload_artifact(&self, filename: &str, media_type: &str, classification: &str, bytes: &[u8]) -> Result<ArtifactRef> {
         use sha2::{Digest, Sha256};
         let sha = hex::encode(Sha256::digest(bytes));
         let grant = self
-            .post("/v1/artifacts/uploads", &json!({"filename": filename, "mediaType": media_type, "sizeBytes": bytes.len(), "sha256": sha, "classification": classification, "sourceTaskId": source_task_id}))
+            .post(
+                "/v1/artifacts/uploads",
+                &json!({"filename": filename, "mediaType": media_type, "sizeBytes": bytes.len(), "sha256": sha, "classification": classification}),
+            )
             .await?;
         let artifact_id = grant["artifactId"].as_str().unwrap_or_default().to_string();
         let version = grant["version"].as_u64().unwrap_or(1);
@@ -453,11 +320,9 @@ impl Client {
     }
 
     /// Downloads and digest-verifies an artifact (the caller never trusts the transport).
-    pub async fn download_artifact(&self, artifact_id: &str, version: u64, task: Option<(&str, u64)>) -> Result<Vec<u8>> {
+    pub async fn download_artifact(&self, artifact_id: &str, version: u64) -> Result<Vec<u8>> {
         use sha2::{Digest, Sha256};
-        let grant = self
-            .post(&format!("/v1/artifacts/{artifact_id}/{version}/download-grants"), &json!({"taskId": task.map(|t| t.0), "fencingToken": task.map(|t| t.1)}))
-            .await?;
+        let grant = self.post(&format!("/v1/artifacts/{artifact_id}/{version}/download-grants"), &json!({})).await?;
         let resp = self.http.get(grant["url"].as_str().unwrap_or_default()).send().await.map_err(|e| ClientError::transport(e.to_string()))?;
         let bytes = resp.bytes().await.map_err(|e| ClientError::transport(e.to_string()))?;
         let expected = grant["artifact"]["digest"]["value"].as_str().unwrap_or_default();

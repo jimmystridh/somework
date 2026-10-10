@@ -84,11 +84,8 @@ pub async fn start_with_domain(domain: Domain, cfg: ServerConfig) -> Result<Runt
     }
 
     let wired = wiring::wire(&domain, &cfg, &shutdown).await?;
-    state.streams = wired.streams.clone();
     state.connection = wired.connection.clone();
-    state.gateway = wired.gateway.clone();
     let mut background = wired.tasks;
-    background.push(domain.spawn_reactions(shutdown.clone()));
     background.push(domain.spawn_maintenance(Duration::from_millis(cfg.domain.maintenance_interval_ms), shutdown.clone()));
     if let Some(handle) = crate::backup::spawn_scheduled(&domain, &cfg, shutdown.clone()) {
         background.push(handle);

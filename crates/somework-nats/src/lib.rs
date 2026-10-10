@@ -8,7 +8,6 @@ mod metrics;
 mod plane;
 mod presence;
 mod sink;
-mod streams;
 
 use std::sync::Arc;
 
@@ -21,11 +20,9 @@ pub use config::NatsConfig;
 pub use connection::NatsConnectionProvider;
 pub use plane::{ConsumerKey, NatsPlane, connect};
 pub use sink::NatsSink;
-pub use streams::{ChunkKind, ChunkPublisher, NatsStreamSource, StreamChunk};
 
 pub struct NatsHandle {
     pub plane: Arc<NatsPlane>,
-    pub stream_source: Arc<NatsStreamSource>,
     pub connection: Arc<NatsConnectionProvider>,
     pub tasks: Vec<JoinHandle<()>>,
 }
@@ -44,10 +41,5 @@ pub async fn start(domain: Domain, cfg: NatsConfig, shutdown: CancellationToken)
     if presence {
         tasks.push(presence::spawn_presence_listener(plane.clone(), shutdown.clone()));
     }
-    Ok(NatsHandle {
-        stream_source: Arc::new(NatsStreamSource::new(plane.clone())),
-        connection: Arc::new(NatsConnectionProvider::new(plane.clone())),
-        plane,
-        tasks,
-    })
+    Ok(NatsHandle { connection: Arc::new(NatsConnectionProvider::new(plane.clone())), plane, tasks })
 }

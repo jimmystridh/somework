@@ -155,18 +155,15 @@ impl Stack {
         Arc::new(key)
     }
 
-    /// An enrolled agent without a catalog entry (a pure requester).
-    pub async fn requester(&self, id: &str, caps: &[&str], side_effects: somework_core::contracts::SideEffects) -> Agent {
-        let mut perms = Permissions::default_agent();
-        perms.capabilities = caps.iter().map(|c| c.to_string()).collect();
-        perms.side_effects_at_most = Some(side_effects);
-        let key = self.create_principal(ActorKind::Agent, id, perms).await;
+    /// An enrolled agent without a catalog entry.
+    pub async fn requester(&self, id: &str) -> Agent {
+        let key = self.create_principal(ActorKind::Agent, id, Permissions::default_agent()).await;
         let client = Client::assertion(&self.url, (*key).clone(), "agent", id, &self.domain_id).with_runtime(ids::runtime_instance_id());
         client.register_runtime(json!({})).await.ok(); // requesters without a card cannot register runtimes; that is fine
         Agent { id: id.into(), key, client, base: self.url.clone(), domain_id: self.domain_id.clone() }
     }
 
-    /// Enrols a worker agent, registers its card, has an administrator approve it and registers a runtime.
+    /// Enrols an agent, registers its card, has an administrator approve it and registers a runtime.
     pub async fn worker(&self, id: &str, caps: Vec<Value>, perms: Permissions) -> Agent {
         let key = self.create_principal(ActorKind::Agent, id, perms).await;
         let bootstrap = Client::assertion(&self.url, (*key).clone(), "agent", id, &self.domain_id);

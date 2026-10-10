@@ -1,61 +1,39 @@
-use std::time::Duration;
-
 use serde_json::json;
-use somework_core::{contracts::SideEffects, fsm::TaskState};
 use somework_domain::policy::Permissions;
 use somework_testkit::{Stack, capability};
 
-fn worker_perms(se: SideEffects) -> Permissions {
-    let mut p = Permissions::default_agent();
-    p.side_effects_at_most = Some(se);
-    p
-}
-
 #[tokio::test]
-async fn discover_submit_claim_complete_over_http() {
+async fn discover_message_and_read_the_answer_over_http() {
     let stack = Stack::start().await;
-    let worker = stack
+    let reviewer = stack
         .worker(
             "agent/reviewer",
             vec![capability("code.review", "2.1", "read", "Review pull requests for correctness and security")],
-            worker_perms(SideEffects::Read),
+            Permissions::default_agent(),
         )
         .await;
-    let author = stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
+    let author = stack.requester("agent/author").await;
 
     // discovery by natural language, without knowing the agent id
     let found = author.client.catalog_search(&json!({"query": "Review a pull request for correctness and security", "limit": 5})).await.unwrap();
     assert_eq!(found["matches"][0]["agentId"], "agent/reviewer");
     assert!(found["traceId"].as_str().unwrap().starts_with("00-"));
 
-    let task = author
-        .client
-        .submit_task(
-            &json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": "billing/import-service", "commit": "61a8d52"}}),
-            Some("review-pr-729"),
-        )
-        .await
-        .unwrap();
-    assert_eq!(task.state, TaskState::Queued);
-    // idempotent retry returns the same task
-    let again = author
-        .client
-        .submit_task(
-            &json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": "billing/import-service", "commit": "61a8d52"}}),
-            Some("review-pr-729"),
-        )
-        .await
-        .unwrap();
-    assert_eq!(again.task_id, task.task_id);
+    let ask = json!({"recipients": [{"kind": "agent", "id": "agent/reviewer"}], "content": {"mediaType": "text/plain", "data": "Please review PR 729"}});
+    let sent = author.client.post_idem("/v1/messages", &ask, "review-pr-729").await.unwrap();
+    let again = author.client.post_idem("/v1/messages", &ask, "review-pr-729").await.unwrap();
+    assert_eq!(again["messageId"], sent["messageId"], "an idempotent retry returns the same message");
+    let conversation = sent["conversationId"].as_str().unwrap().to_string();
 
-    let candidates = worker.client.next_tasks(1).await.unwrap();
-    assert_eq!(candidates[0]["taskId"], task.task_id);
-    let claim = worker.client.claim_task(&task.task_id, Some(30)).await.unwrap();
-    worker.client.progress_task(&task.task_id, &json!({"fencingToken": claim.fencing_token, "message": "analyzing"})).await.unwrap();
-    worker.client.complete_task(&task.task_id, claim.fencing_token, &json!({"verdict": "approve"}), &[]).await.unwrap();
+    let inbox = reviewer.client.get("/v1/inbox?unread=true").await.unwrap();
+    assert_eq!(inbox["messages"][0]["messageId"], sent["messageId"]);
+    let (events, _) = reviewer.client.events(0, 0).await.unwrap();
+    assert!(events.iter().any(|e| e["type"] == "message.created" && e["wake"] == true), "a directed message wakes its recipient");
 
-    let done = author.client.wait_terminal(&task.task_id, Duration::from_secs(5)).await.unwrap();
-    assert_eq!(done.state, TaskState::Succeeded);
-    assert_eq!(done.result.unwrap()["verdict"], "approve");
+    let answer = json!({"conversationId": conversation, "recipients": [{"kind": "agent", "id": "agent/author"}], "content": {"mediaType": "text/plain", "data": "approve"}});
+    reviewer.client.post("/v1/messages", &answer).await.unwrap();
+    let page = author.client.get(&format!("/v1/conversations/{conversation}/messages")).await.unwrap();
+    assert_eq!(page["messages"].as_array().unwrap().len(), 2);
+    assert_eq!(page["messages"][1]["content"]["data"], "approve");
     stack.stop().await;
 }

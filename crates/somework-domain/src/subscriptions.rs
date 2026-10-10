@@ -15,7 +15,7 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CreateSubscription {
-    /// `topic`, `capability_queue`, `conversation` or `task`.
+    /// `topic` or `conversation`.
     pub kind: Option<String>,
     pub selector: Option<String>,
     /// Required: whether matching events may wake the subscriber's runtime.
@@ -52,35 +52,17 @@ impl Domain {
             let kind = req.kind.clone().ok_or_else(|| Error::invalid("kind is required"))?;
             let selector = req.selector.clone().filter(|s| !s.is_empty()).ok_or_else(|| Error::invalid("selector is required"))?;
             let wake = req.wake_on_match.ok_or_else(|| Error::new(ErrorCode::ValidationFailed, "wakeOnMatch must be stated explicitly (true or false); subscriptions have no implicit wake behaviour"))?;
-            if !matches!(kind.as_str(), "topic" | "capability_queue" | "conversation" | "task") {
-                return Err(Error::invalid("kind must be topic, capability_queue, conversation or task"));
+            if !matches!(kind.as_str(), "topic" | "conversation") {
+                return Err(Error::invalid("kind must be topic or conversation"));
             }
             let this = self.clone();
             let ctx = ctx.clone();
             self.write(move |tx| {
                 Box::pin(async move {
                     let conn = &mut **tx;
-                    let action = if kind == "task" || kind == "capability_queue" { Action::TaskRead } else { Action::MessageRead };
-                    let decision = this.enforce(conn, &ctx, AuthzRequest::action(action).resource(format!("{kind}://{selector}"))).await?;
-                    match kind.as_str() {
-                        "conversation" => {
-                            if !this.is_member(conn, &selector, &ctx.actor.principal_id).await? {
-                                return Err(Error::not_found("conversation"));
-                            }
-                        }
-                        "task" => {
-                            this.require_task_participant(conn, &ctx, &selector).await?;
-                        }
-                        "capability_queue" => {
-                            if ctx.actor.kind != ActorKind::Agent {
-                                return Err(Error::denied("only agents subscribe to capability queues"));
-                            }
-                            let offers: Option<i64> = sqlx::query_scalar("SELECT 1 FROM agent_capabilities WHERE agent_id = ? AND (capability_id = ? OR ? LIKE REPLACE(capability_id, '*', '%'))").bind(&ctx.actor.id).bind(&selector).bind(&selector).fetch_optional(&mut *conn).await.db()?;
-                            if offers.is_none() {
-                                return Err(Error::denied("the agent does not offer that capability"));
-                            }
-                        }
-                        _ => {}
+                    let decision = this.enforce(conn, &ctx, AuthzRequest::action(Action::MessageRead).resource(format!("{kind}://{selector}"))).await?;
+                    if kind == "conversation" && !this.is_member(conn, &selector, &ctx.actor.principal_id).await? {
+                        return Err(Error::not_found("conversation"));
                     }
                     let id = ids::subscription_id();
                     sqlx::query("INSERT INTO subscriptions(subscription_id, domain_id, principal_id, kind, selector, wake, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'active', ?)")

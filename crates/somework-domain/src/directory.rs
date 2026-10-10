@@ -2,10 +2,9 @@
 
 use serde::Serialize;
 use somework_core::Error;
-use sqlx::Row;
 
 use crate::{
-    db::{DbResultExt, icol, scol, scol_opt},
+    db::{DbResultExt, icol, scol},
     domain::Domain,
 };
 
@@ -22,14 +21,6 @@ pub struct AgentSubscription {
     pub subscription_id: String,
     pub agent_id: String,
     pub wake: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskFence {
-    pub state: String,
-    pub fencing_token: i64,
-    pub runtime_instance_id: Option<String>,
 }
 
 impl Domain {
@@ -63,19 +54,5 @@ impl Domain {
             .iter()
             .map(|r| AgentSubscription { subscription_id: scol(r, "subscription_id"), agent_id: scol(r, "external_id"), wake: icol(r, "wake") != 0 })
             .collect())
-    }
-
-    /// Canonical fencing state of a task, used to validate ephemeral stream chunks (STR-01).
-    pub async fn task_fence(&self, task_id: &str) -> Result<Option<TaskFence>, Error> {
-        let row = sqlx::query("SELECT state, fencing_counter, lease_runtime_instance_id FROM tasks WHERE task_id = ?")
-            .bind(task_id)
-            .fetch_optional(self.db.pool())
-            .await
-            .db()?;
-        Ok(row.map(|r| TaskFence {
-            state: scol(&r, "state"),
-            fencing_token: r.get::<i64, _>("fencing_counter"),
-            runtime_instance_id: scol_opt(&r, "lease_runtime_instance_id"),
-        }))
     }
 }

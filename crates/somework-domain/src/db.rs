@@ -25,7 +25,7 @@ pub fn db_error(err: sqlx::Error) -> Error {
         sqlx::Error::Database(db) => {
             let msg = db.message().to_string();
             if msg.contains("immutable") || msg.contains("append-only") {
-                return Error::new(ErrorCode::TaskTerminal, msg);
+                return Error::new(ErrorCode::Conflict, msg);
             }
             if db.is_unique_violation() {
                 return Error::new(ErrorCode::Conflict, format!("unique constraint violated: {msg}"));

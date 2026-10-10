@@ -9,7 +9,7 @@ pub enum MatrixProfile {
     AuditableInternal,
     /// E2EE rooms with an authorized audit observer device; the platform emits metadata-only projections.
     EncryptedWithObserver,
-    /// E2EE without a content observer; the domain retains task/audit metadata only.
+    /// E2EE without a content observer; the domain retains audit metadata only.
     MetadataOnlyPrivate,
 }
 
@@ -29,16 +29,11 @@ pub struct DomainConfig {
     pub artifact_quota_bytes: u64,
     pub message_retention_days: i64,
     pub audit_retention_days: i64,
-    pub default_lease_seconds: i64,
-    pub max_lease_seconds: i64,
-    pub max_task_attempts: u64,
     pub idempotency_ttl_hours: i64,
     pub runtime_ttl_seconds: i64,
-    pub grant_ttl_seconds: i64,
     pub assertion_max_age_seconds: i64,
     pub download_grant_ttl_seconds: i64,
     pub upload_grant_ttl_seconds: i64,
-    pub approval_ttl_seconds: i64,
     pub max_agent_hops: u32,
     pub matrix_profile: MatrixProfile,
     pub audit_plaintext: bool,
@@ -65,16 +60,11 @@ impl DomainConfig {
             artifact_quota_bytes: 10 * 1024 * 1024 * 1024 * 1024,
             message_retention_days: 90,
             audit_retention_days: 365,
-            default_lease_seconds: 60,
-            max_lease_seconds: 900,
-            max_task_attempts: 5,
             idempotency_ttl_hours: 24,
             runtime_ttl_seconds: 45,
-            grant_ttl_seconds: 900,
             assertion_max_age_seconds: 300,
             download_grant_ttl_seconds: 120,
             upload_grant_ttl_seconds: 900,
-            approval_ttl_seconds: 3600,
             max_agent_hops: 16,
             matrix_profile: MatrixProfile::AuditableInternal,
             audit_plaintext: true,
@@ -96,6 +86,3 @@ impl DomainConfig {
 
 pub const SINK_NATS: &str = "nats";
 pub const SINK_MATRIX: &str = "matrix";
-pub const SINK_GATEWAY: &str = "gateway";
-/// Always on: reactions are rows of the outbox so task creation is retried and exactly-once.
-pub const SINK_REACTION: &str = "reaction";

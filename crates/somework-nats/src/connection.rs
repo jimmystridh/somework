@@ -66,8 +66,6 @@ impl ConnectionProvider for NatsConnectionProvider {
         }
         let agent = &ctx.actor.id;
         self.plane.ensure_agent(agent).await;
-        let directory = self.plane.domain.agent_directory().await?;
-        let pool = directory.iter().find(|e| &e.agent_id == agent).map(|e| e.pool_id.clone()).unwrap_or_else(|| agent.clone());
         Ok(json!({
             "nats": {
                 "url": self.plane.cfg.agent_url(),
@@ -75,12 +73,9 @@ impl ConnectionProvider for NatsConnectionProvider {
                 "password": self.plane.generator.secret.password_for(agent),
                 "inboxStream": subjects::STREAM_INBOX,
                 "inboxConsumer": subjects::inbox_consumer(agent),
-                "workStream": subjects::STREAM_WORK,
-                "poolConsumers": [{"poolId": pool, "stream": subjects::STREAM_WORK, "consumer": subjects::pool_consumer(&pool), "filter": subjects::work_pool(&pool)}],
                 "subscriptionStream": subjects::STREAM_SUBSCRIPTIONS,
                 "subscriptionConsumer": subscription_consumer(agent),
                 "presenceSubject": subjects::presence(agent),
-                "streamSubjectPrefix": "somework.stream.task",
             },
             "pollOnly": false,
         }))

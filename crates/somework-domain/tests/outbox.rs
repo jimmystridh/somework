@@ -8,10 +8,10 @@ use std::{
 use async_trait::async_trait;
 use common::*;
 use serde_json::{Value, json};
-use somework_core::contracts::{ActorKind, SideEffects};
+use somework_core::contracts::{ActorKind, MessageContent};
 use somework_domain::{
+    messages::{MemberRef, SendMessage},
     outbox::{OutboxConfig, OutboxItem, OutboxSink, SinkError},
-    tasks::{ClaimRequest, ProgressRequest},
 };
 
 #[derive(Clone, Default)]
@@ -52,34 +52,35 @@ fn fast_cfg() -> OutboxConfig {
 
 async fn env_with_sinks() -> (Env, Principal, Principal) {
     let env = Env::with_config(|c| c.outbox_sinks = vec!["nats".into(), "matrix".into()]).await;
-    let worker = env.worker("agent/reviewer", vec![capability("code.review", "2.1", "read", "Review")], worker_permissions(SideEffects::Read)).await;
-    let caller = env.create_principal(ActorKind::Agent, "agent/author", Some(caller_permissions(&["code.review"], SideEffects::Read))).await;
+    let worker = env.create_principal(ActorKind::Agent, "agent/reviewer", Some(agent_permissions())).await;
+    let caller = env.create_principal(ActorKind::Agent, "agent/author", Some(agent_permissions())).await;
     (env, worker, caller)
 }
 
+fn hello(text: &str) -> SendMessage {
+    SendMessage {
+        recipients: vec![MemberRef { kind: ActorKind::Agent, id: "agent/reviewer".into() }],
+        content: Some(MessageContent { media_type: "text/plain".into(), data: json!(text) }),
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
-async fn task_creation_atomically_persists_task_event_and_outbox_rows() {
+async fn sending_a_message_atomically_persists_the_event_and_the_outbox_rows() {
     let (env, _worker, caller) = env_with_sinks().await;
-    let resp = env.domain.submit_task(&env.ctx(&caller).await, submit("code.review", "2.1")).await.unwrap();
-    let task_id = resp.task.task.task_id;
+    let sent = env.domain.send_message(&env.ctx(&caller).await, hello("hi")).await.unwrap();
     let rows = sqlx::query_as::<_, (String, String, String)>("SELECT sink, subject, payload FROM outbox_events ORDER BY id")
         .fetch_all(env.domain.db.pool())
         .await
         .unwrap();
-    let work: Vec<_> = rows
-        .iter()
-        .filter(|(s, subj, _)| s == "nats" && subj == "somework.work.pool.agent-2freviewer".replace("agent-2freviewer", "agent~2freviewer").as_str())
-        .collect();
-    assert_eq!(work.len(), 1, "one work-ready notification for the agent's pool: {rows:?}");
-    let ready: Value = serde_json::from_str(&work[0].2).unwrap();
-    assert_eq!(ready["taskId"], task_id.as_str());
-    assert_eq!(ready["revision"], 2);
-    assert_eq!(ready["capabilityId"], "code.review");
-    assert_eq!(ready["capabilityVersion"], "2.1");
-    assert_eq!(ready["poolId"], "agent/reviewer");
-    assert!(ready["traceparent"].as_str().unwrap().starts_with("00-"));
-    assert!(ready.get("input").is_none(), "a ready notification carries only what is needed to claim");
-    assert!(rows.iter().any(|(s, subj, _)| s == "nats" && subj.starts_with("somework.event.task.")));
+    let inbox: Vec<_> = rows.iter().filter(|(s, subj, _)| s == "nats" && subj == "somework.inbox.agent~2freviewer").collect();
+    assert_eq!(inbox.len(), 1, "one inbox notification for the recipient: {rows:?}");
+    let notice: Value = serde_json::from_str(&inbox[0].2).unwrap();
+    assert_eq!(notice["messageId"], sent.envelope.message_id.as_str());
+    assert_eq!(notice["wake"], true);
+    assert_eq!(notice["sender"], "agent/author");
+    assert!(notice["traceparent"].as_str().unwrap().starts_with("00-"));
+    assert!(notice.get("content").is_none(), "a notification carries only what is needed to fetch the message");
     assert!(rows.iter().any(|(s, _, _)| s == "matrix"));
 }
 
@@ -87,28 +88,24 @@ async fn task_creation_atomically_persists_task_event_and_outbox_rows() {
 async fn failed_transactions_leave_no_outbox_rows() {
     let (env, _worker, caller) = env_with_sinks().await;
     let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbox_events").fetch_one(env.domain.db.pool()).await.unwrap();
-    let mut bad = submit("code.review", "2.1");
-    bad.input = Some(json!({"commit": "missing required repository"}));
-    assert!(env.domain.submit_task(&env.ctx(&caller).await, bad).await.is_err());
+    let too_big = "x".repeat(env.domain.inline_limit() + 1);
+    assert!(env.domain.send_message(&env.ctx(&caller).await, hello(&too_big)).await.is_err());
     let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbox_events").fetch_one(env.domain.db.pool()).await.unwrap();
     assert_eq!(before, after);
-    let tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks").fetch_one(env.domain.db.pool()).await.unwrap();
-    assert_eq!(tasks, 0);
+    let messages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages").fetch_one(env.domain.db.pool()).await.unwrap();
+    assert_eq!(messages, 0);
 }
 
 #[tokio::test]
 async fn runner_delivers_in_order_and_marks_rows_published() {
     let (env, _worker, caller) = env_with_sinks().await;
     for _ in 0..3 {
-        env.domain.submit_task(&env.ctx(&caller).await, submit("code.review", "2.1")).await.unwrap();
+        env.domain.send_message(&env.ctx(&caller).await, hello("hi")).await.unwrap();
     }
     let sink = RecordingSink { name: "nats", ..Default::default() };
     let report = env.domain.outbox_step(&sink, "w1", &fast_cfg()).await.unwrap();
-    assert!(report.published >= 6);
+    assert!(report.published >= 6, "{report:?}");
     let delivered = sink.delivered.lock().unwrap().clone();
-    // work-ready notifications are claimed first (dispatch latency); everything else follows in commit order
-    let first_other = delivered.iter().position(|i| !i.subject.starts_with("somework.work.")).unwrap_or(delivered.len());
-    assert!(delivered[first_other..].iter().all(|i| !i.subject.starts_with("somework.work.")), "work-ready rows are delivered ahead of the rest of the batch");
     // consumers rely on per-subject ordering: rows of one subject are always published in commit order
     let mut by_subject: std::collections::BTreeMap<&str, Vec<i64>> = Default::default();
     for item in &delivered {
@@ -129,7 +126,7 @@ async fn runner_delivers_in_order_and_marks_rows_published() {
 #[tokio::test]
 async fn transient_failures_retry_with_backoff_then_succeed() {
     let (env, _worker, caller) = env_with_sinks().await;
-    env.domain.submit_task(&env.ctx(&caller).await, submit("code.review", "2.1")).await.unwrap();
+    env.domain.send_message(&env.ctx(&caller).await, hello("hi")).await.unwrap();
     let sink = RecordingSink { name: "nats", fail_first: Arc::new(Mutex::new(2)), ..Default::default() };
     let cfg = fast_cfg();
     let first = env.domain.outbox_step(&sink, "w1", &cfg).await.unwrap();
@@ -148,7 +145,7 @@ async fn transient_failures_retry_with_backoff_then_succeed() {
 #[tokio::test]
 async fn poison_rows_are_dead_lettered_and_can_be_requeued() {
     let (env, _worker, caller) = env_with_sinks().await;
-    env.domain.submit_task(&env.ctx(&caller).await, submit("code.review", "2.1")).await.unwrap();
+    env.domain.send_message(&env.ctx(&caller).await, hello("hi")).await.unwrap();
     let sink = RecordingSink { name: "nats", fail_first: Arc::new(Mutex::new(100)), permanent: true, ..Default::default() };
     let cfg = fast_cfg();
     let report = env.domain.outbox_step(&sink, "w1", &cfg).await.unwrap();
@@ -167,7 +164,7 @@ async fn poison_rows_are_dead_lettered_and_can_be_requeued() {
 async fn two_runners_never_deliver_the_same_row_twice() {
     let (env, _worker, caller) = env_with_sinks().await;
     for _ in 0..10 {
-        env.domain.submit_task(&env.ctx(&caller).await, submit("code.review", "2.1")).await.unwrap();
+        env.domain.send_message(&env.ctx(&caller).await, hello("hi")).await.unwrap();
     }
     let a = RecordingSink { name: "nats", ..Default::default() };
     let b = RecordingSink { name: "nats", delivered: Arc::new(Mutex::new(vec![])), ..Default::default() };
@@ -192,43 +189,4 @@ async fn two_runners_never_deliver_the_same_row_twice() {
     assert!(ids_a.is_disjoint(&ids_b), "rows were claimed by exactly one runner");
     let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM outbox_events WHERE sink = 'nats'").fetch_one(env.domain.db.pool()).await.unwrap();
     assert_eq!((ids_a.len() + ids_b.len()) as i64, total);
-}
-
-#[tokio::test]
-async fn progress_projections_are_coalesced_for_the_matrix_sink() {
-    let (env, worker, caller) = env_with_sinks().await;
-    let task = env.domain.submit_task(&env.ctx(&caller).await, submit("code.review", "2.1")).await.unwrap().task.task.task_id;
-    let w = env.ctx(&worker).await;
-    env.domain.claim_task(&w, &task, ClaimRequest::default()).await.unwrap();
-    env.domain.progress_task(&w, &task, ProgressRequest { fencing_token: Some(1), ..Default::default() }).await.unwrap();
-    for i in 0..20 {
-        env.domain
-            .progress_task(&w, &task, ProgressRequest { fencing_token: Some(1), message: Some(format!("step {i}")), ..Default::default() })
-            .await
-            .unwrap();
-    }
-    let matrix = RecordingSink { name: "matrix", ..Default::default() };
-    let report = env.domain.outbox_step(&matrix, "m1", &fast_cfg()).await.unwrap();
-    assert!(report.superseded >= 19, "{report:?}");
-    let progress: Vec<_> =
-        matrix.delivered.lock().unwrap().iter().filter(|i| i.coalesce_key.as_deref().is_some_and(|k| k.ends_with(":progress"))).cloned().collect();
-    assert_eq!(progress.len(), 1, "only the newest progress row is projected");
-    assert_eq!(progress[0].payload["revision"], progress[0].payload["revision"]);
-}
-
-#[tokio::test]
-async fn lost_stream_state_is_rebuilt_from_canonical_queued_tasks() {
-    let (env, _worker, caller) = env_with_sinks().await;
-    let a = env.domain.submit_task(&env.ctx(&caller).await, submit("code.review", "2.1")).await.unwrap().task.task.task_id;
-    let sink = RecordingSink { name: "nats", ..Default::default() };
-    env.domain.outbox_step(&sink, "w1", &fast_cfg()).await.unwrap();
-    let before = sink.delivered.lock().unwrap().len();
-    // JetStream loses everything; canonical state still has the queued task
-    assert_eq!(env.domain.republish_queued_tasks().await.unwrap(), 1);
-    env.domain.outbox_step(&sink, "w1", &fast_cfg()).await.unwrap();
-    let delivered = sink.delivered.lock().unwrap();
-    let ready: Vec<_> = delivered.iter().filter(|i| i.subject.starts_with("somework.work.pool.") && i.payload["taskId"] == a.as_str()).collect();
-    assert_eq!(ready.len(), 2, "the original notification and the rebuilt one");
-    assert!(delivered.len() > before);
-    assert_ne!(ready[0].dedupe_key, ready[1].dedupe_key, "the rebuilt notification is a new event, so JetStream does not dedupe it away");
 }

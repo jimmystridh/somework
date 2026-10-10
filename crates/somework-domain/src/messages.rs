@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use somework_core::{
     Error, ErrorCode,
     canonical::digest_json,
@@ -52,7 +52,6 @@ pub struct ConversationView {
     pub classification: String,
     pub created_by: String,
     pub parent_conversation_id: Option<String>,
-    pub task_id: Option<String>,
     pub members: Vec<MemberRef>,
     pub created_at: String,
 }
@@ -65,7 +64,6 @@ pub struct SendMessage {
     pub message_id: Option<String>,
     pub sender: Option<ActorRef>,
     pub conversation_id: Option<String>,
-    pub task_id: Option<String>,
     pub recipients: Vec<MemberRef>,
     pub content: Option<MessageContent>,
     pub correlation_id: Option<String>,
@@ -75,7 +73,6 @@ pub struct SendMessage {
     pub priority: Option<Priority>,
     pub trigger_mode: Option<TriggerMode>,
     pub artifacts: Vec<ArtifactRef>,
-    pub context_refs: Vec<ContextRef>,
     pub labels: BTreeMap<String, String>,
     pub traceparent: Option<String>,
     pub idempotency_key: Option<String>,
@@ -96,37 +93,6 @@ pub struct MessagePage {
     pub next_cursor: Option<i64>,
 }
 
-/// What an internal caller (tasks, context, approvals) needs to post a platform-emitted message.
-pub struct SystemMessage {
-    pub kind: MessageType,
-    pub conversation_id: Option<String>,
-    pub task_id: Option<String>,
-    pub recipients: Vec<(ActorRef, String)>,
-    pub content: Value,
-    pub media_type: &'static str,
-    pub trigger: Option<TriggerMode>,
-    pub causation_id: Option<String>,
-    pub artifacts: Vec<ArtifactRef>,
-    pub context_refs: Vec<ContextRef>,
-}
-
-impl SystemMessage {
-    pub fn new(kind: MessageType, content: Value) -> Self {
-        Self {
-            kind,
-            conversation_id: None,
-            task_id: None,
-            recipients: vec![],
-            content,
-            media_type: "application/json",
-            trigger: None,
-            causation_id: None,
-            artifacts: vec![],
-            context_refs: vec![],
-        }
-    }
-}
-
 fn conversation_from_row(row: &sqlx::sqlite::SqliteRow, members: Vec<MemberRef>) -> ConversationView {
     ConversationView {
         conversation_id: scol(row, "conversation_id"),
@@ -136,7 +102,6 @@ fn conversation_from_row(row: &sqlx::sqlite::SqliteRow, members: Vec<MemberRef>)
         classification: scol(row, "classification"),
         created_by: scol(row, "created_by"),
         parent_conversation_id: scol_opt(row, "parent_conversation_id"),
-        task_id: scol_opt(row, "task_id"),
         members,
         created_at: scol(row, "created_at"),
     }
@@ -303,10 +268,6 @@ impl Domain {
         .await
     }
 
-    pub(crate) async fn dm_conversation_pub(&self, conn: &mut SqliteConnection, ctx: &Ctx, other: &crate::auth::PrincipalView) -> Result<String, Error> {
-        self.dm_conversation(conn, ctx, other).await
-    }
-
     /// Deterministic direct-message conversation for a set of two principals.
     async fn dm_conversation(&self, conn: &mut SqliteConnection, ctx: &Ctx, other: &crate::auth::PrincipalView) -> Result<String, Error> {
         let mut pair = [ctx.actor.principal_id.clone(), other.principal_id.clone()];
@@ -338,6 +299,13 @@ impl Domain {
 
     /// `POST /v1/messages`
     pub async fn send_message(&self, ctx: &Ctx, req: SendMessage) -> Result<MessageRecord, Error> {
+        let sent = self.send_message_inner(ctx, req).await?;
+        // Chaos hook: the transaction is durable here; a crash now must still leave exactly one message after a retry.
+        self.failpoint("message.send.after_commit").await?;
+        Ok(sent)
+    }
+
+    async fn send_message_inner(&self, ctx: &Ctx, req: SendMessage) -> Result<MessageRecord, Error> {
         self.run(ctx, "message.send", async {
             let kind = req.kind.unwrap_or(MessageType::ChatMessage);
             let rules = taxonomy::rules(kind);
@@ -415,9 +383,7 @@ impl Domain {
                             return Err(Error::denied(format!("recipient {} is not cleared for {} conversations", r.id, conv.classification)));
                         }
                     }
-                    if let Some(task_id) = &req.task_id {
-                        this.require_task_participant(tx, &ctx, task_id).await?;
-                    }
+                    let artifacts = this.verify_message_artifacts(tx, &ctx, &conv.classification, &req.artifacts).await?;
 
                     let members = this.members_of(tx, &conversation_id).await?;
                     let envelope_recipients: Vec<crate::auth::PrincipalView> = if recipients.is_empty() {
@@ -474,7 +440,6 @@ impl Domain {
                         recipients: envelope_recipients.iter().map(|p| ActorRef { kind: p.kind, id: p.id.clone(), domain_id: this.cfg.domain_id.clone(), display_name: p.display_name.clone() }).collect(),
                         domain_id: this.cfg.domain_id.clone(),
                         conversation_id: Some(conversation_id.clone()),
-                        task_id: req.task_id.clone(),
                         correlation_id: req.correlation_id.clone(),
                         causation_id: req.causation_id.clone(),
                         reply_to: req.reply_to.clone(),
@@ -483,9 +448,8 @@ impl Domain {
                         priority: req.priority,
                         trigger_mode: effective_trigger,
                         content: content.clone(),
-                        artifacts: req.artifacts.clone(),
-                        context_refs: req.context_refs.clone(),
-                        authorization_token_id: ctx.actor.grant_jti.clone(),
+                        artifacts,
+                        authorization_token_id: None,
                         labels: req.labels.clone(),
                         traceparent: Some(ctx.trace.traceparent()),
                         idempotency_key: req.idempotency_key.clone().or_else(|| ctx.idempotency_key.clone()),
@@ -524,13 +488,12 @@ impl Domain {
         schema::validate_contract("MessageEnvelope", &value)?;
         let content_digest = digest_json(&serde_json::to_value(&envelope.content)?);
         let seq: i64 = sqlx::query_scalar(
-            "INSERT INTO messages(message_id, domain_id, conversation_id, task_id, type, sender_principal_id, trigger_mode, envelope, content_digest, idempotency_key, causation_id, hop_depth, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq",
+            "INSERT INTO messages(message_id, domain_id, conversation_id, type, sender_principal_id, trigger_mode, envelope, content_digest, idempotency_key, causation_id, hop_depth, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq",
         )
         .bind(&envelope.message_id)
         .bind(&self.cfg.domain_id)
         .bind(&envelope.conversation_id)
-        .bind(&envelope.task_id)
         .bind(taxonomy::type_name(envelope.kind))
         .bind(&ctx.actor.principal_id)
         .bind(envelope.trigger_mode.as_str())
@@ -554,7 +517,6 @@ impl Domain {
                 "messageId": envelope.message_id,
                 "messageType": taxonomy::type_name(envelope.kind),
                 "conversationId": envelope.conversation_id,
-                "taskId": envelope.task_id,
                 "sender": {"kind": kind_str(envelope.sender.kind), "id": envelope.sender.id},
                 "triggerMode": envelope.trigger_mode.as_str(),
             }),
@@ -562,15 +524,6 @@ impl Domain {
         .conversation(envelope.conversation_id.clone())
         .message(&envelope.message_id)
         .matrix();
-        if let Some(task_id) = &envelope.task_id {
-            spec.task_id = Some(task_id.clone());
-        }
-        if envelope.kind == MessageType::TaskStatus
-            && envelope.content.data.get("event").and_then(Value::as_str) == Some("progress")
-            && let Some(task_id) = &envelope.task_id
-        {
-            spec = spec.coalesce(format!("task:{task_id}:progress"));
-        }
         if let Some(topic) = envelope.labels.get("topic") {
             spec.topics.push(topic.clone());
         }
@@ -611,7 +564,7 @@ impl Domain {
                 json!({"messageId": envelope.message_id, "conversationId": conv, "messageType": taxonomy::type_name(envelope.kind)}),
             );
         }
-        if !matches!(envelope.kind, MessageType::StreamChunk | MessageType::PresenceChanged) {
+        if envelope.kind != MessageType::PresenceChanged {
             for r in recipients.iter().filter(|r| r.kind == ActorKind::Agent) {
                 let wake = woken.iter().any(|w| w.principal_id == r.principal_id);
                 spec = spec.nats(
@@ -621,8 +574,7 @@ impl Domain {
                         "messageId": envelope.message_id,
                         "messageType": taxonomy::type_name(envelope.kind),
                         "conversationId": envelope.conversation_id,
-                        "taskId": envelope.task_id,
-                        "wake": wake,
+                                "wake": wake,
                         "sender": envelope.sender.id,
                     }),
                 );
@@ -630,62 +582,6 @@ impl Domain {
         }
         self.emit(conn, ctx, spec).await?;
         Ok(MessageRecord { seq, envelope: envelope.clone() })
-    }
-
-    /// Posts a platform-emitted message (task status/result, context offers, approvals...).
-    pub(crate) async fn post_system_message(&self, conn: &mut SqliteConnection, ctx: &Ctx, msg: SystemMessage) -> Result<Option<MessageRecord>, Error> {
-        let Some(conversation_id) = msg.conversation_id.clone() else { return Ok(None) };
-        let rules = taxonomy::rules(msg.kind);
-        let trigger = msg.trigger.unwrap_or(rules.default_trigger);
-        if !rules.allowed_triggers.contains(&trigger) {
-            return Err(Error::internal(format!("platform attempted forbidden trigger {} for {}", trigger.as_str(), taxonomy::type_name(msg.kind))));
-        }
-        let mut principals = Vec::new();
-        for (actor, _) in &msg.recipients {
-            if let Some(p) = self.principal_by_label(conn, actor.kind, &actor.id).await? {
-                principals.push(p);
-            }
-        }
-        let members = self.members_of(conn, &conversation_id).await?;
-        if principals.is_empty() {
-            for (pid, _) in members.iter().filter(|(pid, _)| *pid != ctx.actor.principal_id) {
-                if let Some(p) = self.principal_by_id(conn, pid).await? {
-                    principals.push(p);
-                }
-            }
-        }
-        let recipients: Vec<ActorRef> = principals
-            .iter()
-            .map(|p| ActorRef { kind: p.kind, id: p.id.clone(), domain_id: self.cfg.domain_id.clone(), display_name: p.display_name.clone() })
-            .collect();
-        let recipients = if recipients.is_empty() { vec![ctx.actor.actor_ref()] } else { recipients };
-        let envelope = MessageEnvelope {
-            schema_version: SCHEMA_VERSION.into(),
-            message_id: ids::message_id(),
-            kind: msg.kind,
-            sender: ctx.actor.actor_ref(),
-            recipients,
-            domain_id: self.cfg.domain_id.clone(),
-            conversation_id: Some(conversation_id),
-            task_id: msg.task_id,
-            correlation_id: None,
-            causation_id: msg.causation_id,
-            reply_to: None,
-            created_at: self.now_ts(),
-            expires_at: None,
-            priority: None,
-            trigger_mode: trigger,
-            content: MessageContent { media_type: msg.media_type.into(), data: msg.content },
-            artifacts: msg.artifacts,
-            context_refs: msg.context_refs,
-            authorization_token_id: None,
-            labels: BTreeMap::new(),
-            traceparent: Some(ctx.trace.traceparent()),
-            idempotency_key: None,
-        };
-        let principals_for_delivery = if principals.is_empty() { vec![] } else { principals };
-        let record = self.insert_message(conn, ctx, &envelope, &principals_for_delivery, true, 0, &members).await?;
-        Ok(Some(record))
     }
 
     pub(crate) async fn message_by_id(&self, conn: &mut SqliteConnection, message_id: &str) -> Result<Option<MessageRecord>, Error> {
@@ -777,15 +673,13 @@ impl Domain {
     }
 
     /// Operator/audit view of a conversation. Plaintext is only shown when the domain policy allows it (AUD-03).
-    pub async fn audit_messages(&self, ctx: &Ctx, conversation_id: Option<&str>, task_id: Option<&str>, limit: i64) -> Result<Vec<MessageRecord>, Error> {
+    pub async fn audit_messages(&self, ctx: &Ctx, conversation_id: Option<&str>, limit: i64) -> Result<Vec<MessageRecord>, Error> {
         self.enforce_read(ctx, AuthzRequest::new("audit.read")).await?;
         let mut conn = self.db.pool().acquire().await.db()?;
         let policy = self.active_policy(&mut conn).await?;
-        let rows = sqlx::query("SELECT seq, envelope, content_digest FROM messages WHERE (? IS NULL OR conversation_id = ?) AND (? IS NULL OR task_id = ?) ORDER BY seq ASC LIMIT ?")
+        let rows = sqlx::query("SELECT seq, envelope, content_digest FROM messages WHERE (? IS NULL OR conversation_id = ?) ORDER BY seq ASC LIMIT ?")
             .bind(conversation_id)
             .bind(conversation_id)
-            .bind(task_id)
-            .bind(task_id)
             .bind(limit.clamp(1, 1000))
             .fetch_all(&mut *conn)
             .await

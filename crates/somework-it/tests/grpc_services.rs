@@ -1,12 +1,10 @@
-//! Smoke coverage of the remaining gRPC services: messages, contexts, artifacts, delegation.
+//! Smoke coverage of the remaining gRPC services: messages and artifacts.
 
 mod grpc_common;
 
 use grpc_common::*;
-use serde_json::json;
 use sha2::{Digest, Sha256};
 use somework_api::grpc::{pb, struct_to_json};
-use somework_core::contracts::SideEffects;
 use tonic::Code;
 
 #[tokio::test]
@@ -61,7 +59,7 @@ async fn messages_send_and_list_with_trigger_rules() {
     expect_err(
         g.messages(&ac)
             .send(pb::SendMessageRequest {
-                r#type: "task.result".into(),
+                r#type: "artifact.published".into(),
                 recipients: to_worker,
                 media_type: "text/plain".into(),
                 data: Some(Default::default()),
@@ -80,7 +78,7 @@ async fn messages_send_and_list_with_trigger_rules() {
 }
 
 #[tokio::test]
-async fn context_pack_create_offer_accept_and_artifact_roundtrip() {
+async fn an_artifact_is_uploaded_verified_and_attached_to_a_message() {
     let g = GrpcStack::start().await;
     let (worker, author) = g.review_pair().await;
     let (wc, ac) = (Creds::agent(&worker), Creds::agent(&author));
@@ -111,19 +109,11 @@ async fn context_pack_create_offer_accept_and_artifact_roundtrip() {
         .unwrap()
         .into_inner();
     assert_eq!(meta.sha256, sha);
-    let fetched = g
-        .artifacts(&ac)
-        .get_metadata(pb::GetArtifactRequest { artifact_id: grant.artifact_id.clone(), version: grant.version, ..Default::default() })
-        .await
-        .unwrap()
-        .into_inner();
+    let fetched =
+        g.artifacts(&ac).get_metadata(pb::GetArtifactRequest { artifact_id: grant.artifact_id.clone(), version: grant.version }).await.unwrap().into_inner();
     assert_eq!(fetched.size_bytes, bytes.len() as u64);
-    let download = g
-        .artifacts(&ac)
-        .get_download(pb::GetDownloadRequest { artifact_id: grant.artifact_id.clone(), version: grant.version, ..Default::default() })
-        .await
-        .unwrap()
-        .into_inner();
+    let download =
+        g.artifacts(&ac).get_download(pb::GetDownloadRequest { artifact_id: grant.artifact_id.clone(), version: grant.version }).await.unwrap().into_inner();
     assert_eq!(reqwest::get(&download.url).await.unwrap().bytes().await.unwrap().to_vec(), bytes);
     // a digest that does not match the uploaded bytes is rejected before the artifact becomes usable
     let bad = g
@@ -145,143 +135,41 @@ async fn context_pack_create_offer_accept_and_artifact_roundtrip() {
         "integrity_failure",
     );
 
-    // context pack: create (digest computed), manifest view, offer, accept
-    let pack = json!({
-        "objective": "Verify the date-parsing hypothesis",
-        "currentState": {"summary": "reproduced", "completed": ["repro"], "remaining": ["patch"]},
-        "facts": [{"statement": "repro fails at 61a8d52", "confidence": 1.0, "assertedBy": {"kind": "agent", "id": "agent/author", "domainId": "development"}}],
-        "requestedContinuation": {"mode": "consultation", "instruction": "review the hypothesis"},
-        "security": {"classification": "internal", "allowedDomains": ["development"], "instructionsTrusted": false},
-        "artifacts": [struct_to_json(meta.artifact.clone().unwrap())]
-    });
-    let record = g.contexts(&ac).create(pb::CreateContextPackRequest { pack: Some(struct_of(pack)) }).await.unwrap().into_inner();
-    assert_eq!(record.version, 1);
-    assert_eq!(record.digest.len(), 64);
-    let offer = g
-        .contexts(&ac)
-        .offer(pb::OfferContextRequest {
-            context_pack_id: record.context_pack_id.clone(),
-            version: 1,
-            to: Some(pb::Member { kind: "agent".into(), id: "agent/reviewer".into() }),
-            sections: vec!["facts".into()],
+    // attach it to a message: the receiver reads the reference and downloads the same bytes
+    let sent = g
+        .messages(&ac)
+        .send(pb::SendMessageRequest {
+            recipients: vec![pb::Member { kind: "agent".into(), id: "agent/reviewer".into() }],
+            media_type: "text/plain".into(),
+            data: Some(prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("see the repro".into())) }),
+            artifacts: vec![meta.artifact.clone().unwrap()],
             ..Default::default()
         })
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(offer.status, "pending");
-    assert_eq!(offer.mode, "consultation");
-
-    // the receiver sees the manifest, plus only the sections the offerer disclosed
-    let manifest = g
-        .contexts(&wc)
-        .get(pb::GetContextPackRequest { context_pack_id: record.context_pack_id.clone(), version: 1, ..Default::default() })
-        .await
-        .unwrap()
-        .into_inner();
-    assert!(manifest.withheld_sections.is_empty());
-    let facts = g
-        .contexts(&wc)
-        .get(pb::GetContextPackRequest { context_pack_id: record.context_pack_id.clone(), version: 1, sections: vec!["facts".into()], ..Default::default() })
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(facts.disclosed_sections, ["facts"]);
-    let decisions = g
-        .contexts(&wc)
-        .get(pb::GetContextPackRequest {
-            context_pack_id: record.context_pack_id.clone(),
-            version: 1,
-            sections: vec!["decisions".into()],
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(decisions.withheld_sections, ["decisions"]);
-
-    let accepted = g
-        .contexts(&wc)
-        .accept(pb::AcceptContextRequest {
-            context_pack_id: record.context_pack_id.clone(),
-            version: 1,
-            offer_id: offer.offer_id.clone(),
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(accepted.offer.unwrap().status, "accepted");
+    let page =
+        g.messages(&wc).list(pb::ListMessagesRequest { conversation_id: sent.conversation_id.clone(), ..Default::default() }).await.unwrap().into_inner();
+    let attached = struct_to_json(page.messages[0].envelope.clone().unwrap())["artifacts"][0].clone();
+    assert_eq!(attached["artifactId"], grant.artifact_id.as_str());
+    let seen =
+        g.artifacts(&wc).get_download(pb::GetDownloadRequest { artifact_id: grant.artifact_id.clone(), version: grant.version }).await.unwrap().into_inner();
+    assert_eq!(reqwest::get(&seen.url).await.unwrap().bytes().await.unwrap().to_vec(), bytes);
+    // a reference to something that was never uploaded is refused
+    let mut unknown = meta.artifact.clone().unwrap();
+    unknown.fields.insert("artifactId".into(), prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("art_missing".into())) });
     expect_err(
-        g.contexts(&wc)
-            .accept(pb::AcceptContextRequest { context_pack_id: record.context_pack_id, version: 1, offer_id: offer.offer_id, ..Default::default() })
-            .await,
-        Code::FailedPrecondition,
-        "invalid_transition",
-    );
-    g.stack.stop().await;
-}
-
-#[tokio::test]
-async fn delegation_mints_only_narrower_grants() {
-    let g = GrpcStack::start().await;
-    let mut perms = worker_perms(SideEffects::Read);
-    perms.delegation = somework_domain::policy::DelegationPerm { allowed: true, max_depth: 3 };
-    perms.actions.push("task.delegate".into());
-    let worker = g.stack.worker("agent/reviewer", vec![somework_testkit::capability("code.review", "2.1", "read", "Review pull requests")], perms).await;
-    let mut author_perms = worker_perms(SideEffects::Read);
-    author_perms.capabilities = vec!["code.review".into()];
-    author_perms.delegation = somework_domain::policy::DelegationPerm { allowed: true, max_depth: 3 };
-    let author_key = g.stack.create_principal(somework_core::contracts::ActorKind::Agent, "agent/author", author_perms).await;
-    let (wc, ac) = (Creds::agent(&worker), Creds { key: author_key, issuer: "agent:agent/author".into(), runtime: None });
-
-    // an ordinary workload assertion carries no grant to delegate from
-    expect_err(
-        g.authorization(&wc)
-            .delegate(pb::DelegateRequest {
-                subject: Some(pb::Member { kind: "agent".into(), id: "agent/author".into() }),
-                actions: vec!["task.read".into()],
+        g.messages(&ac)
+            .send(pb::SendMessageRequest {
+                recipients: vec![pb::Member { kind: "agent".into(), id: "agent/reviewer".into() }],
+                media_type: "text/plain".into(),
+                data: Some(prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("ghost".into())) }),
+                artifacts: vec![unknown],
                 ..Default::default()
             })
             .await,
-        Code::PermissionDenied,
-        "policy_denied",
+        Code::FailedPrecondition,
+        "artifact_not_ready",
     );
-
-    let task = g.tasks(&ac).submit(submit_req()).await.unwrap().into_inner().task.unwrap();
-    let claim = g.tasks(&wc).claim(pb::ClaimTaskRequest { task_id: task.task_id.clone(), lease_seconds: 30, ..Default::default() }).await.unwrap().into_inner();
-    // present the task grant itself as the bearer credential
-    let grant_creds = BearerOnly(claim.authorization_token.clone());
-    let mut auth = pb::authorization_service_client::AuthorizationServiceClient::with_interceptor(g.channel.clone(), grant_creds.clone());
-    let child = auth
-        .delegate(pb::DelegateRequest {
-            subject: Some(pb::Member { kind: "agent".into(), id: "agent/author".into() }),
-            actions: vec!["task.read".into()],
-            ttl_seconds: 60,
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner();
-    assert!(!child.parent_jti.is_empty());
-    // widening beyond the parent grant is refused
-    let wider = auth
-        .delegate(pb::DelegateRequest {
-            subject: Some(pb::Member { kind: "agent".into(), id: "agent/author".into() }),
-            actions: vec!["task.cancel".into()],
-            ..Default::default()
-        })
-        .await;
-    assert_eq!(wider.unwrap_err().code(), Code::PermissionDenied);
     g.stack.stop().await;
-}
-
-#[derive(Clone)]
-struct BearerOnly(String);
-
-impl tonic::service::Interceptor for BearerOnly {
-    fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
-        req.metadata_mut().insert("authorization", format!("Bearer {}", self.0).parse().unwrap());
-        Ok(req)
-    }
 }

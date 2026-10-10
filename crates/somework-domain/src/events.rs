@@ -1,14 +1,14 @@
 //! Domain events and the transactional outbox. Every durable event row, its recipients and its per-sink outbox rows
-//! commit in the same transaction as the state change that caused them (TASK-01, canonical-state rule).
+//! commit in the same transaction as the state change that caused them (canonical-state rule).
 
 use serde::Serialize;
 use serde_json::{Value, json};
 use somework_core::{Error, canonical::sha256_hex, clock::ts, ids, subjects};
-use sqlx::{Row, SqliteConnection};
+use sqlx::SqliteConnection;
 
 use crate::{
-    config::{SINK_GATEWAY, SINK_MATRIX, SINK_NATS},
-    db::{DbResultExt, icol, jcol, jcol_opt, scol, scol_opt},
+    config::{SINK_MATRIX, SINK_NATS},
+    db::{DbResultExt, icol, jcol, scol, scol_opt},
     domain::{Ctx, Domain},
     policy::{AuthzRequest, Decision},
 };
@@ -22,21 +22,17 @@ pub struct NatsRoute {
 #[derive(Debug, Clone, Default)]
 pub struct EventSpec {
     pub kind: String,
-    pub task_id: Option<String>,
     pub conversation_id: Option<String>,
     pub message_id: Option<String>,
-    pub revision: Option<i64>,
-    /// Reference-only payload: ids, state and revision, never message bodies or task inputs.
+    /// Reference-only payload: ids and state, never message bodies.
     pub payload: Value,
     /// (principal id, may-wake) pairs that can see this event through `GET /v1/events`.
     pub recipients: Vec<(String, bool)>,
     pub nats: Vec<NatsRoute>,
     pub matrix: bool,
     pub matrix_coalesce_key: Option<String>,
-    pub gateway: Vec<NatsRoute>,
     /// Topics for `topic` subscriptions (event kind is always included).
     pub topics: Vec<String>,
-    pub capability_id: Option<String>,
     /// A producer never receives its own events through subscriptions.
     pub exclude_principal: Option<String>,
 }
@@ -44,11 +40,6 @@ pub struct EventSpec {
 impl EventSpec {
     pub fn new(kind: &str, payload: Value) -> Self {
         Self { kind: kind.into(), payload, ..Default::default() }
-    }
-    pub fn task(mut self, task_id: &str, revision: i64) -> Self {
-        self.task_id = Some(task_id.into());
-        self.revision = Some(revision);
-        self
     }
     pub fn conversation(mut self, id: Option<String>) -> Self {
         self.conversation_id = id;
@@ -95,10 +86,8 @@ pub struct EventView {
     pub event_id: String,
     #[serde(rename = "type")]
     pub kind: String,
-    pub task_id: Option<String>,
     pub conversation_id: Option<String>,
     pub message_id: Option<String>,
-    pub revision: Option<i64>,
     pub wake: bool,
     pub payload: Value,
     pub created_at: String,
@@ -116,16 +105,14 @@ impl Domain {
         }
         let first_subject = spec.nats.first().map(|r| r.subject.clone());
         let seq: i64 = sqlx::query_scalar(
-            "INSERT INTO events(event_id, domain_id, type, task_id, conversation_id, message_id, revision, subject, payload, traceparent, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq",
+            "INSERT INTO events(event_id, domain_id, type, conversation_id, message_id, subject, payload, traceparent, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING seq",
         )
         .bind(&event_id)
         .bind(&self.cfg.domain_id)
         .bind(&spec.kind)
-        .bind(&spec.task_id)
         .bind(&spec.conversation_id)
         .bind(&spec.message_id)
-        .bind(spec.revision)
         .bind(&first_subject)
         .bind(payload.to_string())
         .bind(ctx.trace.traceparent())
@@ -134,7 +121,7 @@ impl Domain {
         .await
         .db()?;
 
-        self.match_subscriptions(conn, &mut spec, seq, &event_id, &payload).await?;
+        self.match_subscriptions(conn, &mut spec, &payload).await?;
 
         for (principal_id, wake) in &spec.recipients {
             sqlx::query("INSERT INTO event_recipients(event_seq, principal_id, wake) VALUES (?, ?, ?) ON CONFLICT(event_seq, principal_id) DO UPDATE SET wake = MAX(wake, excluded.wake)")
@@ -159,15 +146,9 @@ impl Domain {
             }
         }
         if self.cfg.sink_enabled(SINK_MATRIX) && spec.matrix {
-            let subject = spec.conversation_id.clone().or(spec.task_id.clone()).unwrap_or_else(|| "domain".into());
+            let subject = spec.conversation_id.clone().unwrap_or_else(|| "domain".into());
             self.insert_outbox(conn, seq, SINK_MATRIX, &subject, &format!("{event_id}:matrix"), spec.matrix_coalesce_key.as_deref(), &payload).await?;
             outbox_rows += 1;
-        }
-        if self.cfg.sink_enabled(SINK_GATEWAY) {
-            for route in &spec.gateway {
-                self.insert_outbox(conn, seq, SINK_GATEWAY, &route.subject, &format!("{event_id}:{}", route.subject), None, &route.payload).await?;
-                outbox_rows += 1;
-            }
         }
         let _ = outbox_rows;
         Ok(EmittedEvent { seq, event_id })
@@ -206,10 +187,10 @@ impl Domain {
 
     /// Fan an event out to matching durable subscriptions (SUB-01/02). The `wake` flag is the subscriber's explicit
     /// choice; loop protection on top of that is enforced by the message taxonomy for message events. Rules add a
-    /// status, payload filters and, for reactions, a ledger row plus an outbox row for the reaction worker.
-    async fn match_subscriptions(&self, conn: &mut SqliteConnection, spec: &mut EventSpec, seq: i64, event_id: &str, payload: &Value) -> Result<(), Error> {
+    /// status and payload filters.
+    async fn match_subscriptions(&self, conn: &mut SqliteConnection, spec: &mut EventSpec, payload: &Value) -> Result<(), Error> {
         let rows = sqlx::query(
-            "SELECT s.subscription_id, s.principal_id, s.kind, s.selector, s.wake, r.rule_name, r.status AS rule_status, r.where_filters, r.reaction
+            "SELECT s.subscription_id, s.principal_id, s.kind, s.selector, s.wake, r.rule_name, r.status AS rule_status, r.where_filters
              FROM subscriptions s LEFT JOIN rules r ON r.subscription_id = s.subscription_id
              WHERE s.domain_id = ? AND s.status = 'active'",
         )
@@ -222,11 +203,7 @@ impl Domain {
             let selector = scol(&row, "selector");
             let hit = match kind.as_str() {
                 "topic" => std::iter::once(&spec.kind).chain(spec.topics.iter()).any(|t| somework_core::classification::glob_match(&selector, t)),
-                "capability_queue" => {
-                    spec.kind == "task.queued" && spec.capability_id.as_deref().is_some_and(|c| somework_core::classification::glob_match(&selector, c))
-                }
                 "conversation" => spec.conversation_id.as_deref() == Some(selector.as_str()),
-                "task" => spec.task_id.as_deref() == Some(selector.as_str()),
                 _ => false,
             };
             if !hit {
@@ -236,22 +213,14 @@ impl Domain {
             if spec.exclude_principal.as_deref() == Some(owner.as_str()) {
                 continue;
             }
-            if matches!(kind.as_str(), "task" | "conversation") && !self.can_observe(conn, &owner, spec).await? {
+            if kind == "conversation" && !self.can_observe(conn, &owner, spec).await? {
                 continue;
             }
             let wake = icol(&row, "wake") != 0;
             let sub_id = scol(&row, "subscription_id");
-            let mut routed = true;
-            if let Some(rule_name) = scol_opt(&row, "rule_name") {
-                if scol(&row, "rule_status") != "active" || !crate::rules::filters_hold(&jcol(&row, "where_filters"), payload) {
-                    continue;
-                }
-                if jcol_opt(&row, "reaction").is_some() && !spec.kind.starts_with("reaction.") {
-                    self.queue_reaction(conn, &rule_name, seq, event_id, Self::event_depth(spec, payload)).await?;
-                    routed = wake;
-                }
-            }
-            if !routed {
+            if scol_opt(&row, "rule_name").is_some()
+                && (scol(&row, "rule_status") != "active" || !crate::rules::filters_hold(&jcol(&row, "where_filters"), payload))
+            {
                 continue;
             }
             let mut body = payload.clone();
@@ -269,24 +238,8 @@ impl Domain {
         Ok(())
     }
 
-    fn event_depth(spec: &EventSpec, payload: &Value) -> i64 {
-        crate::rules::stored_event_depth(spec.task_id.is_some(), payload)
-    }
-
-    /// Whether `principal_id` may still observe the task/conversation of `spec` (re-checked at match time).
+    /// Whether `principal_id` may still observe the conversation of `spec` (re-checked at match time).
     async fn can_observe(&self, conn: &mut SqliteConnection, principal_id: &str, spec: &EventSpec) -> Result<bool, Error> {
-        if let Some(task_id) = &spec.task_id {
-            let row = sqlx::query("SELECT requester_principal_id, assignee_principal_id, target_agent_id FROM tasks WHERE task_id = ?")
-                .bind(task_id)
-                .fetch_optional(&mut *conn)
-                .await
-                .db()?;
-            if let Some(row) = row
-                && (scol(&row, "requester_principal_id") == principal_id || scol_opt(&row, "assignee_principal_id").as_deref() == Some(principal_id))
-            {
-                return Ok(true);
-            }
-        }
         if let Some(conversation_id) = &spec.conversation_id {
             let member: Option<i64> = sqlx::query_scalar("SELECT 1 FROM conversation_members WHERE conversation_id = ? AND principal_id = ?")
                 .bind(conversation_id)
@@ -304,7 +257,6 @@ impl Domain {
             "decisionId": decision.decision_id,
             "action": req.action,
             "resource": req.resource,
-            "taskId": req.task_id,
             "actor": ctx.actor.label(),
             "reasons": decision.reasons,
         });
@@ -318,7 +270,7 @@ impl Domain {
     /// `GET /v1/events`: events addressed to the caller after `cursor`, oldest first.
     pub async fn list_events(&self, ctx: &Ctx, after: i64, limit: i64) -> Result<Vec<EventView>, Error> {
         let rows = sqlx::query(
-            "SELECT e.seq, e.event_id, e.type, e.task_id, e.conversation_id, e.message_id, e.revision, e.payload, e.created_at, r.wake
+            "SELECT e.seq, e.event_id, e.type, e.conversation_id, e.message_id, e.payload, e.created_at, r.wake
              FROM event_recipients r JOIN events e ON e.seq = r.event_seq
              WHERE r.principal_id = ? AND e.seq > ? ORDER BY e.seq ASC LIMIT ?",
         )
@@ -334,10 +286,8 @@ impl Domain {
                 seq: icol(r, "seq"),
                 event_id: scol(r, "event_id"),
                 kind: scol(r, "type"),
-                task_id: scol_opt(r, "task_id"),
                 conversation_id: scol_opt(r, "conversation_id"),
                 message_id: scol_opt(r, "message_id"),
-                revision: r.try_get::<Option<i64>, _>("revision").ok().flatten(),
                 wake: icol(r, "wake") != 0,
                 payload: jcol(r, "payload"),
                 created_at: scol(r, "created_at"),
@@ -383,26 +333,23 @@ impl Domain {
     }
 
     /// Operator view: every event (no recipient filter) for the introspection UI.
-    pub async fn list_all_events(&self, ctx: &Ctx, task_id: Option<&str>, after: i64, limit: i64) -> Result<Vec<EventView>, Error> {
+    pub async fn list_all_events(&self, ctx: &Ctx, after: i64, limit: i64) -> Result<Vec<EventView>, Error> {
         self.enforce_read(ctx, AuthzRequest::new("ops.read")).await?;
-        let rows = sqlx::query("SELECT seq, event_id, type, task_id, conversation_id, message_id, revision, payload, created_at FROM events WHERE seq > ? AND (? IS NULL OR task_id = ?) ORDER BY seq ASC LIMIT ?")
-            .bind(after)
-            .bind(task_id)
-            .bind(task_id)
-            .bind(limit.clamp(1, 1000))
-            .fetch_all(self.db.pool())
-            .await
-            .db()?;
+        let rows =
+            sqlx::query("SELECT seq, event_id, type, conversation_id, message_id, payload, created_at FROM events WHERE seq > ? ORDER BY seq ASC LIMIT ?")
+                .bind(after)
+                .bind(limit.clamp(1, 1000))
+                .fetch_all(self.db.pool())
+                .await
+                .db()?;
         Ok(rows
             .iter()
             .map(|r| EventView {
                 seq: icol(r, "seq"),
                 event_id: scol(r, "event_id"),
                 kind: scol(r, "type"),
-                task_id: scol_opt(r, "task_id"),
                 conversation_id: scol_opt(r, "conversation_id"),
                 message_id: scol_opt(r, "message_id"),
-                revision: r.try_get::<Option<i64>, _>("revision").ok().flatten(),
                 wake: false,
                 payload: jcol(r, "payload"),
                 created_at: scol(r, "created_at"),

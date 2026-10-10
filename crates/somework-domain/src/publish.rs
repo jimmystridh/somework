@@ -45,8 +45,6 @@ pub struct PublishEvent {
     pub classification: Option<String>,
     /// Whether the producer authenticated the origin of the fact (signature or shared secret checked).
     pub verified: Option<bool>,
-    /// A task whose work led to this event (for example a pull request an agent opened); feeds loop protection.
-    pub caused_by_task: Option<String>,
     pub occurred_at: Option<String>,
 }
 
@@ -114,7 +112,6 @@ impl Domain {
                         decision_id: ids::decision_id(),
                         allow: false,
                         reasons: vec![format!("topic {topic} is outside the caller's events.publish grants")],
-                        obligations: vec![],
                         policy_version: policy.version.clone(),
                     };
                     return Err(Error::denied(decision.reasons.join("; "))
@@ -144,10 +141,6 @@ impl Domain {
                         .db()?;
                 }
 
-                let depth = match &req.caused_by_task {
-                    Some(task_id) => this.reaction_depth_of_task(conn, task_id).await?.map_or(0, |d| d + 1),
-                    None => 0,
-                };
                 let payload = json!({
                     "topic": topic,
                     "source": source,
@@ -155,8 +148,6 @@ impl Domain {
                     "data": data,
                     "classification": classification,
                     "verified": req.verified.unwrap_or(false),
-                    "depth": depth,
-                    "causedByTask": req.caused_by_task,
                     "occurredAt": req.occurred_at,
                     "publishedBy": ctx.actor.label(),
                 });
@@ -177,7 +168,7 @@ impl Domain {
                     conn,
                     &ctx,
                     AuditRecord::new("event.publish", Some(format!("event://{}", emitted.event_id)), "success")
-                        .detail(json!({"topic": topic, "key": key, "classification": classification, "depth": depth})),
+                        .detail(json!({"topic": topic, "key": key, "classification": classification})),
                 )
                 .await?;
                 Ok(PublishResponse { seq: emitted.seq, event_id: emitted.event_id, duplicate: false })
@@ -187,8 +178,8 @@ impl Domain {
     }
 
     /// Retention for the producer side: published-event rows (with their recipients, delivered outbox rows and dedupe keys),
-    /// settled reaction firings and stale dedupe keys, all older than [`PUBLISHED_EVENT_RETENTION_DAYS`]. Task events, other
-    /// domain events and the audit chain are never touched; a published event whose outbox rows are still undelivered is kept.
+    /// and stale dedupe keys, all older than [`PUBLISHED_EVENT_RETENTION_DAYS`]. Other domain events and the audit chain are
+    /// never touched; a published event whose outbox rows are still undelivered is kept.
     pub(crate) async fn purge_published_events(&self) -> Result<u64, Error> {
         let cutoff = somework_core::clock::ts(self.now() - Duration::days(PUBLISHED_EVENT_RETENTION_DAYS));
         let published = format!("{}%", subjects::event_published(""));
@@ -219,12 +210,6 @@ impl Domain {
                 .await
                 .db()?
                 .rows_affected();
-                purged += sqlx::query("DELETE FROM reaction_firings WHERE created_at < ? AND status <> 'pending'")
-                    .bind(&cutoff)
-                    .execute(&mut **tx)
-                    .await
-                    .db()?
-                    .rows_affected();
                 purged += sqlx::query("DELETE FROM event_keys WHERE created_at < ?").bind(&cutoff).execute(&mut **tx).await.db()?.rows_affected();
                 Ok(purged)
             })

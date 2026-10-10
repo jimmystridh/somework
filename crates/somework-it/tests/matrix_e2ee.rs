@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use matrix_common::*;
 use serde_json::{Value, json};
-use somework_core::contracts::SideEffects;
 use somework_domain::{backup::BackupOptions, config::MatrixProfile, policy::Permissions};
 use somework_matrix::Bridge;
 use somework_testkit::{
@@ -87,13 +86,14 @@ impl World {
         }
     }
 
-    async fn tasks(&self) -> Vec<Value> {
-        self.env.stack.admin.get("/v1/admin/tasks").await.unwrap()["tasks"].as_array().cloned().unwrap_or_default()
-    }
-
     async fn metric(&self, name: &str) -> f64 {
         let text = reqwest::get(format!("{}/metrics", self.env.stack.url)).await.unwrap().text().await.unwrap();
         text.lines().find(|l| l.starts_with(name)).and_then(|l| l.rsplit(' ').next()).and_then(|v| v.parse().ok()).unwrap_or(0.0)
+    }
+
+    async fn canonical_messages(&self) -> Vec<Value> {
+        let page = self.author.client.get(&format!("/v1/conversations/{}/messages?limit=200", self.conversation)).await.unwrap();
+        page["messages"].as_array().cloned().unwrap_or_default()
     }
 
     async fn canonical_texts(&self) -> Vec<String> {
@@ -104,9 +104,9 @@ impl World {
 
 async fn world(profile: MatrixProfile, humans: &[&str], perms: impl Fn(&str) -> Permissions) -> World {
     let env = MxEnv::start_with(|c| c.crypto.device_cache_ms = 0, profile).await;
-    let worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms(SideEffects::Read)).await;
-    let author = env.stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
-    let mut members = vec![];
+    let worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms()).await;
+    let author = env.stack.requester("agent/author").await;
+    let mut members = vec![("agent", "agent/reviewer")];
     for name in humans {
         env.human(name, &format!("@{name}:hs.test"), perms(name)).await;
         members.push(("human", *name));
@@ -137,12 +137,6 @@ fn text(body: &str) -> Value {
     json!({"msgtype": "m.text", "body": body})
 }
 
-async fn complete_task(w: &World, task_id: &str) {
-    let claim = w.worker.client.claim_task(task_id, Some(30)).await.unwrap();
-    w.worker.client.progress_task(task_id, &json!({"fencingToken": claim.fencing_token, "message": "reading the diff"})).await.unwrap();
-    w.worker.client.complete_task(task_id, claim.fencing_token, &json!({"verdict": "approve"}), &[]).await.unwrap();
-}
-
 fn forged_event(room: &str, sender: &str, content: &Value, id: &str) -> Value {
     json!({"event_id": id, "room_id": room, "sender": sender, "type": "m.room.encrypted", "content": content, "origin_server_ts": chrono::Utc::now().timestamp_millis()})
 }
@@ -150,7 +144,7 @@ fn forged_event(room: &str, sender: &str, content: &Value, id: &str) -> Value {
 // ---- (a) observer profile round trip ------------------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn observer_round_trip_human_decrypts_projections_and_the_bridge_executes_encrypted_commands() {
+async fn observer_round_trip_human_decrypts_projections_and_the_bridge_ingests_encrypted_messages() {
     let mut w = world(MatrixProfile::EncryptedWithObserver, &["alice"], alice_perms).await;
     assert!(w.env.mx.state_event(&w.room, "m.room.encryption").is_some());
 
@@ -165,23 +159,26 @@ async fn observer_round_trip_human_decrypts_projections_and_the_bridge_executes_
     assert_eq!(event.content["algorithm"], "m.megolm.v1.aes-sha2");
     assert!(content["body"].as_str().unwrap().contains("alice") || content["body"].as_str().unwrap().contains("confidential"));
 
-    // human -> bridge: an encrypted !task command is decrypted by the observer device and executed as the mapped human
+    // human -> bridge: an encrypted message naming the reviewer is decrypted by the observer device and ingested as the mapped human
     let room = w.room.clone();
-    w.send_as("alice", &room, "m.room.message", text("!task code.review@2.1 {\"repository\": \"billing/import-service\"}"));
-    let task = eventually("task created from an encrypted command", Duration::from_secs(10), || async {
-        w.tasks().await.into_iter().find(|t| t["requester"]["id"] == "alice")
+    w.send_as("alice", &room, "m.room.message", text("@_agent_agent=2freviewer:hs.test please look at billing/import-service"));
+    let ingested = eventually("encrypted message ingested as alice", Duration::from_secs(10), || async {
+        w.canonical_messages().await.into_iter().find(|m| m["sender"]["id"] == "alice")
     })
     .await;
-    complete_task(&w, task["taskId"].as_str().unwrap()).await;
+    assert_eq!(ingested["triggerMode"], "directed");
+    assert_eq!(ingested["recipients"][0]["id"], "agent/reviewer");
 
-    // the task thread is projected into the encrypted room: structured event + companion notice, all readable by alice
-    let (_, kind, state) = w.wait_decrypted("alice", "task succeeded event", |t, c| t == "dev.somework.task.v1" && c["state"] == "succeeded").await;
-    assert_eq!(kind, "dev.somework.task.v1");
-    assert_eq!(state["canonical_ref"], format!("somework://tasks/{}", task["taskId"].as_str().unwrap()));
-    w.wait_decrypted("alice", "task notice", |t, c| {
-        t == "m.room.message" && c["msgtype"] == "m.notice" && c["body"].as_str().is_some_and(|b| b.to_lowercase().contains("succeeded"))
-    })
-    .await;
+    // the reviewer's answer is projected into the encrypted room with its canonical reference, readable by alice
+    let answer = w
+        .worker
+        .client
+        .send_message(&json!({"conversationId": w.conversation, "replyTo": ingested["messageId"], "recipients": [{"kind": "human", "id": "alice"}], "content": {"mediaType": "text/plain", "data": "approved, no findings"}}))
+        .await
+        .unwrap();
+    let (_, kind, projected) = w.wait_decrypted("alice", "the reviewer's answer", |_, c| c["dev.somework.ref"]["id"] == answer["messageId"]).await;
+    assert_eq!(kind, "m.room.message");
+    assert!(projected["body"].as_str().unwrap().contains("approved, no findings"));
     let wire_types: Vec<String> = w.env.mx.events(&w.room).into_iter().map(|e| e.kind).collect();
     assert!(
         !wire_types.iter().any(|t| t.starts_with("dev.somework.") && t != "dev.somework.room"),
@@ -197,12 +194,11 @@ async fn observer_round_trip_human_decrypts_projections_and_the_bridge_executes_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn encrypted_commands_are_policy_checked_as_the_mapped_human() {
+async fn encrypted_messages_are_policy_checked_as_the_mapped_human() {
     let mut w = world(MatrixProfile::EncryptedWithObserver, &["alice", "bob"], |n| {
         if n == "bob" {
             let mut p = Permissions::default_human();
-            p.capabilities = vec![];
-            p.discover = vec!["code.review".into()];
+            p.actions = vec!["catalog.read".into(), "message.read".into()];
             p
         } else {
             human_perms()
@@ -210,69 +206,17 @@ async fn encrypted_commands_are_policy_checked_as_the_mapped_human() {
     })
     .await;
     let room = w.room.clone();
-    w.send_as("bob", &room, "m.room.message", text("!task code.review@2.1 {\"repository\": \"billing/import-service\"}"));
+    w.send_as("bob", &room, "m.room.message", text("please review billing/import-service"));
     // the denial comes back as an encrypted notice the human can read, and nothing was created
-    let (_, _, notice) = w.wait_decrypted("bob", "denial notice", |_, c| c["body"].as_str().is_some_and(|b| b.starts_with("Denied by policy"))).await;
-    assert!(notice["body"].as_str().unwrap().contains("code.review"));
-    assert!(w.tasks().await.is_empty(), "room membership and a decryptable message confer no right to execute");
+    let (_, _, notice) = w.wait_decrypted("bob", "denial notice", |_, c| c["body"].as_str().is_some_and(|b| b.starts_with("Message not delivered"))).await;
+    assert!(!notice["body"].as_str().unwrap().is_empty());
+    assert!(
+        !w.canonical_texts().await.iter().any(|t| t.contains("billing/import-service")),
+        "room membership and a decryptable message confer no right to act"
+    );
     let audit = w.env.stack.admin.get("/v1/admin/audit?limit=500").await.unwrap();
     assert!(audit["events"].as_array().unwrap().iter().any(|e| e["outcome"] == "denied" && e["authenticatedActor"] == "human:bob"));
     w.env.stack.stop().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_encrypted_reaction_approves_exactly_the_requested_action() {
-    let env = MxEnv::start_with(|c| c.crypto.device_cache_ms = 0, MatrixProfile::EncryptedWithObserver).await;
-    let _deployer = env
-        .stack
-        .worker(
-            "agent/deployer",
-            vec![somework_testkit::capability("deployment.execute", "1.0", "irreversible", "Execute a production deployment")],
-            worker_perms(SideEffects::Irreversible),
-        )
-        .await;
-    let author = env.stack.requester("agent/author", &["deployment.execute"], SideEffects::Irreversible).await;
-    let mut approver = Permissions::default_human();
-    approver.approves = vec!["deployment.*".into()];
-    env.human("carol", "@carol:hs.test", approver).await;
-    env.human("dave", "@dave:hs.test", Permissions::default_human()).await;
-    let conversation = env.conversation(&author, "E2EE room", &[("human", "carol"), ("human", "dave")], None).await;
-    eventually("observer device", Duration::from_secs(10), || async { (!env.mx.device_ids_of(BOT).is_empty()).then_some(()) }).await;
-    let mut carol = TestHumanDevice::new(&env.mx, "@carol:hs.test", "CAROLDEV");
-    let mut dave = TestHumanDevice::new(&env.mx, "@dave:hs.test", "DAVEDEV");
-    author.client.send_message(&json!({"conversationId": conversation, "content": {"mediaType": "text/plain", "data": "deploy window opens"}})).await.unwrap();
-    let room = env.wait_room("E2EE room").await;
-    env.mx.join_invites("@carol:hs.test");
-    env.mx.join_invites("@dave:hs.test");
-
-    let task = author.client.submit_task(&json!({"capability": {"id": "deployment.execute", "version": "1.0"}, "conversationId": conversation, "input": {"repository": "billing/import-service"}}), None).await.unwrap();
-    assert_eq!(task.state.as_str(), "submitted");
-    let approval_id = task.pending_approval.as_ref().unwrap()["approvalId"].as_str().unwrap().to_string();
-
-    // carol finds the (encrypted) approval prompt by decrypting the bridge's events
-    let prompt = loop {
-        let found = env.mx.events(&room).into_iter().filter(|e| e.kind == "m.room.encrypted").find(|e| {
-            carol.decrypt(&env.mx, e).is_some_and(|(_, c)| c["body"].as_str().is_some_and(|b| b.contains("Approval required") && b.contains(&approval_id)))
-        });
-        if let Some(event) = found {
-            break event;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    // dave is not an approver: his encrypted thumbs-up is refused by the domain
-    let _ = dave.decrypt(&env.mx, &prompt);
-    dave.send_encrypted(&env.mx, &room, "m.reaction", json!({"m.relates_to": {"rel_type": "m.annotation", "event_id": prompt.event_id, "key": "👍"}}));
-    tokio::time::sleep(Duration::from_millis(800)).await;
-    assert_eq!(author.client.get_task(&task.task_id).await.unwrap().state.as_str(), "submitted", "an unauthorized encrypted reaction approves nothing");
-
-    carol.send_encrypted(&env.mx, &room, "m.reaction", json!({"m.relates_to": {"rel_type": "m.annotation", "event_id": prompt.event_id, "key": "👍"}}));
-    eventually("task queued after the approval", Duration::from_secs(10), || async {
-        (author.client.get_task(&task.task_id).await.unwrap().state.as_str() == "queued").then_some(())
-    })
-    .await;
-    let audit = env.stack.admin.get("/v1/admin/audit?limit=500").await.unwrap();
-    assert!(audit["events"].as_array().unwrap().iter().any(|e| e["action"] == "approval.decide" && e["authenticatedActor"] == "human:carol"));
-    env.stack.stop().await;
 }
 
 // ---- (b) metadata-only profile --------------------------------------------------------------------------------------------
@@ -288,12 +232,11 @@ async fn metadata_only_private_bridge_cannot_read_human_content_and_nothing_exec
         eventually("metadata notice", Duration::from_secs(10), || async { w.env.mx.events(&w.room).into_iter().find(|e| e.body().contains("withheld")) }).await;
     assert!(note.body().contains("chat.message"));
     let room = w.room.clone();
-    w.send_as("alice", &room, "m.room.message", text("!task code.review@2.1 {\"repository\": \"billing/import-service\"} PRIVATE-HUMAN-TEXT"));
+    w.send_as("alice", &room, "m.room.message", text("review billing/import-service PRIVATE-HUMAN-TEXT"));
     eventually("undecryptable counter", Duration::from_secs(10), || async {
         (w.metric("somework_matrix_undecryptable_events_total").await >= 1.0).then_some(())
     })
     .await;
-    assert!(w.tasks().await.is_empty(), "nothing executes from encrypted-only messages");
     assert!(!w.canonical_texts().await.iter().any(|t| t.contains("PRIVATE-HUMAN-TEXT")), "the human's content never reached the domain");
 
     let wire = serde_json::to_string(&w.env.mx.all_events().iter().map(MxEvent::to_json).collect::<Vec<_>>()).unwrap();
@@ -349,7 +292,7 @@ async fn megolm_rotates_on_membership_change_and_replayed_or_forged_events_are_r
     w.env.mx.join_invites("@mallory:hs.test");
     let mut mallory = TestHumanDevice::new(&w.env.mx, "@mallory:hs.test", "MALLORYDEV");
     mallory.ensure_room_session(&w.env.mx, &room);
-    let genuine = mallory.encrypt_only(&room, "m.room.message", text("!task code.review@2.1 {\"repository\": \"billing/import-service\"}"));
+    let genuine = mallory.encrypt_only(&room, "m.room.message", text("forged instruction"));
     // the key share must have reached the bridge before the forgery is evaluated
     tokio::time::sleep(Duration::from_millis(500)).await;
     let before = w.metric("somework_matrix_undecryptable_events_total").await;
@@ -361,7 +304,7 @@ async fn megolm_rotates_on_membership_change_and_replayed_or_forged_events_are_r
         (w.metric("somework_matrix_undecryptable_events_total").await >= before + 2.0).then_some(())
     })
     .await;
-    assert!(w.tasks().await.is_empty(), "no forged event executed anything");
+    assert!(!w.canonical_texts().await.iter().any(|t| t.contains("forged instruction")), "no forged event became a message");
     let audit = w.env.stack.admin.get("/v1/admin/audit?limit=500").await.unwrap();
     let reasons: Vec<String> = audit["events"]
         .as_array()
@@ -459,7 +402,6 @@ async fn losing_all_key_material_without_a_backup_starts_a_fresh_device_while_ol
         "history from before the loss is gone for good: the new device never held that session"
     );
     assert!(w.canonical_texts().await.iter().any(|t| t.contains("history before the loss")), "canonical state is untouched by the crypto loss");
-    assert!(w.tasks().await.is_empty());
     assert_eq!(w.env.stack.domain().verify_audit_chain().await.unwrap(), None, "the domain stays consistent");
     w.env.stack.stop().await;
 }

@@ -135,33 +135,24 @@ remote test backend, drives a real browser, builds fixtures, records a short vid
 they are visible side effects; the "never move to Done" rule is kept as a hard constraint in the tool layer, not only in the prompt.
 The role is built and tested; its machine (a Windows clone with a browser and the product's local back end) is prepared, and it waits for the product's web database to be restored before it can verify a ticket.
 
-## Chat
+## Conversations and jobs
 
-Every role answers a direct `chat.message` with a model (`profile.chat.mode`, `model` by default; `CHAT_MODE=notice` goes back to the
-deterministic notice). Two tiers, decided by who sent it and by an explicit prefix, never by what the text says:
+Agents do not take tasks. A message sent to an agent (by a person, the manager, another agent, in a one-to-one or a group conversation) is read by its model, which decides what to do: answer, ask someone else, or start a **job**. Everyone in the domain is trusted; there is no list of askers. Details and the reasons: `docs/adr/0003-messages-and-events-replace-tasks.md` and `packages/agent-kit/README.md`.
 
-| | ASK | INSTRUCT |
+* **Messages** are written to a durable inbox before they are acknowledged and handled once; after a restart every unfinished message is taken up again. A message gets a model run of its own; several conversations go on at once, one message at a time within each. A backlog is worked through one message at a time, people first, beside the live conversations, and the model is told how long a message waited. The answer goes to everyone in the conversation unless the model answers `NO_REPLY`; hop depth (16) bounds agent-to-agent loops.
+* **Jobs** are the role's capabilities as tools (`verify_ticket`, `fix_issue`, `review_code`, ...). A call starts the work in the background and returns; the job runs through the role's normal handler (sandbox, git protocol, guards, approvals, budget) and posts one result message to the conversation with its artifacts. A job that needs something only one job can have (QA's application stack) waits for it and says so. A message in the conversation of a running job is handed to the job's model as a note, and `job_stop` is a signal the job's model decides about. Agents publish `agent.<slug>.job.started|waiting|finished` events: the Manager tells the owner when jobs finish and the dashboard's Work view is built from them.
+* **Approvals** for risky steps are asked of the approver (default the Manager and people) in the conversation with labelled messages (`chatApprovalRequest` / `chatApprovalDecision`, `approve` or `deny`); silence for ten minutes is a denial. The Manager relays them to the owner in Telegram.
+* **Budgets.** Conversation runs draw on the `chat` pool, jobs on the `tasks` pool; the per-agent daily limits are a runaway guard and the money budget is global (Prometheus and the Manager).
+
+| Role | Job tools | Extra tools in a conversation |
 |---|---|---|
-| Who | `agent/manager` and every human (`CHAT_ALLOWED_SENDERS`) | `agent/manager` only (`CHAT_INSTRUCTORS`), message starts with `instruct:` |
-| What runs | one bounded model turn in a light session | the role's normal handler as a synthetic job: same sandbox, tools, guards, approvals, git protocol |
-| Tools | `read`, `agent_status`, the role's read-only tools; never bash, edit or write | what the role's tasks have (`profile.allowedTools`) |
-| Limits | 40 000 tokens, 2 minutes, halved when the chat pool is 80% used | chat budget 150 000 tokens, 15 minutes, never above what the `chat` pool has left |
-| Approvals | all refused | asked of the instructor in the conversation (`chatApprovalRequest` / `chatApprovalDecision` labels), denied on silence after 10 minutes |
-
-| Role | Extra read-only tools for questions | What `instruct:` does |
-|---|---|---|
-| Developer | none | a `code.agent` v2 task on `repo:` or `CHAT_REPOSITORY_URL`, then branch and pull request as usual |
-| Reviewer | none | a `code.review` v3 task (`repo:`, `ref:`, `pr:`, `ticket:`, the rest is the focus); still read-only |
-| Windows developer | none | a `code.windows` task (`repo:`, `ref:`, `build:`, `tests:` as named profiles), in the confined environment |
-| QA | none | a `qa.verify` task for the ticket named in the text (`repo:`, `ref:`, `scenario:`, `app:`); ticket writes still need approval |
-| Aikido fixer | `fixer_status` (attempts, limits, outcomes), `aikido_lookup` (one issue by id) | a `code.fix` task for "fix issue N" on its configured repository (and `code.fix.followup` for a look at its own pull request, started by its timers), through the same eligibility, daily cap, attempt limits and guards; approvals stay refused |
-| Datadog triage | the six Datadog read tools (no bash, no python); the state summary has today's triages and the recent outcomes | an `ops.triage` task for "triage monitor N" (optional `window:` line), with the same tools, command policy and limits as an event's task (bash and python3 in the sandbox); approvals stay refused |
-| Manager | n/a | the Manager is the instructor: `/ask <agent> instruct: ...` sends it, `/chatapprove <id>` and `/chatdeny <id>` answer the agent's approval questions |
-
-The chat has its own `chat` token pool (a tenth of the daily limit by default), shares job slots with tasks (tasks first, nothing
-preempted), answers one message at a time (a waiting message is told "busy, queued"), answers each sender and conversation at most
-once per 15 seconds and 20 times an hour, and never answers its own messages, replies or automatic notices, so agents cannot loop.
-Replies are redacted and at most 4 KB. An instruction has no task in the domain, so its artifacts are never uploaded: small text results (patch, report, logs) are shown in the reply, everything else stays on the agent host and the reply names where. A second message inside the 15-second window gets one automatic notice telling the sender when to write again. All the settings are in `packages/agent-kit/README.md`.
+| Developer | `code_agent` (`code.agent`) | none |
+| Reviewer | `review_code` (`code.review`; read-only) | none |
+| Windows developer | `windows_develop` (`code.windows`) | none |
+| QA | `verify_ticket` (`qa.verify`; holds the application stack) | the Jira read tools |
+| Aikido fixer | `fix_issue` (`code.fix`), `follow_up_pull_request` (`code.fix.followup`) | `fixer_status`, `aikido_lookup` |
+| Datadog triage | `triage_monitor` (`ops.triage`) | the six Datadog read tools |
+| Manager | n/a | the Manager asks agents for things in messages (`somework_message`) and relays their approvals and job results to the owner |
 
 ### Raising a budget
 

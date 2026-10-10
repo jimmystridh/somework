@@ -1,6 +1,6 @@
 //! Events and rules end to end through the admin CLI, REST and gRPC: principals are enrolled with the real admin commands, a
-//! rule is applied by the deployer, a producer publishes (twice), the server's own reaction worker starts exactly one
-//! task, and the reviewer can claim and finish it.
+//! rule is applied by the deployer, a producer publishes (twice), and the rule's owner receives exactly one wake per distinct
+//! delivery.
 
 mod grpc_common;
 
@@ -52,7 +52,7 @@ where
 }
 
 #[tokio::test]
-async fn enrolled_producers_and_deployers_drive_a_rule_to_a_task_over_rest_and_grpc() {
+async fn enrolled_producers_and_deployers_drive_a_rule_to_a_wake_over_rest_and_grpc() {
     let dir = tempfile::tempdir().unwrap();
     let config = write_config(dir.path());
     let key = |name: &str| dir.path().join(format!("{name}.key.json"));
@@ -98,9 +98,8 @@ async fn enrolled_producers_and_deployers_drive_a_rule_to_a_task_over_rest_and_g
         &config,
         AdminCommand::EnrollAgent {
             id: "automation/pr-review".into(),
-            side_effects: "read".into(),
             classification: "internal".into(),
-            may_invoke: vec!["code.review".into()],
+            publish: vec!["test.*".into()],
             key_out: Some(key("automation")),
             public_key: None,
         },
@@ -111,9 +110,8 @@ async fn enrolled_producers_and_deployers_drive_a_rule_to_a_task_over_rest_and_g
         &config,
         AdminCommand::EnrollAgent {
             id: "agent/reviewer".into(),
-            side_effects: "read".into(),
             classification: "internal".into(),
-            may_invoke: vec![],
+            publish: vec![],
             key_out: Some(key("reviewer")),
             public_key: None,
         },
@@ -143,13 +141,22 @@ async fn enrolled_producers_and_deployers_drive_a_rule_to_a_task_over_rest_and_g
         "owner": "automation/pr-review",
         "selector": "github.pull_request.opened",
         "where": [{"path": "/data/draft", "equals": false}],
-        "reaction": {"capability": {"id": "code.review", "version": 2.1}, "input": {"repository": "${/data/repository}"}, "budget": {"maxTokens": 1000, "maxMinutes": 5}}
+        "wake": true
     });
     assert_eq!(automation.put_rule("pr-review", &rule).await.unwrap_err().code, ErrorCode::PolicyDenied);
     let stored = deployer.put_rule("pr-review", &rule).await.unwrap();
     assert_eq!(stored["status"], "active");
-    assert_eq!(stored["reaction"]["capability"]["version"], "2.1");
-    assert_eq!(stored["reaction"]["maxDepth"], 3);
+    assert_eq!(stored["wake"], true);
+    assert!(stored.get("reaction").is_none(), "a rule has no reaction any more");
+    // an agent enrolled with `--publish` may publish under exactly those topics
+    let published = automation.post("/v1/events/publish", &json!({"topic": "test.thing.happened", "key": "k1", "data": {}})).await.unwrap();
+    assert!(published["eventId"].is_string());
+    assert_eq!(
+        automation.post("/v1/events/publish", &json!({"topic": "github.thing.happened", "key": "k2", "data": {}})).await.unwrap_err().code,
+        ErrorCode::PolicyDenied
+    );
+    let with_reaction = json!({"owner": "automation/pr-review", "selector": "github.pull_request.opened", "wake": true, "reaction": {"capability": {"id": "code.review", "version": "2.1"}, "input": {}}});
+    assert_eq!(deployer.put_rule("with-reaction", &with_reaction).await.unwrap_err().code, ErrorCode::ValidationFailed);
     assert_eq!(deployer.put_rule("pr-review", &rule).await.unwrap()["updatedAt"], stored["updatedAt"], "a repeated PUT changes nothing");
     assert_eq!(deployer.list_rules().await.unwrap().len(), 1);
 
@@ -193,36 +200,27 @@ async fn enrolled_producers_and_deployers_drive_a_rule_to_a_task_over_rest_and_g
         events.publish(with_md(pb::PublishEventRequest { topic: "jira.issue.created".into(), key: "k".into(), ..Default::default() }, &[])).await.unwrap_err();
     assert_eq!(denied.code(), tonic::Code::PermissionDenied);
 
-    // the server's own reaction worker created one task per distinct delivery (two keys → two tasks), none for the replay
-    let tasks = eventually("the reactions to start tasks", || {
+    // the owner is woken once per distinct delivery (two keys), never for the replay
+    let wakes = eventually("the rule to wake its owner", || {
         let automation = automation.clone();
         async move {
-            let v = automation.get("/v1/tasks").await.ok()?;
-            let tasks = v["tasks"].as_array()?.clone();
-            (tasks.len() == 2).then_some(tasks)
+            let (events, _) = automation.events(0, 0).await.ok()?;
+            let wakes: Vec<Value> = events.into_iter().filter(|e| e["type"] == "github.pull_request.opened" && e["wake"] == true).collect();
+            (wakes.len() == 2).then_some(wakes)
         }
     })
     .await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(automation.get("/v1/tasks").await.unwrap()["tasks"].as_array().unwrap().len(), 2);
-    let task_id = tasks[0]["taskId"].as_str().unwrap().to_string();
-    let task = automation.get(&format!("/v1/tasks/{task_id}")).await.unwrap();
-    assert_eq!(task["origin"]["kind"], "reaction");
-    assert_eq!(task["origin"]["rule"], "pr-review");
-    assert_eq!(task["input"]["budget"], json!({"maxTokens": 1000, "maxMinutes": 5}));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (all, _) = automation.events(0, 0).await.unwrap();
+    assert_eq!(all.iter().filter(|e| e["type"] == "github.pull_request.opened").count(), 2);
+    assert_eq!(wakes[0]["payload"]["data"]["repository"], "billing/import-service");
 
-    // the reviewer works the task like any other
-    let claim = reviewer.claim_task(&task_id, None).await.unwrap();
-    reviewer.progress_task(&task_id, &json!({"fencingToken": claim.fencing_token, "message": "reading"})).await.unwrap();
-    let done = reviewer.complete_task(&task_id, claim.fencing_token, &json!({"verdict": "approve"}), &[]).await.unwrap();
-    assert_eq!(done.state, somework_core::fsm::TaskState::Succeeded);
-
-    let counters = deployer.get_rule("pr-review").await.unwrap()["counters"].clone();
-    assert_eq!(counters["fired"], 2);
+    // the reviewer subscribed to nothing and hears nothing
+    let (reviewer_events, _) = reviewer.events(0, 0).await.unwrap();
+    assert!(reviewer_events.iter().all(|e| e["type"] != "github.pull_request.opened"));
 
     // the controller (rules.control only) can read and pause/resume, but neither change nor remove a rule
     assert_eq!(controller.list_rules().await.unwrap().len(), 1);
-    assert_eq!(controller.get("/v1/rules/pr-review/firings").await.unwrap()["firings"].as_array().unwrap().len(), 2);
     assert_eq!(controller.put_rule("pr-review", &rule).await.unwrap_err().status, 403);
     assert_eq!(controller.put_rule("other", &rule).await.unwrap_err().status, 403);
     assert_eq!(controller.delete_rule("pr-review").await.unwrap_err().status, 403);
@@ -233,7 +231,8 @@ async fn enrolled_producers_and_deployers_drive_a_rule_to_a_task_over_rest_and_g
     assert_eq!(deployer.pause_rule("pr-review").await.unwrap()["status"], "paused");
     producer.publish_event(&json!({"topic": "github.pull_request.opened", "key": "delivery-3", "data": {"draft": false, "repository": "r"}})).await.unwrap();
     tokio::time::sleep(Duration::from_millis(600)).await;
-    assert_eq!(automation.get("/v1/tasks").await.unwrap()["tasks"].as_array().unwrap().len(), 2);
+    let (after_pause, _) = automation.events(0, 0).await.unwrap();
+    assert_eq!(after_pause.iter().filter(|e| e["type"] == "github.pull_request.opened").count(), 2, "a paused rule delivers nothing");
     deployer.delete_rule("pr-review").await.unwrap();
     assert_eq!(deployer.get_rule("pr-review").await.unwrap_err().code, ErrorCode::NotFound);
 

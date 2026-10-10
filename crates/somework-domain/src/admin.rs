@@ -8,9 +8,9 @@ use somework_core::{Error, ErrorCode};
 
 use crate::{
     audit::AuditRecord,
-    db::{DbResultExt, icol, scol},
+    db::{DbResultExt, scol},
     domain::{Ctx, Domain},
-    policy::{AuthzRequest, Permissions, PolicyDocument},
+    policy::{AuthzRequest, PolicyDocument},
 };
 
 static PROCESS_START: OnceLock<(Instant, String)> = OnceLock::new();
@@ -84,10 +84,6 @@ impl Domain {
     pub async fn overview(&self, ctx: &Ctx) -> Result<Value, Error> {
         self.enforce_read(ctx, AuthzRequest::new("ops.read")).await?;
         let pool = self.db.pool();
-        let mut states = serde_json::Map::new();
-        for r in sqlx::query("SELECT state, COUNT(*) AS n FROM tasks GROUP BY state").fetch_all(pool).await.db()? {
-            states.insert(scol(&r, "state"), json!(icol(&r, "n")));
-        }
         let agents: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents").fetch_one(pool).await.db()?;
         let drafts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM catalog_entries WHERE approval_status = 'draft'").fetch_one(pool).await.db()?;
         let cutoff = somework_core::clock::ts(self.now() - chrono::Duration::seconds(self.cfg.runtime_ttl_seconds));
@@ -96,30 +92,21 @@ impl Domain {
             .fetch_one(pool)
             .await
             .db()?;
-        let approvals: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM approvals WHERE status = 'pending'").fetch_one(pool).await.db()?;
         let denials: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM policy_decisions WHERE decision = 'deny' AND occurred_at >= ?")
             .bind(somework_core::clock::ts(self.now() - chrono::Duration::hours(24)))
             .fetch_one(pool)
             .await
             .db()?;
-        let reconciliation: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE state = 'blocked' AND json_extract(blocker, '$.kind') = 'reconciliation'")
-                .fetch_one(pool)
-                .await
-                .db()?;
         let policy = {
             let mut conn = pool.acquire().await.db()?;
             self.active_policy(&mut conn).await?
         };
         Ok(json!({
             "domainId": self.cfg.domain_id,
-            "tasksByState": states,
             "agents": agents,
             "draftCatalogEntries": drafts,
             "onlineRuntimes": online,
-            "pendingApprovals": approvals,
             "denialsLast24h": denials,
-            "reconciliationQueue": reconciliation,
             "outbox": self.outbox_stats().await?,
             "policyVersion": policy.version,
             "matrixProfile": self.cfg.matrix_profile,
@@ -144,10 +131,7 @@ impl Domain {
             .await
             .db()?
         {
-            let ceiling = serde_json::from_str::<Permissions>(&scol(&r, "permissions"))
-                .map(|p| format!("{:?}", p.side_effects_max()).to_lowercase())
-                .unwrap_or_else(|_| "unknown".into());
-            principals.push(json!({"kind": scol(&r, "kind"), "id": scol(&r, "external_id"), "status": scol(&r, "status"), "sideEffectsCeiling": ceiling}));
+            principals.push(json!({"kind": scol(&r, "kind"), "id": scol(&r, "external_id"), "status": scol(&r, "status")}));
         }
         let (started, started_at) = PROCESS_START.get().map(|(i, t)| (i.elapsed().as_secs(), t.clone())).unwrap_or((0, String::new()));
         Ok(json!({

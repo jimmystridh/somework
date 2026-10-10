@@ -1,98 +1,18 @@
-//! What a containerised pilot relies on: graceful termination on SIGTERM, executors that cannot see the sidecar's
-//! environment, and a key lifecycle where the private key is generated on the worker host and never travels.
+//! What a containerised pilot relies on: a key lifecycle where the private key is generated on the agent host and never travels.
 
 use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     time::Duration,
 };
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use somework_client::Client;
-use somework_core::{contracts::SideEffects, fsm::TaskState};
-use somework_domain::policy::Permissions;
 use somework_testkit::{
-    Stack, capability,
-    process::{ChildGuard, eventually, free_port, repo_root, wait_for_port},
-    sidecar::{agent_key_file, sidecar_binary, write_script},
+    process::{ChildGuard, free_port, repo_root, wait_for_port},
+    sidecar::sidecar_binary,
 };
-
-fn read_perms() -> Permissions {
-    let mut p = Permissions::default_agent();
-    p.side_effects_at_most = Some(SideEffects::Read);
-    p
-}
-
-fn review_input() -> Value {
-    json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": "billing/import-service", "commit": "61a8d52"}})
-}
-
-async fn reviewer_stack() -> (Stack, somework_testkit::Agent, somework_testkit::Agent) {
-    let stack = Stack::start().await;
-    let worker = stack.worker("agent/reviewer", vec![capability("code.review", "2.1", "read", "Review pull requests")], read_perms()).await;
-    let author = stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
-    (stack, worker, author)
-}
-
-fn worker_command(base_url: &str, key_file: &Path, script: &Path) -> Command {
-    let mut cmd = Command::new(sidecar_binary());
-    cmd.args(["run", "--mode", "worker", "--wake", "poll", "--domain-url", base_url, "--key-file"]).arg(key_file).arg("--exec").arg(script);
-    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    cmd
-}
-
-async fn active_runtimes(stack: &Stack, agent: &str) -> usize {
-    let runtimes = stack.admin.get("/v1/runtimes").await.unwrap();
-    runtimes["runtimes"].as_array().unwrap().iter().filter(|r| r["agentId"] == agent && r["status"] == "active").count()
-}
-
-#[tokio::test]
-async fn sigterm_stops_the_worker_gracefully_and_ends_its_runtime() {
-    let (stack, worker, _author) = reviewer_stack().await;
-    let script = write_script(stack.dir.path(), "idle.sh", "cat >/dev/null; echo '{\"type\":\"result\",\"result\":{\"verdict\":\"approve\"}}'");
-    let baseline = active_runtimes(&stack, "agent/reviewer").await;
-    let mut child =
-        tokio::process::Command::from(worker_command(&stack.url, &agent_key_file(stack.dir.path(), &worker), &script)).kill_on_drop(true).spawn().unwrap();
-    eventually("the sidecar registers its own runtime", Duration::from_secs(20), || async {
-        (active_runtimes(&stack, "agent/reviewer").await == baseline + 1).then_some(())
-    })
-    .await;
-
-    // what `docker stop` sends
-    Command::new("kill").arg("-TERM").arg(child.id().unwrap().to_string()).status().unwrap();
-    let status = tokio::time::timeout(Duration::from_secs(15), child.wait()).await.expect("the sidecar exits on SIGTERM").unwrap();
-    assert!(status.success(), "a clean exit, not death by signal: {status:?}");
-    assert_eq!(active_runtimes(&stack, "agent/reviewer").await, baseline, "the sidecar's runtime is ended on the way out");
-    stack.stop().await;
-}
-
-#[tokio::test]
-async fn executors_do_not_inherit_the_sidecars_environment() {
-    let (stack, worker, author) = reviewer_stack().await;
-    let script = write_script(
-        stack.dir.path(),
-        "env.sh",
-        r#"cat >/dev/null
-printf '{"type":"result","result":{"verdict":"approve","leaked":"%s","keyFile":"%s","path":"%s"}}\n' "$PILOT_SECRET" "$SOMEWORK_KEY_FILE" "$PATH""#,
-    );
-    let key_file = agent_key_file(stack.dir.path(), &worker);
-    let mut cmd = worker_command(&stack.url, &key_file, &script);
-    cmd.env("PILOT_SECRET", "hunter2").env("SOMEWORK_KEY_FILE", &key_file);
-    let _child = ChildGuard::spawn("sidecar", cmd);
-
-    let task = author.client.submit_task(&review_input(), None).await.unwrap();
-    let done = eventually("the task to succeed", Duration::from_secs(30), || async {
-        let t = author.client.get_task(&task.task_id).await.ok()?;
-        (t.state == TaskState::Succeeded).then_some(t)
-    })
-    .await;
-    let result = done.result.unwrap();
-    assert_eq!(result["leaked"], "", "a variable set on the sidecar must not reach the executor: {result}");
-    assert_eq!(result["keyFile"], "", "the key file location must not reach the executor: {result}");
-    assert!(!result["path"].as_str().unwrap().is_empty(), "PATH is on the default allowlist");
-    stack.stop().await;
-}
 
 fn somework_binary() -> PathBuf {
     let status =
@@ -119,7 +39,7 @@ fn client_for(base: &str, key_file: &Path) -> Client {
 }
 
 #[tokio::test]
-async fn the_private_key_is_generated_on_the_worker_host_and_registered_by_public_key_only() {
+async fn the_private_key_is_generated_on_the_agent_host_and_registered_by_public_key_only() {
     let bin = somework_binary();
     let dir = tempfile::tempdir().unwrap();
     let port = free_port();
@@ -168,10 +88,10 @@ async fn the_private_key_is_generated_on_the_worker_host_and_registered_by_publi
     assert!(client_for(&base, &second_key).get("/v1/admin/whoami").await.is_ok());
 
     // widening an enrolled agent's permissions does not require a new key
-    assert!(admin(&bin, &config, &["set-agent-permissions", "--id", "agent/pilot", "--may-invoke", "code.*"]).status.success());
+    assert!(admin(&bin, &config, &["set-agent-permissions", "--id", "agent/pilot", "--classification", "confidential"]).status.success());
     assert!(client_for(&base, &second_key).get("/v1/admin/whoami").await.is_ok(), "the same key keeps working after a permission change");
     assert!(
-        !admin(&bin, &config, &["set-agent-permissions", "--id", "agent/nobody", "--may-invoke", "code.*"]).status.success(),
+        !admin(&bin, &config, &["set-agent-permissions", "--id", "agent/nobody", "--classification", "confidential"]).status.success(),
         "an unknown agent is an error"
     );
 

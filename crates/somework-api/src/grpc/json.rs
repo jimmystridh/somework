@@ -71,37 +71,9 @@ impl Doc {
         self
     }
 
-    pub fn i64(mut self, key: &str, v: i64) -> Self {
-        if v != 0 {
-            self.0.insert(key.into(), Value::from(v));
-        }
-        self
-    }
-
-    pub fn opt_u64(mut self, key: &str, v: Option<u64>) -> Self {
-        if let Some(v) = v {
-            self.0.insert(key.into(), Value::from(v));
-        }
-        self
-    }
-
     pub fn opt_bool(mut self, key: &str, v: Option<bool>) -> Self {
         if let Some(v) = v {
             self.0.insert(key.into(), Value::Bool(v));
-        }
-        self
-    }
-
-    pub fn bool(mut self, key: &str, v: bool) -> Self {
-        if v {
-            self.0.insert(key.into(), Value::Bool(true));
-        }
-        self
-    }
-
-    pub fn f64(mut self, key: &str, v: f64) -> Self {
-        if v != 0.0 {
-            self.0.insert(key.into(), number(v));
         }
         self
     }
@@ -155,7 +127,7 @@ mod tests {
 
     #[test]
     fn empty_fields_are_omitted() {
-        let doc = Doc::new().str("a", "").str("b", "x").u64("c", 0).opt_u64("d", Some(0)).build();
-        assert_eq!(doc, json!({"b": "x", "d": 0}));
+        let doc = Doc::new().str("a", "").str("b", "x").u64("c", 0).opt_bool("d", Some(false)).opt_bool("e", None).build();
+        assert_eq!(doc, json!({"b": "x", "d": false}));
     }
 }

@@ -70,10 +70,6 @@ pub(crate) async fn call_ctx(state: &AppState, md: &MetadataMap) -> Result<Ctx, 
         }
         ctx.idempotency_key = Some(key.to_string());
     }
-    if let Some(m) = md.get("if-match").or_else(|| md.get("expected-revision")).and_then(|v| v.to_str().ok()) {
-        let rev = m.trim().trim_matches('"');
-        ctx.if_match = Some(rev.parse().map_err(|_| fail(Error::invalid("if-match must carry the task revision as an integer")))?);
-    }
     Ok(ctx)
 }
 
@@ -108,9 +104,7 @@ pub async fn serve(state: AppState, section: &GrpcSection, shutdown: Cancellatio
     let local = listener.local_addr().map_err(|e| Error::internal(e.to_string()))?;
 
     let (reporter, health) = tonic_health::server::health_reporter();
-    for name in
-        ["CatalogService", "MessageService", "EventService", "TaskService", "ContextService", "ArtifactService", "SubscriptionService", "AuthorizationService"]
-    {
+    for name in ["CatalogService", "MessageService", "EventService", "ArtifactService", "SubscriptionService"] {
         reporter.set_service_status(format!("somework.v1.{name}"), tonic_health::ServingStatus::Serving).await;
     }
     reporter.set_service_status("", tonic_health::ServingStatus::Serving).await;
@@ -130,11 +124,8 @@ pub async fn serve(state: AppState, section: &GrpcSection, shutdown: Cancellatio
         .add_service(pb::catalog_service_server::CatalogServiceServer::new(services::Catalog(state.clone())))
         .add_service(pb::message_service_server::MessageServiceServer::new(services::Messages(state.clone())))
         .add_service(pb::event_service_server::EventServiceServer::new(services::Events(state.clone())))
-        .add_service(pb::task_service_server::TaskServiceServer::new(services::Tasks(state.clone())))
-        .add_service(pb::context_service_server::ContextServiceServer::new(services::Contexts(state.clone())))
         .add_service(pb::artifact_service_server::ArtifactServiceServer::new(services::Artifacts(state.clone())))
-        .add_service(pb::subscription_service_server::SubscriptionServiceServer::new(services::Subscriptions(state.clone())))
-        .add_service(pb::authorization_service_server::AuthorizationServiceServer::new(services::Authorization(state)));
+        .add_service(pb::subscription_service_server::SubscriptionServiceServer::new(services::Subscriptions(state)));
     if section.reflection {
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(pb::FILE_DESCRIPTOR_SET)

@@ -29,8 +29,6 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/admin/policy-decisions", get(policy_decisions))
         .route("/v1/admin/conversations", get(conversations))
         .route("/v1/admin/catalog", get(catalog))
-        .route("/v1/admin/context-packs", get(context_packs))
-        .route("/v1/admin/context-packs/{id}/{version}", get(context_manifest))
         .route("/v1/admin/artifacts", get(artifacts))
 }
 
@@ -195,7 +193,6 @@ async fn session(State(s): State<AppState>, headers: HeaderMap) -> ApiResult {
             "roles": actor.permissions.roles,
             "operator": actor.permissions.allows_action("ops.read"),
             "auditor": actor.permissions.allows_action("audit.read"),
-            "canApprove": actor.permissions.allows_action("approval.grant"),
             "canAdminCatalog": actor.permissions.allows_action("catalog.approve"),
         })),
         Err(_) => ok(json!({"authenticated": false})),
@@ -209,8 +206,6 @@ async fn policy_decisions(State(s): State<AppState>, Auth(ctx): Auth, Query(f): 
 #[derive(Deserialize)]
 struct LimitQuery {
     limit: Option<i64>,
-    #[serde(rename = "taskId")]
-    task_id: Option<String>,
 }
 
 async fn conversations(State(s): State<AppState>, Auth(ctx): Auth, Query(q): Query<LimitQuery>) -> ApiResult {
@@ -222,14 +217,6 @@ async fn catalog(State(s): State<AppState>, Auth(ctx): Auth) -> ApiResult {
     ok(json!({"entries": s.domain.list_catalog(&ctx).await?}))
 }
 
-async fn context_packs(State(s): State<AppState>, Auth(ctx): Auth, Query(q): Query<LimitQuery>) -> ApiResult {
-    ok(json!({"contextPacks": s.domain.list_context_packs_admin(&ctx, q.limit.unwrap_or(200)).await?}))
-}
-
-async fn context_manifest(State(s): State<AppState>, Auth(ctx): Auth, axum::extract::Path((id, version)): axum::extract::Path<(String, i64)>) -> ApiResult {
-    ok(s.domain.get_context_manifest_admin(&ctx, &id, version).await?)
-}
-
 async fn artifacts(State(s): State<AppState>, Auth(ctx): Auth, Query(q): Query<LimitQuery>) -> ApiResult {
-    ok(json!({"artifacts": s.domain.list_artifacts_admin(&ctx, q.task_id.as_deref(), q.limit.unwrap_or(200)).await?}))
+    ok(json!({"artifacts": s.domain.list_artifacts_admin(&ctx, q.limit.unwrap_or(200)).await?}))
 }

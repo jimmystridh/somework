@@ -1,12 +1,12 @@
-# Events and reactions
+# Events and rules
 
-Status: decided, not built. Terms are defined in `CONTEXT.md`; the two hard-to-reverse choices are in `docs/adr/0001` and `0002`. Everything below belongs to the first version.
+Status: built. **Reactions were removed by ADR 0003** (`docs/adr/0003-messages-and-events-replace-tasks.md`): the domain no longer starts tasks, so a rule only wakes its owner; what the agent does next (a handler decision, a kit job) is the kit's business. Passages below that describe reactions, `submitTask`, `causedByTask`, `causedByEvent`, `maxDepth` and `maxFiringsPerHour` are historical; `docs/api.md` is the current wire reference. Terms are defined in `CONTEXT.md`; the two hard-to-reverse choices are in `docs/adr/0001` and `0002`. Everything below belongs to the first version.
 
 ## Shape
 
 An **event** is an `event.notification` message on a **topic** (`<source>.<object>.<change>`: `github.pull_request.opened`, `jira.issue.transitioned`, `datadog.monitor.alert`, `grafana.alert.firing`, `clock.nightly`). It has two kinds of consumer:
 
-* **Reaction**: a rule submits a task from a template under an `automation/<name>` principal, with a budget and a depth cap. For fixed flows. Read-class capabilities run unattended; write-class ones wait for the manager's approval, which shows the capability, a redacted input summary and the budget.
+* **Reaction (removed)**: a rule used to submit a task from a template under an `automation/<name>` principal, with a budget and a depth cap. Read-class capabilities ran unattended; write-class ones waited for the manager's approval, which shows the capability, a redacted input summary and the budget.
 * **Agent subscription**: the agent is woken and decides for itself under its own authority, optionally through a **handler**.
 
 The domain gains one primitive, the `submitTask` subscription action, executed from the outbox. Exactly-once is a unique key on (subscription, event id). Event ids are stable and producer-assigned (delivery id; monitor id plus transition time; webhook id plus timestamp; schedule name plus scheduled minute), or a hash of the normalised payload. Events are de-duplicated for 30 days. Event, task, event chains share the domain's hop and depth counters; an agent never reacts to an event it caused.
@@ -49,44 +49,35 @@ Names are fixed here so the domain, receiver, hub, kit and tooling can be built 
 
 ### Domain: publishing
 
-`POST /v1/events/publish` (gRPC `EventService.Publish`), caller is a `service` principal holding permission `events.publish:<prefix>` for each topic prefix it may use (glob over the topic, for example `events.publish:github.*`).
+`POST /v1/events/publish` (gRPC `EventService.Publish`), caller is a principal (usually a `service` producer) holding permission `events.publish:<prefix>` for each topic prefix it may use (glob over the topic, for example `events.publish:github.*`).
 
 ```json
 { "topic": "github.pull_request.opened", "key": "<stable event key, 1-200 chars>", "source": "github",
   "data": { "...": "mapped fields only, at most 64 KiB serialised" }, "classification": "internal",
-  "verified": true, "causedByTask": "tsk_...", "occurredAt": "2026-10-05T12:00:00Z" }
+  "verified": true, "occurredAt": "2026-10-05T12:00:00Z" }
 ```
 
 Response `{ "seq": 12, "eventId": "evt_...", "duplicate": false }`. Deduplicated on (publishing principal, key) for 30 days; a repeat returns the original seq with `duplicate: true` and emits nothing. Topic pattern `^[a-z][a-z0-9_]*(\.[a-z0-9_]+){2,}$`, at most 200 characters; `classification` must be a level of the active policy and not above the publisher's clearance. The domain stores a domain event whose `type` is the topic itself (so subscription selectors glob over it, for example `github.pull_request.*`) with payload `{topic, source, key, data, classification, verified, depth, causedByTask, publishedBy}`. `depth` = depth of `causedByTask` + 1 when it is given and was itself started by a reaction or event, otherwise 0. Events a producer publishes are never delivered back to that producer's own subscriptions.
 
-### Domain: rules, subscriptions, reactions
+### Domain: rules and subscriptions
 
-Permissions: `rules.manage` (write), `rules.control` (pause/resume and reads only), `ops.read` (read). A rule is a subscription plus an optional reaction, owned by the principal named in `owner`.
+Permissions: `rules.manage` (write), `rules.control` (pause/resume and reads only), `ops.read` (read). A rule is a wake-only subscription owned by the principal named in `owner`.
 
 * `GET /v1/rules`, `GET /v1/rules/{name}`, `PUT /v1/rules/{name}` (create or replace, idempotent), `DELETE /v1/rules/{name}`, `POST /v1/rules/{name}/pause`, `POST /v1/rules/{name}/resume`.
 * Body of `PUT`:
 
 ```json
-{ "description": "Review every opened pull request",
-  "owner": "automation/pr-review",
+{ "description": "Wake the reviewer for every opened pull request",
+  "owner": "agent/reviewer",
   "selector": "github.pull_request.opened",
   "where": [ { "path": "/data/draft", "equals": false } ],
-  "wake": false,
-  "reaction": {
-    "capability": { "id": "code.review", "version": 3 },
-    "input": { "repoUrl": "${/data/repository/clone_url}", "pullNumber": "${/data/number}" },
-    "budget": { "maxTokens": 200000, "maxMinutes": 20 },
-    "maxDepth": 3, "maxFiringsPerHour": 30 },
+  "wake": true,
   "status": "active" }
 ```
 
-`selector` is a glob over the topic (the same matcher as topic subscriptions); `where` is a list of JSON-pointer equality checks over the event payload (all must hold). A rule with `wake` and no `reaction` is an agent subscription (`owner` is then the agent). In `input`, a string that is exactly `${/pointer}` is replaced by the typed value found at that JSON pointer in the event payload; `${/pointer}` inside a longer string is replaced by its text form; a missing pointer fails the firing. `GET` returns the same document plus `status`, `createdAt`, `updatedAt`, `lastFiredAt`, and counters `{fired, skipped: {duplicate, depth, rate, denied, approval, error}}`.
+`selector` is a glob over the topic (the same matcher as topic subscriptions); `where` is a list of JSON-pointer equality checks over the event payload (all must hold). A matching event appears in the owner's event feed with `wake: true` and arrives through its subscription consumer on NATS. There is no `reaction`, no firing ledger and no `GET /v1/rules/{name}/firings`; a body with `reaction` is `422`. `PUT` answers `201` when the rule is new and `200` otherwise, an identical repeat changes nothing. `GET` returns the document plus `subscriptionId`, `createdAt`, `updatedAt`. The `*` action does not grant publishing; only `events.publish:<glob>` grants (for a producer, or an agent enrolled with `--publish`) and the admin role do. `rules.control` is an administrative action, so the `*` action never grants it. Admin commands: `enroll-producer`, `set-publish-permissions`, `enroll-service`, `enroll-agent --publish`.
 
-A matching event on a rule with a reaction writes one `reaction_firings` row (unique on (rule, event id)) and one outbox row for the sink `reaction`; the outbox worker submits the task in its own transaction as the `owner` principal (normal policy, delegation and approval rules apply, so write-class capabilities wait for approval). The task records `origin: {kind: "reaction", rule, eventId, depth}`. The domain emits `reaction.fired` and `reaction.skipped` (with `reason`) as ordinary domain events. Defaults: `maxDepth` 3, `maxFiringsPerHour` 30 per rule.
-
-Implementation notes (domain, built): `PUT` answers `201` when the rule is new and `200` otherwise, an identical repeat changes nothing, and the capability `version` may be written as a number or a string (stored as a string). `reaction.budget` is merged into `input.budget` unless the template sets one. Also served: `GET /v1/rules/{name}/firings?limit=` (the ledger) and gRPC `EventService.Publish`. The skipped counters have one more reason, `paused` (a rule paused after the event matched). The `*` action does not grant publishing; only `events.publish:<glob>` grants and the admin role do. Depth: a published event has `depth` as above, a task event carries `originDepth` (the origin depth of a reaction-started task) and counts as `originDepth + 1`, any other event starts at 0; a reaction is skipped with reason `depth` when the event depth has reached the rule's `maxDepth`, and the task it starts records `origin.depth` = the event depth. Events whose type starts with `reaction.` never start reactions (they can still wake subscribers). Reactions of write class or above always wait for structured approval, whatever the policy document says; a denied or expired approval counts as `skipped.approval`. Permissions: `rules.manage` (everything), `rules.control` (only `pause` and `resume`, plus reads; `PUT` and `DELETE` answer 403) and `ops.read` (reads); `rules.control` is an administrative action, so the `*` action never grants it, and `enroll-service --action rules.control` creates a principal that holds only it. Admin commands: `enroll-producer`, `set-publish-permissions`, `enroll-service`; automation principals are ordinary `enroll-agent --may-invoke` principals without a card.
-
-Event-driven agent tasks (built): task submission takes an optional `causedByEvent` (REST/gRPC/client). The domain verifies that the event was addressed to the submitter (otherwise `422 validation_failed`, identical for forged and foreign ids) and records `origin {kind:"event", eventId, depth: eventDepth+1}`; events published with `causedByTask` of such a task get `depth = origin.depth + 1`, so chains through agents are cut by the same `maxDepth`. Event-origin tasks are not forced into approval (the agent acts under its own authority). Retention: published events older than 30 days (with recipients, delivered outbox rows and dedupe keys) and settled firings are purged by the existing retention job; undelivered ones, task events, `reaction.*` events and the audit chain are kept. See `docs/api.md`.
+Retention: published events older than 30 days (with recipients, delivered outbox rows and dedupe keys) are purged by the retention job; undelivered ones, messages and the audit chain are kept. See `docs/api.md`.
 
 ### Receiver (public edge, VM in the DMZ)
 
@@ -115,7 +106,7 @@ As built (`packages/agent-kit/src/events`, enabled per role with `profile.events
 * **Handler shape**: `export default async function ({ event, agent, now }, kit)` returning the decision; `// @topics github.*, jira.*` on one of the first lines (or the `topics` argument of the save tool) selects the topics it handles, default all. The input is passed as a file inside the sandbox, not on stdin (the execution environment has no stdin); `kit` offers `fetchJson`, `fetchText` (https, hosts in `events.fetchHosts` only, no credentials, authorization and cookie headers refused), `redact`, `log`. Handlers matching a topic run in name order; `rewrite` passes the changed event on, any other decision ends the chain. No matching handler: the agent is woken. A handler that fails, times out, exceeds memory or output, or returns an invalid decision delivers the event to the inbox without waking.
 * **Intake**: the long-polling event feed (`GET /v1/events?wait=`) with the agent's own cursor and seen-id list in `<state dir>/events/`; the domain-side cursor is not acknowledged because it is shared with the agent's message wakes. Published events are recognised by `payload.topic`; other domain event types are delivered only if they match `events.accept` (globs, for example `reaction.*`). Only deliveries with `wake: true` run handlers; others, and events older than `events.staleAfterHours` (24), are recorded in the inbox (`<state dir>/events/inbox.jsonl`, read with the `events_inbox` tool).
 * **Kill switch**: `<state dir>/handlers/control.json` (read for every event; editable by an operator) and, from the domain side, a direct message to the agent from a sender in `events.controllers` (default: `events.notifyTo`, default `agent/manager`) carrying the labels `eventControl` = `disable` | `enable` | `disable-all` | `enable-all`, `eventTarget` = handler name (for `disable` and `enable`) and `eventReason`. Such a message gets no chat notice. The agent can lift only its own and the automatic switch-offs, never the owner's or the manager's.
-* **Submit decisions** call `POST /v1/tasks` with `causedByEvent: <event id>` (so the domain records the origin and counts depth) and the idempotency key `event:<eventId>:<agentId>:<capability>`; a `budget` in the decision goes into `input.budget` unless the input already has one, capped at `events.submitBudgetCap` (200k tokens, 20 min).
+* **Submit decisions** start a kit job (`POST /v1/tasks` and `causedByEvent` no longer exist) with the idempotency key `event:<eventId>:<agentId>:<capability>`; a `budget` in the decision goes into `input.budget` unless the input already has one, capped at `events.submitBudgetCap` (200k tokens, 20 min).
 * **Notices to the owner** (`chat.notice`, `triggerMode: never`, label `eventNotice`, sent to `events.notifyTo`): `notify` decisions, an automatic switch-off, the answer of a woken run, and once per day each when the events pool reaches the throttle level and when it is used up.
 * **Woken runs** get the event inside random boundary markers as quoted untrusted data, run with `events.wakeBudget` (default 100k tokens, 10 min), use `events.smallModel` for tier `small` and while throttled, and every approval request is refused. Throttled (80 %): small tier, at most `events.throttledWakesPerHour` (5) wakes per hour. Stopped (100 %): wakes become inbox entries; handlers keep running.
 * **Health**: `GET /status` returns `{handlers, tokenPools, events: {cursor, dropped, inbox}}` (also merged into the `/ready` body); metrics `somework_events_total{result}`, `somework_handler_runs_total{handler,result}`, `somework_token_pool_used{pool}`, `somework_token_pool_limit{pool}`.

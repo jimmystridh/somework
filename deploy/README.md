@@ -1,63 +1,34 @@
-# Pilot deployment: domain + NATS on VM105, one worker on VM102
+# Pilot deployment: domain + NATS on VM105
 
 A trusted, single-node pilot. It is **not** a hardened multi-tenant platform: read "What this does not protect against".
 
 ```
-VM105 (private services)                                    VM102 (agent Docker host)
-┌──────────────────────────────────────────┐               ┌──────────────────────────┐
-│ proxy (Caddy, TLS) :8443 ─► domain :8080 │ ◄── HTTPS ─── │ worker container         │
-│ nats + JetStream   :4222 (TLS only)      │ ◄── NATS/TLS ─│  sidecar → executor      │
-│ SQLite + objects (volume), JetStream vol │               │  own key, own workspace  │
-└──────────────────────────────────────────┘               └──────────────────────────┘
+VM105 (private services)
+┌──────────────────────────────────────────┐
+│ proxy (Caddy, TLS) :8443 ─► domain :8080 │ ◄── HTTPS ─── agents and the kit (outbound only)
+│ nats + JetStream   :4222 (TLS only)      │ ◄── NATS/TLS ─ per-agent inbox consumers
+│ SQLite + objects (volume), JetStream vol │
+└──────────────────────────────────────────┘
 ```
 
-The worker only makes outbound connections. SQLite and the domain stay the authority for tasks, leases, fencing and
-permissions; NATS only wakes the worker. If NATS is lost, the worker keeps claiming work over HTTP (see "Wake transport").
+Agents only make outbound connections. SQLite and the domain are the authority for messages, conversations, events and
+permissions; NATS only wakes agents through their inbox consumers. If NATS is lost, agents sweep their inbox over HTTP.
+Agent processes (the TypeScript kit and its adapters) are deployed separately and are not part of this stack.
 
-## What was verified, and what was not
+## What was verified
 
-Automated tests (developer machine):
-
-* composite NATS + HTTP wake, outage, lost notification, deleted consumer, exactly-once execution (`nats_wake_resilience`);
-* TLS to NATS and to an HTTPS endpoint: wrong CA, wrong hostname, platform-only trust and plaintext are rejected
-  (`sidecar_tls`, `nats_tls_pilot`); the domain and a worker exchange wake-ups over a TLS-only broker;
-* `render-nats-conf` output is accepted by the real `nats-server` and enforces TLS and bounded storage;
-* certificates from `make-private-ca.sh` are accepted by the sidecar;
-* SIGTERM, executor environment and the key lifecycle (`sidecar_deploy`); per-principal broker permissions (`nats_security`),
-  lease/fencing, restore (`dr_restore`); both compose files pass `docker compose config`.
-
-Run on the real pilot hosts on 2026-10-05 (images built on VM102, domain stack on VM105, worker on VM102):
-
-| Check | Result |
-|---|---|
-| Image builds (`server`, `worker-demo`) on VM102 | built first time, about 5 minutes on 2 CPUs |
-| TLS through Caddy from VM102 | pilot CA trusted; platform trust, plain HTTP to the TLS port and the internal :8080 are refused/unreachable |
-| Worker over TLS NATS with `wake = "nats"`, `tls.required` | connected first attempt; end-to-end task in 0.4 s |
-| Broker down: domain stays up, task still completes | 8.3 s over HTTP instead of 0.4 s; domain unaffected |
-| Broker back | next task 0.4 s again, no manual action |
-| `users.conf` change reloads the broker (a watcher inside the `nats` container) | broker logs `Reloaded: authorization users` |
-| `docker stop` on the worker | exit code 0 in 0.7 s, runtime ended |
-| Key rotation | old key: `401 signature verification failed`, backoff; new key works |
-| Hardening as running | non-root, read-only rootfs, caps dropped (proxy: `NET_BIND_SERVICE` only), no `docker.sock` in any container |
-| Backup and restore | restore verifies checksums and needs `SOMEWORK_MASTER_KEY` |
-
-Bugs found only by running it on the hosts (all fixed here): `pid: service:nats` made NATS a hard dependency of the domain
-(the namespace's init exiting killed the domain, exit 137); `master_key` must be base64url of 32 bytes, not hex; the caddy
-image cannot exec with every capability dropped; `docker compose run domain` could not start before the broker existed.
-
-Not verified: behaviour under memory pressure beyond the limits above, the Grafana log shipping, an executor other than the
-example reviewer, and the quiet-machine load profile.
+The 2026-10-05 run on the pilot hosts covered the previous task/worker architecture. After the cut-over to messages and
+events (ADR 0003) the automated tests in `crates/somework-it` cover TLS to NATS and HTTPS (`sidecar_tls`, `nats_tls_config`),
+per-principal broker permissions (`nats_security`), JetStream loss and broker outages (`nats_resilience`, `nats_crash`),
+backup and restore (`dr_restore`) and both compose files; the pilot hosts have not been re-verified since.
 
 ## 1. Build the images (any machine with Docker)
 
 ```bash
 docker build -f deploy/Dockerfile --target server -t somework-server:pilot-1 .
-docker build -f deploy/Dockerfile --target worker -t somework-worker:pilot-1 .
 ```
 
 Base images are pinned by digest in `deploy/Dockerfile` and the compose files. Update them deliberately.
-The worker image contains only the sidecar. Add your executor by deriving from it or by mounting a read-only directory,
-then name it in `worker.toml`. `--target worker-demo` adds Python and the example reviewer agent for smoke tests only.
 
 ## 2. Certificates (once, on a trusted machine)
 
@@ -67,10 +38,10 @@ deploy/scripts/make-private-ca.sh ./pki \
   nats=nats,nats.internal,10.0.0.5
 ```
 
-* `domain` is the proxy certificate; its names must include the host in `public_url` and in the workers' `SOMEWORK_DOMAIN_URL`.
-* `nats` must include `nats` (the domain reaches the broker by compose service name) and the name or IP the workers use
+* `domain` is the proxy certificate; its names must include the host in `public_url` and in the agents' `SOMEWORK_DOMAIN_URL`.
+* `nats` must include `nats` (the domain reaches the broker by compose service name) and the name or IP the agents use
   (`[nats] client_url`).
-* Copy `ca.pem` to both hosts and to every worker. Copy each server's `.pem`/`.key` only to that server, into
+* Copy `ca.pem` to the server and to every agent host. Copy each server's `.pem`/`.key` only to that server, into
   `deploy/vm105/certs/` (`nats.*`, `domain.*`, `ca.pem`), and `chown 10001:10001` the `.key` files. Keep `ca.key` offline.
 
 ## 3. VM105: domain, broker, proxy
@@ -100,59 +71,36 @@ docker compose up -d domain proxy
   after a broker restart, and new agents could not log in until someone sent the broker a SIGHUP.
 * Do not enable `[ui] dev_token_login`. Leave `[ui]` out unless an OIDC login is configured.
 
-## 4. VM102: the worker
+## 4. Agents
 
-On VM102, generate the identity **on the worker host** so the private key never travels:
-
-```bash
-sudo install -d -o 10001 -g 10001 -m 0700 /srv/somework-worker/keys
-docker run --rm -u 10001:10001 -v /srv/somework-worker/keys:/keys --entrypoint somework-sidecar \
-  somework-worker:pilot-1 keygen --id agent/pilot-reviewer --key-out /keys/worker.key.json
-```
-
-It prints the public key (and nothing secret). On VM105, register only that public key, with the least privilege the
-worker needs, and publish its capability card:
+Generate each agent's identity on its own host so the private key never travels (`somework-sidecar keygen --id agent/x --key-out …`
+prints only the public key). On VM105 register that public key and publish the agent's capability card (an advertisement
+only; it grants nothing):
 
 ```bash
-ops admin --config /etc/somework/somework.toml enroll-agent \
-  --id agent/pilot-reviewer --public-key '<publicKey>' --side-effects read
+ops admin --config /etc/somework/somework.toml enroll-agent --id agent/pilot-reviewer --public-key '<publicKey>'
 ops admin --config /etc/somework/somework.toml register-card --card /cards/pilot-reviewer.json --approve   # card JSON in ./cards
 ```
 
-Then on VM102:
+Add `--publish 'github.*'` to `enroll-agent` to let an agent publish events under those topics.
 
-```bash
-cd deploy/vm102
-cp worker.toml.example config/worker.toml      # set the executor command
-cp /path/to/ca.pem config/ca.pem
-cp .env.example .env                           # SOMEWORK_VERSION, SOMEWORK_DOMAIN_URL, WORKER_KEY_DIR
-docker compose up -d
-```
+## Inbox wake-ups
 
-Check the worker's last-seen time with `GET /v1/runtimes` (administrator credential), or in the **Runtimes** view if you
-enabled the UI. The worker image has no health probe; alert on a stale last-seen instead.
+Agents receive a wake-up on their inbox subject (`somework.inbox.<agent>`) when a message or event addresses them, and read the
+canonical messages over HTTP (`GET /v1/inbox?unread=true`). A lost, delayed or purged notification can only add latency:
+the kit sweeps its unread inbox periodically and rebuilds the NATS connection with jittered backoff.
 
-## Wake transport
-
-`wake = "nats"` (the pilot setting): low-latency wake-ups over NATS, plus every 25 s (±20 %) an HTTP lookup of queued
-tasks. A lost, delayed or purged notification can only add latency. If the broker fails, the worker continues over HTTP
-(from "now") and rebuilds the NATS connection with jittered exponential backoff (1 s up to 30 s).
-
-* Messages and task events are not reconciled over HTTP while NATS is the transport; they rely on JetStream redelivery.
-  Anything that arrives during an outage is delivered when the broker is back.
-* Roll back to HTTP-only at any time: set `wake = "poll"` in `worker.toml` and restart the worker.
-* After losing the JetStream volume: restore it, or run `somework admin republish-queued` to re-enqueue notifications for
-  every queued task. The worker's HTTP lookup recovers queued tasks in the meantime.
+* After losing the JetStream volume nothing needs to be re-enqueued; the next sweep finds every unread message in SQLite.
 
 ## Key rotation and the kill switch
 
 An agent has exactly one registered public key. Rotation is a planned window, not zero-downtime:
 
-1. Stop the worker (`docker compose stop worker`; it exits after in-flight work, up to 10 s).
-2. On VM102, generate a new key file next to the old one (`keygen --key-out /keys/worker-2.key.json`).
+1. Stop the agent.
+2. On the agent host, generate a new key file next to the old one (`keygen --key-out /keys/worker-2.key.json`).
 3. On VM105: `admin rotate-agent-key --id agent/pilot-reviewer --public-key '<new publicKey>'`. The old key stops
    authenticating immediately.
-4. Point `SOMEWORK_KEY_FILE` at the new file and start the worker. Delete the old key file.
+4. Point the agent at the new key file and start it. Delete the old key file.
 
 Lost or leaked key: `admin set-agent-status --id agent/pilot-reviewer --status disabled` blocks authentication at once;
 `--status active` re-enables.
@@ -161,20 +109,14 @@ Lost or leaked key: `admin set-agent-status --id agent/pilot-reviewer --status d
 
 `somework backup --config … --to DIR` writes a consistent online backup of the database, artifacts and key material
 (`somework restore` verifies it). Back up the SQLite volume and the objects together, and the JetStream volume only as an
-optimisation: JetStream can be rebuilt from SQLite (see above). Test a restore before relying on it.
+optimisation: nothing in JetStream is authoritative. Test a restore before relying on it.
 
 ## What this does not protect against
 
-* **The executor can read the worker's key.** It runs as the sidecar's user on the sidecar's filesystem. The sidecar
-  strips its environment (only `PATH`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TMPDIR` and what you list in `env_allow`
-  reach it), which does not stop file access or `/proc`. Run only trusted, allowlisted, read-only or idempotent executors,
-  concurrency 1. Untrusted or arbitrary task execution needs stronger isolation first (a separate container or user per
-  executor, with the key unreachable).
-* **Shared kernel.** The worker shares VM102's kernel with other agents (Pi). Do not mount Pi's auth, sessions or
-  workspace, any Mac key, or the Docker socket into it. The container is non-root, unprivileged, read-only, drops all
-  capabilities and is resource-limited.
-* **No exactly-once effects.** Fencing stops a stale worker from changing the domain's state; it does not undo or dedupe
-  effects the executor already caused elsewhere.
+* **Full trust inside the domain.** Every enrolled principal is trusted to message, subscribe and read artifacts within its
+  classification clearance; capabilities advertise what an agent offers and do not gate anything.
+* **Shared kernel.** Agents on the same Docker host share its kernel. Do not mount other agents' auth, sessions or
+  workspaces, any Mac key, or the Docker socket into an agent container.
 * **Single node, no HA.** One domain, one broker. Plan for downtime when either restarts.
-* **No log redaction layer.** Keep credentials and task bodies out of operational logs; ship logs to the private Grafana
-  only after checking what the executor prints to stderr.
+* **No log redaction layer.** Keep credentials and message bodies out of operational logs; ship logs to the private Grafana
+  only after checking what agents print to stderr.

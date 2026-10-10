@@ -231,13 +231,7 @@ fn entry_from_row(row: SqliteRow) -> Result<EntryRow, Error> {
 }
 
 impl Domain {
-    pub async fn agent_availability(
-        &self,
-        conn: &mut SqliteConnection,
-        agent_id: &str,
-        agent_status: &str,
-        capability_ids: &[String],
-    ) -> Result<Availability, Error> {
+    pub async fn agent_availability(&self, conn: &mut SqliteConnection, agent_id: &str, agent_status: &str) -> Result<Availability, Error> {
         let cutoff = somework_core::clock::ts(self.now() - chrono::Duration::seconds(self.cfg.runtime_ttl_seconds));
         let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runtime_instances WHERE agent_id = ? AND status = 'active' AND last_seen_at >= ?")
             .bind(agent_id)
@@ -246,26 +240,16 @@ impl Domain {
             .await
             .db()?;
         let ever: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runtime_instances WHERE agent_id = ?").bind(agent_id).fetch_one(&mut *conn).await.db()?;
-        let mut queue: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE state = 'queued' AND target_agent_id = ?").bind(agent_id).fetch_one(&mut *conn).await.db()?;
-        for cap in capability_ids {
-            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE state = 'queued' AND target_agent_id IS NULL AND capability_id = ?")
-                .bind(cap)
-                .fetch_one(&mut *conn)
-                .await
-                .db()?;
-            queue += n;
-        }
         let state = if agent_status == "disabled" {
             AvailabilityState::Offline
         } else if active > 0 {
-            if queue >= active * 4 { AvailabilityState::Busy } else { AvailabilityState::Available }
+            AvailabilityState::Available
         } else if ever > 0 {
             AvailabilityState::Queueable
         } else {
             AvailabilityState::Unknown
         };
-        Ok(Availability { state, active_instances: Some(active as u64), queue_depth: Some(queue as u64), observed_at: Some(self.now_ts()) })
+        Ok(Availability { state, active_instances: Some(active as u64), queue_depth: None, observed_at: Some(self.now_ts()) })
     }
 
     fn actor_is_owner_or_admin(&self, ctx: &Ctx, agent_id: &str) -> bool {
@@ -277,32 +261,18 @@ impl Domain {
     /// CAT-03: the single visibility gate used by every read path *before* anything is assembled for the caller.
     /// Returns the capabilities of `entry` the caller may see, or `None` when the entry itself is hidden.
     fn visible_capabilities(&self, ctx: &Ctx, entry: &EntryRow) -> Option<Vec<Capability>> {
-        let owner_or_admin = self.actor_is_owner_or_admin(ctx, &entry.agent_id) && ctx.actor.peer_domain.is_none();
+        let owner_or_admin = self.actor_is_owner_or_admin(ctx, &entry.agent_id);
         if owner_or_admin {
             return Some(entry.card.capabilities.clone());
         }
         if entry.approval != ApprovalStatus::Approved || entry.card.status == Some(AgentStatus::Disabled) {
             return None;
         }
-        if let Some(peer) = &ctx.actor.peer_domain {
-            let _ = peer;
-            if !matches!(entry.visibility, Visibility::Exported | Visibility::Public) {
-                return None;
-            }
-            let caps: Vec<Capability> = entry
-                .card
-                .capabilities
-                .iter()
-                .filter(|c| entry.exported.iter().any(|e| e == &c.id) && ctx.actor.permissions.may_discover(&c.id))
-                .cloned()
-                .collect();
-            return if caps.is_empty() { None } else { Some(caps) };
-        }
         match entry.visibility {
             Visibility::Private => return None,
             Visibility::Domain | Visibility::Exported | Visibility::Public => {}
         }
-        let caps: Vec<Capability> = entry.card.capabilities.iter().filter(|c| ctx.actor.permissions.may_discover(&c.id)).cloned().collect();
+        let caps: Vec<Capability> = entry.card.capabilities.to_vec();
         if caps.is_empty() { None } else { Some(caps) }
     }
 
@@ -352,22 +322,9 @@ impl Domain {
         let now = self.now_ts();
         let policy = self.active_policy(conn).await?;
         let principal = self.principal_by_label(conn, ActorKind::Agent, &card.agent_id).await?;
-        let agent_max = principal.as_ref().map(|p| p.permissions.side_effects_max()).unwrap_or(SideEffects::Read);
         let is_native = source.as_ref().is_none_or(|s| s.kind == SourceType::Native);
-        if is_native {
-            if principal.is_none() {
-                return Err(Error::not_found("agent principal (enroll the agent before registering its card)"));
-            }
-            for cap in &card.capabilities {
-                if cap.side_effects > agent_max {
-                    return Err(Error::denied(format!(
-                        "capability {} declares {} side effects, above the agent's maximum authority ({})",
-                        cap.id,
-                        cap.side_effects.as_str(),
-                        agent_max.as_str()
-                    )));
-                }
-            }
+        if is_native && principal.is_none() {
+            return Err(Error::not_found("agent principal (enroll the agent before registering its card)"));
         }
 
         // Capability contracts are immutable per version.
@@ -566,8 +523,7 @@ impl Domain {
 
     async fn entry_view(&self, conn: &mut SqliteConnection, e: &EntryRow, capabilities: Option<Vec<Capability>>) -> Result<CatalogEntry, Error> {
         let agent_status = scol(&e.row, "agent_status");
-        let cap_ids: Vec<String> = e.card.capabilities.iter().map(|c| c.id.clone()).collect();
-        let availability = self.agent_availability(conn, &e.agent_id, &agent_status, &cap_ids).await?;
+        let availability = self.agent_availability(conn, &e.agent_id, &agent_status).await?;
         let mut card = e.card.clone();
         if let Some(caps) = capabilities {
             card.capabilities = caps;
@@ -603,11 +559,7 @@ impl Domain {
         let mut conn = self.db.pool().acquire().await.db()?;
         let e = self.entry_row(&mut conn, agent_id).await?.ok_or_else(|| Error::not_found("agent"))?;
         let Some(caps) = self.visible_capabilities(ctx, &e) else { return Err(Error::not_found("agent")) };
-        let mut view = self.entry_view(&mut conn, &e, Some(caps)).await?;
-        if ctx.actor.peer_domain.is_some() {
-            sanitize_for_peer(&mut view);
-        }
-        Ok(view)
+        self.entry_view(&mut conn, &e, Some(caps)).await
     }
 
     pub async fn get_capability(&self, ctx: &Ctx, id: &str, version: &str) -> Result<Capability, Error> {
@@ -642,11 +594,7 @@ impl Domain {
         for row in rows {
             let e = entry_from_row(row)?;
             if let Some(caps) = self.visible_capabilities(ctx, &e) {
-                let mut view = self.entry_view(&mut conn, &e, Some(caps)).await?;
-                if ctx.actor.peer_domain.is_some() {
-                    sanitize_for_peer(&mut view);
-                }
-                out.push(view);
+                out.push(self.entry_view(&mut conn, &e, Some(caps)).await?);
             }
         }
         Ok(out)
@@ -664,7 +612,7 @@ impl Domain {
                     let now = this.now_ts();
                     let policy = this.active_policy(tx).await?;
                     if e.approval == ApprovalStatus::Revoked {
-                        return Err(Error::new(ErrorCode::InvalidTransition, "revoked catalog entries cannot be changed"));
+                        return Err(Error::new(ErrorCode::Conflict, "revoked catalog entries cannot be changed"));
                     }
                     let new_status = req.status.unwrap_or(e.approval);
                     if let Some(exported) = &req.exported_capabilities {
@@ -829,14 +777,11 @@ impl Domain {
                     .await
                     .db()?;
             let status = if principal_status.as_deref() == Some("disabled") { "disabled".to_string() } else { scol(&e.row, "agent_status") };
-            let availability = {
-                let ids: Vec<String> = e.card.capabilities.iter().map(|c| c.id.clone()).collect();
-                self.agent_availability(&mut conn, &e.agent_id, &status, &ids).await?
-            };
+            let availability = self.agent_availability(&mut conn, &e.agent_id, &status).await?;
             if !req.availability.is_empty() && !req.availability.contains(&availability.state) {
                 continue;
             }
-            // A disabled agent will never claim work: offering it would only queue tasks nobody takes. Asking for offline entries shows it.
+            // A disabled agent will never answer: offering it would only send messages nobody reads. Asking for offline entries shows it.
             if status == "disabled" && !req.availability.contains(&AvailabilityState::Offline) {
                 continue;
             }
@@ -895,17 +840,6 @@ impl Domain {
         Ok(SearchResponse { matches })
     }
 
-    /// Agents (not capabilities) currently allowed to claim work for `capability` in the caller-independent sense.
-    pub async fn eligible_agents(&self, conn: &mut SqliteConnection, capability_id: &str, version: &str) -> Result<Vec<(String, String)>, Error> {
-        let rows = sqlx::query("SELECT a.agent_id, a.pool_id FROM agent_capabilities ac JOIN agents a ON a.agent_id = ac.agent_id JOIN catalog_entries c ON c.agent_id = a.agent_id WHERE ac.capability_id = ? AND ac.capability_version = ? AND c.approval_status = 'approved' AND a.status <> 'disabled' ORDER BY a.agent_id")
-            .bind(capability_id)
-            .bind(version)
-            .fetch_all(conn)
-            .await
-            .db()?;
-        Ok(rows.iter().map(|r| (scol(r, "agent_id"), scol(r, "pool_id"))).collect())
-    }
-
     pub fn capability_ids_of(card: &AgentCard) -> HashSet<String> {
         card.capabilities.iter().map(|c| c.id.clone()).collect()
     }
@@ -916,55 +850,5 @@ impl Domain {
 
     pub fn unused_id() -> String {
         ids::event_id()
-    }
-}
-
-/// Disclosure filter for federated callers: no internal interfaces, contacts or labels (DOM-04).
-pub fn sanitize_for_peer(entry: &mut CatalogEntry) {
-    entry.agent_card.interfaces = vec![];
-    entry.agent_card.owner.contact = None;
-    entry.agent_card.owner.service = None;
-    entry.agent_card.labels.clear();
-    entry.agent_card.auth_schemes.clear();
-    entry.labels.clear();
-    entry.search_text = None;
-    entry.approval.approved_by = None;
-    for cap in &mut entry.agent_card.capabilities {
-        cap.cost_hint = None;
-        cap.required_permissions.clear();
-    }
-}
-
-impl Domain {
-    /// Whether `ctx` may see capability `id@version` (optionally only as offered by `agent_id`). Used by task
-    /// submission so that hidden capabilities are indistinguishable from nonexistent ones (CAT-03).
-    pub(crate) async fn caller_can_see_capability(
-        &self,
-        conn: &mut SqliteConnection,
-        ctx: &Ctx,
-        agent_id: Option<&str>,
-        id: &str,
-        version: &str,
-    ) -> Result<bool, Error> {
-        let rows = sqlx::query("SELECT c.*, a.card AS card, a.status AS agent_status FROM agent_capabilities ac JOIN catalog_entries c ON c.agent_id = ac.agent_id JOIN agents a ON a.agent_id = c.agent_id WHERE ac.capability_id = ? AND ac.capability_version = ? AND (? IS NULL OR ac.agent_id = ?)")
-            .bind(id)
-            .bind(version)
-            .bind(agent_id)
-            .bind(agent_id)
-            .fetch_all(conn)
-            .await
-            .db()?;
-        for row in rows {
-            let e = entry_from_row(row)?;
-            if e.approval != ApprovalStatus::Approved {
-                continue;
-            }
-            if let Some(caps) = self.visible_capabilities(ctx, &e)
-                && caps.iter().any(|c| c.id == id && c.version == version)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 }

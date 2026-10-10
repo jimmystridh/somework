@@ -20,18 +20,9 @@ pub fn rules(kind: MessageType) -> TypeRules {
         ChatMessage => TypeRules { durable: true, allowed_triggers: &[Never, Directed, Subscription], default_trigger: Directed, client_sendable: true },
         ChatNotice => TypeRules { durable: true, allowed_triggers: &[Never], default_trigger: Never, client_sendable: true },
         EventNotification => TypeRules { durable: true, allowed_triggers: &[Never, Subscription], default_trigger: Subscription, client_sendable: true },
-        TaskRequest => TypeRules { durable: true, allowed_triggers: &[TaskState], default_trigger: TaskState, client_sendable: false },
-        TaskStatus => TypeRules { durable: true, allowed_triggers: &[Never], default_trigger: Never, client_sendable: true },
-        TaskInput => TypeRules { durable: true, allowed_triggers: &[TaskState], default_trigger: TaskState, client_sendable: false },
-        TaskResult => TypeRules { durable: true, allowed_triggers: &[Never], default_trigger: Never, client_sendable: false },
-        ContextOffer => TypeRules { durable: true, allowed_triggers: &[Directed], default_trigger: Directed, client_sendable: false },
-        ContextAccepted => TypeRules { durable: true, allowed_triggers: &[Never], default_trigger: Never, client_sendable: false },
         ArtifactPublished => TypeRules { durable: true, allowed_triggers: &[Never], default_trigger: Never, client_sendable: false },
-        ApprovalRequest => TypeRules { durable: true, allowed_triggers: &[Never, Directed], default_trigger: Directed, client_sendable: false },
-        ApprovalDecision => TypeRules { durable: true, allowed_triggers: &[TaskState], default_trigger: TaskState, client_sendable: false },
         CatalogChanged => TypeRules { durable: true, allowed_triggers: &[Never], default_trigger: Never, client_sendable: false },
         PolicyDenied => TypeRules { durable: true, allowed_triggers: &[Never], default_trigger: Never, client_sendable: false },
-        StreamChunk => TypeRules { durable: false, allowed_triggers: &[Never], default_trigger: Never, client_sendable: false },
         PresenceChanged => TypeRules { durable: false, allowed_triggers: &[Never], default_trigger: Never, client_sendable: false },
     }
 }
@@ -56,8 +47,8 @@ mod tests {
 
     #[test]
     fn notices_status_and_streams_never_wake() {
-        for kind in [MessageType::ChatNotice, MessageType::TaskStatus, MessageType::StreamChunk, MessageType::PresenceChanged, MessageType::TaskResult] {
-            for trigger in [Never, Directed, Subscription, TaskState] {
+        for kind in [MessageType::ChatNotice, MessageType::PresenceChanged, MessageType::ArtifactPublished] {
+            for trigger in [Never, Directed, Subscription] {
                 assert!(!may_wake(kind, trigger), "{kind:?}/{trigger:?}");
             }
         }
@@ -67,13 +58,12 @@ mod tests {
     fn directed_chat_wakes() {
         assert!(may_wake(MessageType::ChatMessage, Directed));
         assert!(!may_wake(MessageType::ChatMessage, Never));
-        assert!(may_wake(MessageType::ContextOffer, Directed));
     }
 
     #[test]
     fn type_names_roundtrip() {
         assert_eq!(type_name(MessageType::ChatNotice), "chat.notice");
-        assert_eq!(parse_type("task.status"), Some(MessageType::TaskStatus));
+        assert_eq!(parse_type("task.status"), None);
         assert_eq!(parse_type("nope"), None);
     }
 }

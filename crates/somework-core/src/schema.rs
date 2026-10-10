@@ -72,23 +72,9 @@ mod tests {
     #[test]
     fn bundle_defines_all_contracts() {
         let names = definition_names();
-        for expected in ["ActorRef", "Capability", "AgentCard", "CatalogEntry", "ArtifactRef", "MessageEnvelope", "Task", "ContextPack", "AuthorizationToken"] {
+        for expected in ["ActorRef", "Capability", "AgentCard", "CatalogEntry", "ArtifactRef", "MessageEnvelope"] {
             assert!(names.iter().any(|n| n == expected), "{expected} missing");
         }
-    }
-
-    #[test]
-    fn sample_context_pack_from_the_spec_is_valid() {
-        let sample: Value = serde_json::from_str(include_str!("../tests/fixtures/sample_context_pack.json")).unwrap();
-        validate_contract("ContextPack", &sample).unwrap();
-    }
-
-    #[test]
-    fn context_pack_requires_untrusted_instructions_flag_false() {
-        let mut sample: Value = serde_json::from_str(include_str!("../tests/fixtures/sample_context_pack.json")).unwrap();
-        sample["security"]["instructionsTrusted"] = json!(true);
-        let err = validate_contract("ContextPack", &sample).unwrap_err();
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
     }
 
     #[test]

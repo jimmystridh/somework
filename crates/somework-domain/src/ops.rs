@@ -14,7 +14,6 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct PolicyDecisionFilter {
-    pub task_id: Option<String>,
     pub actor: Option<String>,
     /// `allow` or `deny`.
     pub decision: Option<String>,
@@ -32,7 +31,6 @@ pub struct PolicyDecisionView {
     pub decision: String,
     pub reasons: Value,
     pub policy_version: String,
-    pub task_id: Option<String>,
     pub trace_id: Option<String>,
 }
 
@@ -43,24 +41,10 @@ pub struct ConversationSummary {
     pub kind: String,
     pub title: Option<String>,
     pub classification: String,
-    pub task_id: Option<String>,
     pub members: i64,
     pub messages: i64,
     pub created_at: String,
     pub matrix_room_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextPackSummary {
-    pub context_pack_id: String,
-    pub version: i64,
-    pub digest: String,
-    pub classification: String,
-    pub source_task_id: Option<String>,
-    pub size_bytes: i64,
-    pub created_at: String,
-    pub objective: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,7 +58,6 @@ pub struct ArtifactSummary {
     pub size_bytes: Option<i64>,
     pub digest: Option<String>,
     pub classification: String,
-    pub source_task_id: Option<String>,
     pub created_at: String,
 }
 
@@ -82,11 +65,9 @@ impl Domain {
     pub async fn list_policy_decisions(&self, ctx: &Ctx, f: PolicyDecisionFilter) -> Result<Vec<PolicyDecisionView>, Error> {
         self.enforce_read(ctx, AuthzRequest::new("audit.read")).await?;
         let rows = sqlx::query(
-            "SELECT * FROM policy_decisions WHERE (? IS NULL OR task_id = ?) AND (? IS NULL OR actor LIKE ?) AND (? IS NULL OR decision = ?)
+            "SELECT * FROM policy_decisions WHERE (? IS NULL OR actor LIKE ?) AND (? IS NULL OR decision = ?)
              ORDER BY occurred_at DESC, rowid DESC LIMIT ?",
         )
-        .bind(&f.task_id)
-        .bind(&f.task_id)
         .bind(&f.actor)
         .bind(f.actor.as_ref().map(|a| format!("%{a}%")))
         .bind(&f.decision)
@@ -106,7 +87,6 @@ impl Domain {
                 decision: scol(r, "decision"),
                 reasons: jcol(r, "reasons"),
                 policy_version: scol(r, "policy_version"),
-                task_id: scol_opt(r, "task_id"),
                 trace_id: scol_opt(r, "trace_id"),
             })
             .collect())
@@ -131,7 +111,6 @@ impl Domain {
                 kind: scol(r, "kind"),
                 title: scol_opt(r, "title"),
                 classification: scol(r, "classification"),
-                task_id: scol_opt(r, "task_id"),
                 members: icol(r, "members"),
                 messages: icol(r, "messages"),
                 created_at: scol(r, "created_at"),
@@ -140,37 +119,9 @@ impl Domain {
             .collect())
     }
 
-    pub async fn list_context_packs_admin(&self, ctx: &Ctx, limit: i64) -> Result<Vec<ContextPackSummary>, Error> {
+    pub async fn list_artifacts_admin(&self, ctx: &Ctx, limit: i64) -> Result<Vec<ArtifactSummary>, Error> {
         self.enforce_read(ctx, AuthzRequest::new("ops.read")).await?;
-        let rows = sqlx::query("SELECT context_pack_id, version, digest, classification, source_task_id, size_bytes, created_at, json_extract(manifest, '$.objective') AS objective FROM context_packs ORDER BY created_at DESC LIMIT ?")
-            .bind(limit.clamp(1, 500))
-            .fetch_all(self.db.pool())
-            .await
-            .db()?;
-        Ok(rows
-            .iter()
-            .map(|r| ContextPackSummary {
-                context_pack_id: scol(r, "context_pack_id"),
-                version: icol(r, "version"),
-                digest: scol(r, "digest"),
-                classification: scol(r, "classification"),
-                source_task_id: scol_opt(r, "source_task_id"),
-                size_bytes: icol(r, "size_bytes"),
-                created_at: scol(r, "created_at"),
-                objective: scol_opt(r, "objective"),
-            })
-            .collect())
-    }
-
-    pub async fn list_artifacts_admin(&self, ctx: &Ctx, task_id: Option<&str>, limit: i64) -> Result<Vec<ArtifactSummary>, Error> {
-        self.enforce_read(ctx, AuthzRequest::new("ops.read")).await?;
-        let rows = sqlx::query("SELECT * FROM artifacts WHERE (? IS NULL OR source_task_id = ?) ORDER BY created_at DESC LIMIT ?")
-            .bind(task_id)
-            .bind(task_id)
-            .bind(limit.clamp(1, 500))
-            .fetch_all(self.db.pool())
-            .await
-            .db()?;
+        let rows = sqlx::query("SELECT * FROM artifacts ORDER BY created_at DESC LIMIT ?").bind(limit.clamp(1, 500)).fetch_all(self.db.pool()).await.db()?;
         Ok(rows
             .iter()
             .map(|r| ArtifactSummary {
@@ -182,38 +133,8 @@ impl Domain {
                 size_bytes: crate::db::icol_opt(r, "size_bytes"),
                 digest: scol_opt(r, "actual_digest"),
                 classification: scol(r, "classification"),
-                source_task_id: scol_opt(r, "source_task_id"),
                 created_at: scol(r, "created_at"),
             })
             .collect())
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextManifest {
-    pub context_pack_id: String,
-    pub version: i64,
-    pub digest: String,
-    /// The exact stored manifest, so its digest can be recomputed independently of the platform.
-    pub manifest: Value,
-}
-
-impl Domain {
-    pub async fn get_context_manifest_admin(&self, ctx: &Ctx, id: &str, version: i64) -> Result<ContextManifest, Error> {
-        self.enforce_read(ctx, AuthzRequest::new("ops.read")).await?;
-        let row = sqlx::query("SELECT * FROM context_packs WHERE context_pack_id = ? AND version = ?")
-            .bind(id)
-            .bind(version)
-            .fetch_optional(self.db.pool())
-            .await
-            .db()?
-            .ok_or_else(|| Error::not_found("context pack"))?;
-        Ok(ContextManifest {
-            context_pack_id: scol(&row, "context_pack_id"),
-            version: icol(&row, "version"),
-            digest: scol(&row, "digest"),
-            manifest: jcol(&row, "manifest"),
-        })
     }
 }

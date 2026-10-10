@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use matrix_common::*;
 use serde_json::{Value, json};
-use somework_core::contracts::SideEffects;
+use somework_core::contracts::ActorKind;
 use somework_domain::policy::Permissions;
 use somework_testkit::process::eventually;
 
@@ -17,12 +17,12 @@ async fn admin_get(env: &MxEnv, path: &str) -> Value {
 }
 
 /// ID-04 / least privilege: a Matrix account without an explicit mapping is observed and audited but can never
-/// cause execution, however it phrases its request.
+/// send a canonical message or wake an agent, however it phrases its request.
 #[tokio::test]
-async fn unmapped_matrix_user_cannot_submit_tasks() {
+async fn unmapped_matrix_user_cannot_speak_for_anyone() {
     let env = MxEnv::start().await;
-    let _worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms(SideEffects::Read)).await;
-    let author = env.stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
+    let _worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms()).await;
+    let author = env.stack.requester("agent/author").await;
     let alice = env.human("alice", "@alice:hs.test", human_perms()).await;
     env.mx.add_user("@mallory:hs.test");
     let conversation = env.conversation(&author, "Open room", &[("human", "alice")], None).await;
@@ -36,38 +36,38 @@ async fn unmapped_matrix_user_cannot_submit_tasks() {
     client.invite(&room, "@somework:hs.test", "@mallory:hs.test").await.unwrap();
     env.mx.join_invites("@mallory:hs.test");
 
-    env.mx.user_send_text(&room, "@mallory:hs.test", "!task code.review@2.1 {\"repository\": \"billing/import-service\"}", &[]);
+    env.mx.user_send_text(&room, "@mallory:hs.test", "please review billing/import-service", &["@_agent_agent=2freviewer:hs.test"]);
     eventually("unmapped sender audited", Duration::from_secs(10), || async {
         let audit = admin_get(&env, "/v1/admin/audit?limit=500").await;
         audit["events"].as_array().unwrap().iter().find(|e| e["action"] == "matrix.ingest.unmapped_sender").cloned()
     })
     .await;
-    let tasks = admin_get(&env, "/v1/admin/tasks").await;
-    assert!(tasks["tasks"].as_array().unwrap().is_empty(), "no task may exist: {tasks}");
-    // and nothing from Mallory became a canonical message either
+    // nothing from Mallory became a canonical message, and the mentioned agent was never woken
+    let events = _worker.client.events(0, 0).await.unwrap().0;
+    assert!(events.iter().all(|e| e["wake"] != true), "{events:?}");
     assert!(canonical_messages(&env, &author, &conversation).await.iter().all(|m| m["sender"]["id"] != "mallory"));
     env.stack.stop().await;
 }
 
-/// A mapped human who sits in the room but lacks the capability grant is denied by the domain (and the denial is
-/// recorded); room membership never confers the right to execute.
+/// A mapped human who sits in the room but may not send messages is denied by the domain (and the denial is
+/// recorded); room membership never confers the right to act.
 #[tokio::test]
 async fn mapped_human_without_grant_is_denied_by_policy() {
     let env = MxEnv::start().await;
-    let _worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms(SideEffects::Read)).await;
-    let author = env.stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
+    let _worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms()).await;
+    let author = env.stack.requester("agent/author").await;
     let mut perms = Permissions::default_human();
-    perms.capabilities = vec![];
-    perms.discover = vec!["code.review".into()]; // sees the capability, may not invoke it
+    perms.actions = vec!["catalog.read".into(), "message.read".into()];
     let bob = env.human("bob", "@bob:hs.test", perms).await;
     let conversation = env.conversation(&author, "Team room", &[("human", "bob")], None).await;
     author.client.send_message(&json!({"conversationId": conversation, "content": {"mediaType": "text/plain", "data": "hi"}})).await.unwrap();
     let room = env.wait_room("Team room").await;
     env.mx.join_invites("@bob:hs.test");
 
-    env.mx.user_send_text(&room, "@bob:hs.test", "!task code.review@2.1 {\"repository\": \"billing/import-service\"}", &[]);
-    let notice = eventually_events(&env.mx, &room, "denial notice", |e| e.content["msgtype"] == "m.notice" && e.body().starts_with("Denied by policy")).await;
-    assert!(notice.body().contains("code.review"), "{}", notice.body());
+    env.mx.user_send_text(&room, "@bob:hs.test", "please review billing/import-service", &[]);
+    let notice =
+        eventually_events(&env.mx, &room, "denial notice", |e| e.content["msgtype"] == "m.notice" && e.body().starts_with("Message not delivered")).await;
+    assert!(!notice.body().is_empty());
     let audit = admin_get(&env, "/v1/admin/audit?limit=500").await;
     let denial = audit["events"]
         .as_array()
@@ -76,17 +76,17 @@ async fn mapped_human_without_grant_is_denied_by_policy() {
         .find(|e| e["outcome"] == "denied" && e["authenticatedActor"] == "human:bob")
         .expect("the denial is audited with the human as actor");
     assert_eq!(denial["sourceTransport"], "matrix");
-    assert!(admin_get(&env, "/v1/admin/tasks").await["tasks"].as_array().unwrap().is_empty());
-    let _ = bob;
+    assert!(canonical_messages(&env, &author, &conversation).await.iter().all(|m| m["sender"]["id"] != "bob"));
+    let _ = (bob, ActorKind::Human);
     env.stack.stop().await;
 }
 
 /// Hermes-style mention gating: only a message naming an agent wakes it; everything else is recorded as `never`.
 #[tokio::test]
-async fn only_mentions_trigger_agents_and_commands_run_as_the_human() {
+async fn only_mentions_trigger_agents_and_messages_are_sent_as_the_human() {
     let env = MxEnv::start().await;
-    let worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms(SideEffects::Read)).await;
-    let author = env.stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
+    let worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms()).await;
+    let author = env.stack.requester("agent/author").await;
     let _alice = env.human("alice", "@alice:hs.test", human_perms()).await;
     let conversation = env.conversation(&author, "Mentions", &[("human", "alice"), ("agent", "agent/reviewer")], None).await;
     author.client.send_message(&json!({"conversationId": conversation, "content": {"mediaType": "text/plain", "data": "kickoff"}})).await.unwrap();
@@ -110,13 +110,6 @@ async fn only_mentions_trigger_agents_and_commands_run_as_the_human() {
     let wakes: Vec<_> = events.iter().filter(|e| e["type"] == "message.created" && e["wake"] == true).collect();
     assert_eq!(wakes.len(), 1, "only the mentioned message wakes the agent: {events:?}");
 
-    // a command is executed with alice's own permissions
-    env.mx.user_send_text(&room, "@alice:hs.test", "!task code.review {\"repository\": \"billing/import-service\", \"commit\": \"61a8d52\"}", &[]);
-    let notice = eventually_events(&env.mx, &room, "task submitted notice", |e| e.body().starts_with("Task task_")).await;
-    let task_id = notice.body().split_whitespace().nth(1).unwrap().to_string();
-    let task = env.stack.admin.get_task(&task_id).await.unwrap();
-    assert_eq!(task.state.as_str(), "queued");
-    assert_eq!(task.conversation_id.as_deref(), Some(conversation.as_str()));
     env.stack.stop().await;
 }
 
@@ -125,7 +118,7 @@ async fn only_mentions_trigger_agents_and_commands_run_as_the_human() {
 #[tokio::test]
 async fn replays_echoes_and_forged_deliveries_are_inert() {
     let env = MxEnv::start().await;
-    let author = env.stack.requester("agent/author", &[], SideEffects::Read).await;
+    let author = env.stack.requester("agent/author").await;
     let _alice = env.human("alice", "@alice:hs.test", human_perms()).await;
     let conversation = env.conversation(&author, "Replay room", &[("human", "alice")], None).await;
     author.client.send_message(&json!({"conversationId": conversation, "content": {"mediaType": "text/plain", "data": "first"}})).await.unwrap();
@@ -164,7 +157,7 @@ async fn replays_echoes_and_forged_deliveries_are_inert() {
 #[tokio::test]
 async fn token_rotation_and_namespace_confinement() {
     let env = MxEnv::start().await;
-    let author = env.stack.requester("agent/author", &[], SideEffects::Read).await;
+    let author = env.stack.requester("agent/author").await;
     let _alice = env.human("alice", "@alice:hs.test", human_perms()).await;
     let conversation = env.conversation(&author, "Rotation room", &[("human", "alice")], None).await;
     author.client.send_message(&json!({"conversationId": conversation, "content": {"mediaType": "text/plain", "data": "before rotation"}})).await.unwrap();

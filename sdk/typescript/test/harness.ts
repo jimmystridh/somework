@@ -53,7 +53,7 @@ export interface Domain {
 }
 
 /** A real domain server in a temporary directory with one provider agent (`agent/ts-worker`, code.review) and one requester. */
-export async function startDomain(options: { cardFile?: string; nats?: boolean | "tls"; /** What the requester may invoke (default `code.*`). */ mayInvoke?: string } = {}): Promise<Domain> {
+export async function startDomain(options: { cardFile?: string; nats?: boolean | "tls"; /** Topic globs `agent/ts-author` may publish events under (default `test.*`; pass `""` for none). */ publish?: string } = {}): Promise<Domain> {
 	const dir = mkdtempSync(join(tmpdir(), "somework-sdk-"));
 	const port = await freePort();
 	const url = `http://127.0.0.1:${port}`;
@@ -76,8 +76,9 @@ export async function startDomain(options: { cardFile?: string; nats?: boolean |
 		if (out.status !== 0) throw new Error(`somework admin ${args.join(" ")} failed: ${out.stderr}`);
 	};
 	admin("bootstrap", "--key-out", join(dir, "root.key.json"));
-	admin("enroll-agent", "--id", "agent/ts-worker", "--side-effects", "write", "--key-out", join(dir, "worker.key.json"));
-	admin("enroll-agent", "--id", "agent/ts-author", "--side-effects", "write", "--may-invoke", options.mayInvoke ?? "code.*", "--key-out", join(dir, "author.key.json"));
+	admin("enroll-agent", "--id", "agent/ts-worker", "--key-out", join(dir, "worker.key.json"));
+	const publish = options.publish ?? "test.*";
+	admin("enroll-agent", "--id", "agent/ts-author", ...(publish ? ["--publish", publish] : []), "--key-out", join(dir, "author.key.json"));
 	const card = JSON.parse(readFileSync(options.cardFile ?? join(repoRoot, "examples/reviewer-card.json"), "utf8"));
 	card.agentId = "agent/ts-worker";
 	writeFileSync(join(dir, "card.json"), JSON.stringify(card));

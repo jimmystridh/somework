@@ -1,4 +1,4 @@
-//! Helpers for driving the real `somework-sidecar` binary: key files, a stdio MCP client and worker processes.
+//! Helpers for driving the real `somework-sidecar` binary: key files and a stdio MCP client.
 
 use std::{
     path::{Path, PathBuf},
@@ -116,35 +116,5 @@ impl McpProcess {
         let (is_err, v) = self.tool(name, args).await;
         assert!(!is_err, "tool {name} failed: {v}");
         v
-    }
-}
-
-/// A sidecar in worker mode (separate process) with an exec adapter.
-pub struct WorkerProcess {
-    pub child: Child,
-}
-
-impl WorkerProcess {
-    pub fn spawn(base_url: &str, key_file: &Path, adapter: &Path, lease_seconds: u64) -> Self {
-        let mut cmd = Command::new(sidecar_binary());
-        cmd.args(["run", "--mode", "worker", "--wake", "poll", "--domain-url", base_url, "--key-file"])
-            .arg(key_file)
-            .args(["--lease-seconds", &lease_seconds.to_string(), "--exec"])
-            .arg(adapter);
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
-        Self { child: cmd.spawn().expect("spawn worker sidecar") }
-    }
-
-    pub fn pid(&self) -> u32 {
-        self.child.id().expect("pid")
-    }
-
-    pub async fn kill9(&mut self) {
-        let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
-    }
-
-    pub fn signal(&self, sig: &str) {
-        let _ = std::process::Command::new("kill").arg(format!("-{sig}")).arg(self.pid().to_string()).status();
     }
 }

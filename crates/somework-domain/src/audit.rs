@@ -15,7 +15,6 @@ use crate::{
 pub struct AuditRecord {
     pub action: String,
     pub resource: Option<String>,
-    pub task_id: Option<String>,
     pub conversation_id: Option<String>,
     pub policy_decision_id: Option<String>,
     pub policy_version: Option<String>,
@@ -31,7 +30,6 @@ impl AuditRecord {
         Self {
             action: action.into(),
             resource,
-            task_id: None,
             conversation_id: None,
             policy_decision_id: None,
             policy_version: None,
@@ -41,10 +39,6 @@ impl AuditRecord {
             outcome: outcome.into(),
             detail: json!({}),
         }
-    }
-    pub fn task(mut self, task_id: Option<String>) -> Self {
-        self.task_id = task_id;
-        self
     }
     pub fn conversation(mut self, id: Option<String>) -> Self {
         self.conversation_id = id;
@@ -80,9 +74,7 @@ pub struct AuditView {
     pub runtime_instance_id: Option<String>,
     pub action: String,
     pub resource: Option<String>,
-    pub task_id: Option<String>,
     pub conversation_id: Option<String>,
-    pub authorization_grant_jti: Option<String>,
     pub policy_decision_id: Option<String>,
     pub policy_version: Option<String>,
     pub request_digest: Option<String>,
@@ -110,7 +102,7 @@ impl Domain {
             actor,
             rec.action,
             rec.resource,
-            rec.task_id,
+            Value::Null,
             rec.policy_decision_id,
             rec.request_digest,
             rec.before_state_digest,
@@ -120,10 +112,10 @@ impl Domain {
         ]);
         let hash = sha256_hex(chain_input.to_string().as_bytes());
         sqlx::query(
-            "INSERT INTO audit_events(audit_event_id, domain_id, occurred_at, authenticated_actor, runtime_instance_id, action, resource, task_id,
-               conversation_id, authorization_grant_jti, policy_decision_id, policy_version, request_digest, before_state_digest, after_state_digest,
+            "INSERT INTO audit_events(audit_event_id, domain_id, occurred_at, authenticated_actor, runtime_instance_id, action, resource,
+               conversation_id, policy_decision_id, policy_version, request_digest, before_state_digest, after_state_digest,
                outcome, trace_id, source_transport, source_transport_event_id, detail, prev_hash, hash)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&audit_id)
         .bind(&self.cfg.domain_id)
@@ -132,9 +124,7 @@ impl Domain {
         .bind(&ctx.actor.runtime_instance_id)
         .bind(&rec.action)
         .bind(&rec.resource)
-        .bind(&rec.task_id)
         .bind(&rec.conversation_id)
-        .bind(&ctx.actor.grant_jti)
         .bind(&rec.policy_decision_id)
         .bind(&rec.policy_version)
         .bind(&rec.request_digest)
@@ -153,12 +143,10 @@ impl Domain {
         Ok(audit_id)
     }
 
-    pub async fn list_audit(&self, ctx: &Ctx, task_id: Option<&str>, after_seq: i64, limit: i64) -> Result<Vec<AuditView>, Error> {
+    pub async fn list_audit(&self, ctx: &Ctx, after_seq: i64, limit: i64) -> Result<Vec<AuditView>, Error> {
         self.enforce_read(ctx, crate::policy::AuthzRequest::new("audit.read")).await?;
-        let rows = sqlx::query("SELECT * FROM audit_events WHERE seq > ? AND (? IS NULL OR task_id = ?) ORDER BY seq ASC LIMIT ?")
+        let rows = sqlx::query("SELECT * FROM audit_events WHERE seq > ? ORDER BY seq ASC LIMIT ?")
             .bind(after_seq)
-            .bind(task_id)
-            .bind(task_id)
             .bind(limit.clamp(1, 1000))
             .fetch_all(self.db.pool())
             .await
@@ -173,9 +161,7 @@ impl Domain {
                 runtime_instance_id: scol_opt(r, "runtime_instance_id"),
                 action: scol(r, "action"),
                 resource: scol_opt(r, "resource"),
-                task_id: scol_opt(r, "task_id"),
                 conversation_id: scol_opt(r, "conversation_id"),
-                authorization_grant_jti: scol_opt(r, "authorization_grant_jti"),
                 policy_decision_id: scol_opt(r, "policy_decision_id"),
                 policy_version: scol_opt(r, "policy_version"),
                 request_digest: scol_opt(r, "request_digest"),

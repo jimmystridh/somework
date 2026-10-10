@@ -2,21 +2,20 @@
 
 SomeWork ("Samverka", badly translated) implements `spec.md` on **SQLite** (not PostgreSQL). Every place the spec says
 PostgreSQL, read SQLite: canonical state, outbox, idempotency keys, FTS5 catalog search, `BEGIN IMMEDIATE` write
-locking, WAL. Namespaces that the spec calls `acollab` are `somework` (`somework.work.pool.*`, `somework://`,
+locking, WAL. Namespaces that the spec calls `acollab` are `somework` (`somework.inbox.*`, `somework://`,
 `urn:somework:schema:v1`, `dev.somework.*` Matrix event types). MCP tool names stay `collab_*` as in the spec.
 
 ## Layout
 
 | Crate | Role |
 |---|---|
-| `somework-core` | Pure contracts, FSM, JSON Schema validation, JWS, subjects, taxonomy. No I/O. |
-| `somework-domain` | Canonical state: SQLite migrations, policy, auth, catalog, messages, tasks, context, artifacts, outbox runner. |
+| `somework-core` | Pure contracts, JSON Schema validation, JWS, subjects, taxonomy. No I/O. |
+| `somework-domain` | Canonical state: SQLite migrations, policy, auth, catalog, messages, events, rules, artifacts, outbox runner. |
 | `somework-api` | axum REST, SSE, OIDC, server runner + `somework` CLI binary, `wiring/` for optional planes. |
 | `somework-client` | HTTP SDK (workload assertions, retries, artifact upload/verify). |
 | `somework-nats` | JetStream machine plane (outbox sink, provisioning, streaming, presence). |
 | `somework-matrix` | Matrix Application Service bridge (projection + ingestion). |
-| `somework-gateway` | Trust-domain federation (mTLS + signed grants) and A2A interoperability. |
-| `somework-sidecar` | Worker runtime, MCP server (spec tools + optional extended tools). |
+| `somework-sidecar` | MCP server (seven `collab_*` tools + optional extended tools). |
 | `somework-testkit` | In-process stacks, real infra processes (`tools/bin/nats-server`, `tools/bin/minio`), mocks. |
 | `somework-it` | Integration + e2e tests (`crates/somework-it/tests/*.rs`). |
 | `e2e/` | Playwright browser tests for the operations UI. |
@@ -41,7 +40,7 @@ locking, WAL. Namespaces that the spec calls `acollab` are `somework` (`somework
 
 `crates/somework-domain/migrations/NNNN_name.sql`, applied in order by `sqlx::migrate!`. Number ranges per work
 package so parallel work never collides: core 0001-0099, nats 0100s, matrix 0200s, sidecar 0300s,
-gateway 0400s, ui 0500s, s3/backup 0600s, grpc 0700s. Migrations are append-only; never edit a shipped one
+ui 0500s, s3/backup 0600s, grpc 0700s (`0600_drop_tasks.sql` is the cut-over that removes tasks and reactions). Migrations are append-only; never edit a shipped one
 (0001 is still editable until the first release).
 
 ## Running things

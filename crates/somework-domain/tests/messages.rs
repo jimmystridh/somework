@@ -51,7 +51,7 @@ async fn notices_and_status_messages_can_never_be_made_triggering() {
         .await
         .unwrap();
     assert_eq!(notice.envelope.trigger_mode, TriggerMode::Never, "notices default to non-triggering");
-    for kind in [MessageType::ChatNotice, MessageType::TaskStatus] {
+    for kind in [MessageType::ChatNotice, MessageType::EventNotification] {
         let err = env
             .domain
             .send_message(
@@ -69,7 +69,7 @@ async fn notices_and_status_messages_can_never_be_made_triggering() {
         assert_eq!(err.code, ErrorCode::TriggerNotAllowed, "{kind:?}");
     }
     // platform-emitted types cannot be forged by clients
-    for kind in [MessageType::TaskResult, MessageType::StreamChunk, MessageType::ContextOffer, MessageType::ApprovalDecision] {
+    for kind in [MessageType::ArtifactPublished, MessageType::PresenceChanged, MessageType::CatalogChanged, MessageType::PolicyDenied] {
         let err = env
             .domain
             .send_message(&ca, SendMessage { kind: Some(kind), recipients: to("agent/b"), content: text("x"), ..Default::default() })
@@ -78,7 +78,7 @@ async fn notices_and_status_messages_can_never_be_made_triggering() {
         assert_eq!(err.code, ErrorCode::ValidationFailed, "{kind:?}");
     }
     let b_events = env.domain.list_events(&env.ctx(&b).await, 0, 50).await.unwrap();
-    assert!(b_events.iter().all(|e| !e.wake), "no notice or status traffic wakes the recipient");
+    assert!(b_events.iter().all(|e| !e.wake), "no notice or event traffic wakes the recipient");
 }
 
 #[tokio::test]
@@ -241,7 +241,7 @@ async fn event_subscriptions_must_state_wake_behaviour_explicitly() {
         .unwrap();
     assert!(!quiet.wake_on_match && loud.wake_on_match);
     let admin = env.admin_ctx().await;
-    let p = env.create_principal(ActorKind::Agent, "agent/newbie", Some(worker_permissions(somework_core::contracts::SideEffects::Read))).await;
+    let p = env.create_principal(ActorKind::Agent, "agent/newbie", Some(agent_permissions())).await;
     env.domain
         .register_agent(
             &env.ctx(&p).await,
@@ -264,13 +264,109 @@ async fn audit_views_honour_the_plaintext_policy_choice() {
         .await
         .unwrap();
     let admin = env.admin_ctx().await;
-    let shown = env.domain.audit_messages(&admin, None, None, 10).await.unwrap();
+    let shown = env.domain.audit_messages(&admin, None, 10).await.unwrap();
     assert_eq!(shown[0].envelope.content.data, json!("secret plans"));
     let mut policy = env.domain.get_policy(&admin).await.unwrap();
     policy.version = "metadata-only".into();
     policy.audit_plaintext = false;
     env.domain.put_policy(&admin, policy).await.unwrap();
-    let hidden = env.domain.audit_messages(&admin, None, None, 10).await.unwrap();
+    let hidden = env.domain.audit_messages(&admin, None, 10).await.unwrap();
     assert_eq!(hidden[0].envelope.content.data["redacted"], true);
     assert!(hidden[0].envelope.content.data["digest"].as_str().unwrap().len() == 64);
+}
+
+#[tokio::test]
+async fn an_attached_artifact_is_readable_by_another_principal_of_the_domain() {
+    let (env, a, b) = two_agents().await;
+    let attachment = env.upload(&a, "report.txt", "internal", b"verdict: verified").await;
+    let ca = env.ctx(&a).await;
+    let sent = env
+        .domain
+        .send_message(&ca, SendMessage { recipients: to("agent/b"), content: text("the result"), artifacts: vec![attachment.clone()], ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(sent.envelope.artifacts.len(), 1);
+
+    let cb = env.ctx(&b).await;
+    let read = env.domain.get_message(&cb, &sent.envelope.message_id).await.unwrap();
+    assert_eq!(read.envelope.artifacts[0].artifact_id, attachment.artifact_id);
+    let page = env.domain.list_messages(&cb, sent.envelope.conversation_id.as_deref().unwrap(), 0, 10).await.unwrap();
+    assert_eq!(page.messages[0].envelope.artifacts[0].digest.value, attachment.digest.value);
+    let inbox = env.domain.inbox(&cb, false, 10).await.unwrap();
+    assert_eq!(inbox[0].envelope.artifacts.len(), 1);
+
+    let fetched = env.domain.get_artifact(&cb, &attachment.artifact_id, attachment.version).await.unwrap();
+    assert_eq!(fetched.digest.value, attachment.digest.value);
+    let grant = env.domain.artifact_download_grant(&cb, &attachment.artifact_id, attachment.version).await.unwrap();
+    let token = grant.url.rsplit("/v1/objects/").next().unwrap();
+    assert_eq!(env.fs.get_with_grant(token).await.unwrap().0, b"verdict: verified");
+}
+
+#[tokio::test]
+async fn an_attachment_that_does_not_exist_in_the_domain_is_refused() {
+    let (env, a, _b) = two_agents().await;
+    let real = env.upload(&a, "report.txt", "internal", b"x").await;
+    let ca = env.ctx(&a).await;
+    let mut unknown = real.clone();
+    unknown.artifact_id = "art_does_not_exist".into();
+    let err = env
+        .domain
+        .send_message(&ca, SendMessage { recipients: to("agent/b"), content: text("see attachment"), artifacts: vec![unknown], ..Default::default() })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::ArtifactNotReady);
+
+    let mut wrong_digest = real.clone();
+    wrong_digest.digest.value = "0".repeat(64);
+    let err = env
+        .domain
+        .send_message(&ca, SendMessage { recipients: to("agent/b"), content: text("see attachment"), artifacts: vec![wrong_digest], ..Default::default() })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::IntegrityFailure);
+}
+
+#[tokio::test]
+async fn an_upload_that_never_completed_cannot_be_attached() {
+    let (env, a, _b) = two_agents().await;
+    let ca = env.ctx(&a).await;
+    let grant = env
+        .domain
+        .begin_artifact_upload(
+            &ca,
+            somework_domain::artifacts::BeginUpload {
+                filename: Some("half.bin".into()),
+                media_type: Some("application/octet-stream".into()),
+                size_bytes: Some(4),
+                sha256: Some("a".repeat(64)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut pending = env.upload(&a, "other.txt", "internal", b"y").await;
+    pending.artifact_id = grant.artifact_id;
+    pending.version = grant.version;
+    let err = env
+        .domain
+        .send_message(&ca, SendMessage { recipients: to("agent/b"), content: text("later"), artifacts: vec![pending], ..Default::default() })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::ArtifactNotReady);
+}
+
+#[tokio::test]
+async fn an_attachment_above_the_conversations_classification_is_refused() {
+    let (env, a, _b) = two_agents().await;
+    let secret = env.upload(&a, "secret.txt", "internal", b"z").await;
+    let ca = env.ctx(&a).await;
+    let mut restricted = secret.clone();
+    restricted.classification = "restricted".into();
+    // the stored classification is what counts, so an artifact that is cleared for the conversation passes whatever the reference says
+    let ok = env
+        .domain
+        .send_message(&ca, SendMessage { recipients: to("agent/b"), content: text("fine"), artifacts: vec![restricted], ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(ok.envelope.artifacts[0].classification, "internal");
 }

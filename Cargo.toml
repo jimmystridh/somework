@@ -7,7 +7,6 @@ members = [
   "crates/somework-client",
   "crates/somework-nats",
   "crates/somework-matrix",
-  "crates/somework-gateway",
   "crates/somework-sidecar",
   "crates/somework-testkit",
   "crates/somework-it",

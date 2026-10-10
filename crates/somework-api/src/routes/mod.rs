@@ -1,15 +1,12 @@
 mod admin;
 mod artifacts;
 mod catalog;
-mod context;
 mod events;
-mod federation_admin;
 mod messages;
 mod rules;
 mod runtimes;
 mod sealed;
 mod system;
-mod tasks;
 mod ui;
 
 use axum::Router;
@@ -21,14 +18,11 @@ pub fn router() -> Router<AppState> {
         .merge(system::routes())
         .merge(catalog::routes())
         .merge(messages::routes())
-        .merge(tasks::routes())
-        .merge(context::routes())
         .merge(artifacts::routes())
         .merge(events::routes())
         .merge(rules::routes())
         .merge(runtimes::routes())
         .merge(sealed::routes())
         .merge(admin::routes())
-        .merge(federation_admin::routes())
         .merge(ui::routes())
 }

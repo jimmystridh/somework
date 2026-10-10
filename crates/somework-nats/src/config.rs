@@ -43,6 +43,7 @@ pub struct NatsConfig {
     /// Create/update streams and consumers (disable when an operator manages JetStream).
     pub provision: bool,
     pub replicas: usize,
+    /// Accepted for configuration files written before work streams were removed; it has no effect.
     pub work_max_age_days: u64,
     pub inbox_max_age_days: u64,
     pub events_max_age_days: u64,

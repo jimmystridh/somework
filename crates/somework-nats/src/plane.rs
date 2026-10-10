@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -115,10 +115,6 @@ impl NatsPlane {
         self.client.connection_state() == async_nats::connection::State::Connected
     }
 
-    pub fn work_filter_for(pool: &str) -> String {
-        subjects::work_pool(pool)
-    }
-
     async fn ensure_stream(&self, desired: StreamConfig) -> Result<(), Error> {
         let mut stream = self.js.get_or_create_stream(desired.clone()).await.map_err(|e| Error::unavailable(format!("create stream {}: {e}", desired.name)))?;
         let info = stream.info().await.map_err(|e| Error::unavailable(format!("stream info: {e}")))?;
@@ -135,7 +131,6 @@ impl NatsPlane {
 
     pub async fn ensure_streams(&self) -> Result<(), Error> {
         let c = &self.cfg;
-        self.ensure_stream(stream_config(c, subjects::STREAM_WORK, &[subjects::WORK_FILTER], c.work_max_age_days)).await?;
         self.ensure_stream(stream_config(c, subjects::STREAM_INBOX, &[subjects::INBOX_FILTER], c.inbox_max_age_days)).await?;
         self.ensure_stream(stream_config(c, subjects::STREAM_EVENTS, &[subjects::EVENT_FILTER], c.events_max_age_days)).await?;
         self.ensure_stream(stream_config(c, subjects::STREAM_SUBSCRIPTIONS, &[subjects::SUBSCRIPTION_FILTER], c.subscriptions_max_age_days)).await?;
@@ -193,16 +188,7 @@ impl NatsPlane {
     }
 
     async fn directory_grants(&self) -> Result<Vec<AgentGrant>, Error> {
-        let mut pools: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for id in self.domain.agent_principals().await? {
-            pools.entry(id.clone()).or_default().push(id);
-        }
-        for entry in self.domain.agent_directory().await? {
-            let p = pools.entry(entry.agent_id.clone()).or_default();
-            p.clear();
-            p.push(entry.pool_id);
-        }
-        Ok(pools.into_iter().map(|(agent_id, pools)| AgentGrant { agent_id, pools }).collect())
+        Ok(self.domain.agent_principals().await?.into_iter().map(|agent_id| AgentGrant { agent_id }).collect())
     }
 
     async fn sync_users(&self, grants: &[AgentGrant]) -> Result<bool, Error> {
@@ -229,7 +215,7 @@ impl NatsPlane {
         Ok(true)
     }
 
-    /// One idempotent pass: users file (+reload), streams, per-pool / per-agent / subscription consumers.
+    /// One idempotent pass: users file (+reload), streams, per-agent inbox and subscription consumers.
     pub async fn reconcile_once(&self) -> Result<(), Error> {
         let _guard = self.reconcile_lock.lock().await;
         let grants = self.directory_grants().await?;
@@ -258,14 +244,8 @@ impl NatsPlane {
         for s in subs {
             sub_filters.entry(s.agent_id).or_default().push(subjects::subscription(&s.subscription_id));
         }
-        let mut pools = HashSet::new();
         for g in &grants {
             self.ensure_consumer(subjects::STREAM_INBOX, &subjects::inbox_consumer(&g.agent_id), vec![subjects::inbox(&g.agent_id)], false).await?;
-            for p in &g.pools {
-                if pools.insert(p.clone()) {
-                    self.ensure_consumer(subjects::STREAM_WORK, &subjects::pool_consumer(p), vec![subjects::work_pool(p)], false).await?;
-                }
-            }
             let mut filters = sub_filters.remove(&g.agent_id).unwrap_or_default();
             filters.sort();
             if filters.is_empty() {

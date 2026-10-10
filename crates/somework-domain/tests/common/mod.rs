@@ -7,7 +7,7 @@ use ed25519_dalek::SigningKey;
 use serde_json::{Value, json};
 use somework_core::{
     clock::ManualClock,
-    contracts::{Action, ActorKind, SideEffects},
+    contracts::{Action, ActorKind},
     jws,
 };
 use somework_domain::{
@@ -67,18 +67,8 @@ pub fn capability(id: &str, version: &str, side_effects: &str, description: &str
     })
 }
 
-pub fn worker_permissions(side_effects: SideEffects) -> Permissions {
-    let mut p = Permissions::default_agent();
-    p.side_effects_at_most = Some(side_effects);
-    p.capabilities = vec![];
-    p
-}
-
-pub fn caller_permissions(caps: &[&str], side_effects: SideEffects) -> Permissions {
-    let mut p = Permissions::default_agent();
-    p.capabilities = caps.iter().map(|c| c.to_string()).collect();
-    p.side_effects_at_most = Some(side_effects);
-    p
+pub fn agent_permissions() -> Permissions {
+    Permissions::default_agent()
 }
 
 impl Env {
@@ -174,19 +164,11 @@ impl Env {
     }
 }
 
-pub fn submit(cap: &str, version: &str) -> somework_domain::tasks::SubmitTask {
-    somework_domain::tasks::SubmitTask {
-        capability: Some(somework_core::contracts::CapabilityRef { id: cap.into(), version: version.into() }),
-        input: Some(json!({"repository": "billing/import-service", "commit": "61a8d52"})),
-        ..Default::default()
-    }
-}
-
 pub fn _use_action(_: Action) {}
 
 impl Env {
     /// Uploads `bytes` through the presigned grant flow and returns the verified ArtifactRef.
-    pub async fn upload(&self, p: &Principal, name: &str, classification: &str, bytes: &[u8], task: Option<&str>) -> somework_core::contracts::ArtifactRef {
+    pub async fn upload(&self, p: &Principal, name: &str, classification: &str, bytes: &[u8]) -> somework_core::contracts::ArtifactRef {
         use sha2::{Digest, Sha256};
         let ctx = self.ctx(p).await;
         let grant = self
@@ -199,7 +181,6 @@ impl Env {
                     size_bytes: Some(bytes.len() as u64),
                     sha256: Some(hex::encode(Sha256::digest(bytes))),
                     classification: Some(classification.into()),
-                    source_task_id: task.map(String::from),
                     ..Default::default()
                 },
             )

@@ -2,7 +2,6 @@
 //! infrastructure processes (NATS/JetStream, MinIO) under `tools/bin`.
 
 pub mod e2ee;
-pub mod federation;
 pub mod matrix;
 pub mod minio;
 pub mod nats;

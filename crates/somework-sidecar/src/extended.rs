@@ -104,7 +104,7 @@ pub async fn call(client: &Client, state: &ExtendedState, tool: &str, args: Valu
         }
         "collab_conversation_leave" => {
             let id = resolve_conversation(client, arg(&args, "conversation")?).await?;
-            client.raw(reqwest::Method::POST, &format!("/v1/conversations/{}/leave", enc(&id)), Some(&json!({})), None, None).await?;
+            client.raw(reqwest::Method::POST, &format!("/v1/conversations/{}/leave", enc(&id)), Some(&json!({})), None).await?;
             Ok(json!({"left": id}))
         }
         "collab_inbox" => {

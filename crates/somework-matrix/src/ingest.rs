@@ -17,9 +17,7 @@ use somework_core::{Error, ErrorCode, contracts::*};
 use somework_domain::{
     Ctx,
     audit::AuditRecord,
-    catalog::SearchRequest,
     messages::{MemberRef, SendMessage},
-    tasks::{CancelRequest, DecideApproval, InputRequest, SubmitTask},
     transport::Mapping,
 };
 
@@ -145,14 +143,13 @@ async fn process_event(b: &Bridge, ev: &Value) -> Result<(), Error> {
     }
     match ev["type"].as_str().unwrap_or_default() {
         "m.room.message" => on_message(b, ev).await,
-        "m.reaction" => on_reaction(b, ev).await,
         "m.room.encrypted" => on_encrypted(b, ev).await,
         _ => Ok(()),
     }
 }
 
 /// Encrypted events: only the observer profile holds a device that can read them. Everything decrypted flows through
-/// the same dispatch as plaintext events (mapping, mention gating, commands, approvals); everything else is counted
+/// the same dispatch as plaintext events (mapping and mention gating); everything else is counted
 /// as undecryptable and never executes anything.
 async fn on_encrypted(b: &Bridge, ev: &Value) -> Result<(), Error> {
     use crate::crypto::DecryptError;
@@ -183,7 +180,6 @@ async fn on_encrypted(b: &Bridge, ev: &Value) -> Result<(), Error> {
             decrypted["content"] = plain.content;
             match plain.event_type.as_str() {
                 "m.room.message" => on_message(b, &decrypted).await,
-                "m.reaction" => on_reaction(b, &decrypted).await,
                 _ => Ok(()),
             }
         }
@@ -216,7 +212,7 @@ async fn identify(b: &Bridge, ev: &Value) -> Result<Option<Ctx>, Error> {
     let event_id = ev["event_id"].as_str().unwrap_or_default();
     match b.domain.principal_for_matrix_user(sender).await? {
         Some(p) => {
-            let actor = b.domain.actor_for_principal(&p, None).await;
+            let actor = b.domain.actor_for_principal(&p).await;
             Ok(Some(Ctx::new(actor).with_transport(TRANSPORT).with_transport_event(event_id).with_idempotency(format!("matrix:{event_id}"))))
         }
         None => {
@@ -301,28 +297,11 @@ async fn on_message(b: &Bridge, ev: &Value) -> Result<(), Error> {
     let body = content["body"].as_str().unwrap_or_default().trim().to_string();
     let thread_root =
         (content["m.relates_to"]["rel_type"].as_str() == Some("m.thread")).then(|| content["m.relates_to"]["event_id"].as_str()).flatten().map(String::from);
-    let task_id = match &thread_root {
-        Some(root) => b.domain.mapping_by_external(TRANSPORT, root).await?.filter(|m| m.object_kind == "task").map(|m| m.object_id),
-        None => None,
-    };
-
-    if let Some(command) = body.strip_prefix('!') {
-        let outcome = run_command(b, &ctx, &conversation_id, task_id.as_deref(), command).await;
-        let text = match outcome {
-            Ok(text) => text,
-            Err(e) if e.code == ErrorCode::PolicyDenied => format!("Denied by policy: {}", e.message),
-            Err(e) => format!("Command failed: {}", e.message),
-        };
-        reply(b, room, event_id, thread_root.as_deref(), &text).await;
-        b.domain.put_mapping(&Mapping::new(TRANSPORT, event_id, "command", event_id, json!({"roomId": room}))).await?;
-        return Ok(());
-    }
 
     let agents = mentions_of(b, content).await;
     let req = SendMessage {
         kind: Some(MessageType::ChatMessage),
         conversation_id: Some(conversation_id),
-        task_id,
         recipients: agents.iter().map(|a| MemberRef { kind: ActorKind::Agent, id: a.clone() }).collect(),
         content: Some(MessageContent { media_type: "text/plain".into(), data: json!(body) }),
         trigger_mode: Some(if agents.is_empty() { TriggerMode::Never } else { TriggerMode::Directed }),
@@ -340,114 +319,6 @@ async fn on_message(b: &Bridge, ev: &Value) -> Result<(), Error> {
             b.domain.put_mapping(&Mapping::new(TRANSPORT, event_id, "rejected", event_id, json!({}))).await?;
         }
     }
-    Ok(())
-}
-
-async fn run_command(b: &Bridge, ctx: &Ctx, conversation_id: &str, task_id: Option<&str>, command: &str) -> Result<String, Error> {
-    let (name, rest) = command.split_once(char::is_whitespace).map(|(n, r)| (n, r.trim())).unwrap_or((command, ""));
-    match name {
-        "task" => {
-            let (head, json_part) = rest.split_once('{').map(|(h, j)| (h.trim(), format!("{{{j}"))).unwrap_or((rest, "{}".into()));
-            let mut capability = None;
-            let mut target = None;
-            for token in head.split_whitespace() {
-                match token.strip_prefix("to=") {
-                    Some(agent) => target = Some(agent.to_string()),
-                    None => capability = Some(token.to_string()),
-                }
-            }
-            let capability = capability.ok_or_else(|| Error::invalid("usage: !task <capability>[@version] [to=<agent>] {json input}"))?;
-            let input: Value = serde_json::from_str(&json_part).map_err(|e| Error::invalid(format!("input is not valid JSON: {e}")))?;
-            let (cap_id, version) = match capability.split_once('@') {
-                Some((id, v)) => (id.to_string(), v.to_string()),
-                None => {
-                    let found = b
-                        .domain
-                        .search_catalog(ctx, SearchRequest { required_capabilities: vec![capability.clone()], limit: Some(1), ..Default::default() })
-                        .await?;
-                    let m = found.matches.first().and_then(|m| m.matched_capabilities.first().cloned()).ok_or_else(|| Error::not_found("capability"))?;
-                    (m.id, m.version)
-                }
-            };
-            let resp = b
-                .domain
-                .submit_task(
-                    ctx,
-                    SubmitTask {
-                        capability: Some(CapabilityRef { id: cap_id, version }),
-                        target_agent_id: target,
-                        conversation_id: Some(conversation_id.to_string()),
-                        input: Some(input),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            Ok(format!("Task {} submitted ({})", resp.task.task.task_id, resp.task.task.state))
-        }
-        "approve" | "deny" => {
-            let approval_id = rest.split_whitespace().next().ok_or_else(|| Error::invalid("usage: !approve <approvalId>"))?;
-            decide(b, ctx, approval_id, name == "approve").await
-        }
-        "input" => {
-            let task_id = task_id.ok_or_else(|| Error::invalid("!input must be sent inside the task thread"))?;
-            let data = serde_json::from_str(rest).unwrap_or_else(|_| json!({"text": rest}));
-            let view = b.domain.provide_input(ctx, task_id, InputRequest { data, expected_revision: None }).await?;
-            Ok(format!("Input accepted; task is {}", view.task.state))
-        }
-        "cancel" => {
-            let task_id = task_id.ok_or_else(|| Error::invalid("!cancel must be sent inside the task thread"))?;
-            let view = b.domain.cancel_task(ctx, task_id, CancelRequest { reason: Some("requested from Matrix".into()), ..Default::default() }).await?;
-            Ok(format!("Task is {}", view.task.state))
-        }
-        other => Err(Error::invalid(format!("unknown command !{other} (try !task, !approve, !deny, !input, !cancel)"))),
-    }
-}
-
-/// Uses the digest and revision stored when the approval request was projected, never the *current* ones, so a
-/// reaction to a stale prompt is refused by the domain.
-async fn decide(b: &Bridge, ctx: &Ctx, approval_id: &str, approve: bool) -> Result<String, Error> {
-    let mapping = b.domain.mapping_by_object(TRANSPORT, "approval", approval_id).await?.ok_or_else(|| Error::not_found("approval prompt"))?;
-    let view = b
-        .domain
-        .decide_approval(
-            ctx,
-            approval_id,
-            DecideApproval {
-                decision: if approve { "approved" } else { "denied" }.into(),
-                action_digest: mapping.data["actionDigest"].as_str().unwrap_or_default().into(),
-                task_revision: mapping.data["taskRevision"].as_u64().unwrap_or_default(),
-                comment: Some("via Matrix".into()),
-            },
-        )
-        .await?;
-    Ok(format!("Approval {approval_id} {}; task is {}", if approve { "granted" } else { "denied" }, view.task.state))
-}
-
-async fn on_reaction(b: &Bridge, ev: &Value) -> Result<(), Error> {
-    let event_id = ev["event_id"].as_str().unwrap_or_default();
-    let rel = &ev["content"]["m.relates_to"];
-    if rel["rel_type"].as_str() != Some("m.annotation") {
-        return Ok(());
-    }
-    let (target, key) = (rel["event_id"].as_str().unwrap_or_default(), rel["key"].as_str().unwrap_or_default());
-    let approve = match key.trim_end_matches('\u{fe0f}') {
-        "👍" | "✅" | "+1" => true,
-        "👎" | "❌" | "-1" => false,
-        _ => return Ok(()),
-    };
-    let Some(prompt) = b.domain.mapping_by_external(TRANSPORT, target).await?.filter(|m| m.object_kind == "approval") else { return Ok(()) };
-    let room = ev["room_id"].as_str().unwrap_or_default();
-    if prompt.data["roomId"].as_str() != Some(room) {
-        return Ok(());
-    }
-    let Some(ctx) = identify(b, ev).await? else { return Ok(()) };
-    let text = match decide(b, &ctx, &prompt.object_id, approve).await {
-        Ok(t) => t,
-        Err(e) if e.code == ErrorCode::Unavailable => return Err(e),
-        Err(e) => format!("Approval not applied: {} ({})", e.message, e.code.as_str()),
-    };
-    reply(b, room, event_id, None, &text).await;
-    b.domain.put_mapping(&Mapping::new(TRANSPORT, event_id, "reaction", prompt.object_id, json!({"approved": approve}))).await?;
     Ok(())
 }
 

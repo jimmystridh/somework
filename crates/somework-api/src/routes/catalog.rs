@@ -5,10 +5,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use somework_domain::{
-    auth::DelegateGrant,
-    catalog::{ApproveEntry, RegisterAgent, SearchRequest},
-};
+use somework_domain::catalog::{ApproveEntry, RegisterAgent, SearchRequest};
 
 use crate::{http::*, state::AppState};
 
@@ -19,7 +16,6 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/agents/{agent_id}", get(get_agent).put(register_agent))
         .route("/v1/agents/{agent_id}/approval", post(approve))
         .route("/v1/capabilities/{id}/{version}", get(get_capability))
-        .route("/v1/authorizations/delegate", post(delegate))
 }
 
 async fn search(State(s): State<AppState>, Auth(ctx): Auth, Body(req): Body<SearchRequest>) -> ApiResult {
@@ -62,8 +58,4 @@ async fn approve(State(s): State<AppState>, Auth(ctx): Auth, Path(agent_id): Pat
 
 async fn get_capability(State(s): State<AppState>, Auth(ctx): Auth, Path((id, version)): Path<(String, String)>) -> ApiResult {
     ok(s.domain.get_capability(&ctx, &id, &version).await?)
-}
-
-async fn delegate(State(s): State<AppState>, Auth(ctx): Auth, Body(body): Body<DelegateGrant>) -> ApiResult {
-    created(s.domain.delegate_grant(&ctx, body).await?)
 }

@@ -22,7 +22,6 @@ impl Domain {
             .fetch_one(&mut *conn)
             .await
             .db()?;
-        let tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE conversation_id = ?").bind(conversation_id).fetch_one(&mut *conn).await.db()?;
         Ok(json!({
             "conversationId": view.conversation_id,
             "kind": view.kind,
@@ -31,7 +30,6 @@ impl Domain {
             "members": view.members,
             "messageCount": icol(&row, "n"),
             "lastMessageAt": scol_opt(&row, "last"),
-            "taskCount": tasks,
             "createdAt": view.created_at,
         }))
     }

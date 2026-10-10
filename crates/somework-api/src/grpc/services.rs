@@ -8,7 +8,7 @@ use tonic::{Request, Response, Status};
 
 use super::{
     call_ctx, convert as c, fail, invalid,
-    json::{Doc, json_to_struct, pb_to_json, struct_to_json},
+    json::{Doc, json_to_struct, pb_to_json},
     pb, respond,
 };
 use crate::state::AppState;
@@ -26,18 +26,11 @@ fn tid(ctx: &Ctx) -> String {
     ctx.trace.traceparent()
 }
 
-fn some_struct(v: Option<prost_types::Struct>) -> Option<Value> {
-    v.map(struct_to_json)
-}
-
 pub struct Catalog(pub AppState);
 pub struct Messages(pub AppState);
 pub struct Events(pub AppState);
-pub struct Tasks(pub AppState);
-pub struct Contexts(pub AppState);
 pub struct Artifacts(pub AppState);
 pub struct Subscriptions(pub AppState);
-pub struct Authorization(pub AppState);
 
 // ---- catalog --------------------------------------------------------------------------------------------------------
 
@@ -134,7 +127,6 @@ impl pb::message_service_server::MessageService for Messages {
             .str("type", &r.r#type)
             .str("messageId", &r.message_id)
             .str("conversationId", &r.conversation_id)
-            .str("taskId", &r.task_id)
             .raw("recipients", c::members(r.recipients))
             .raw("content", content)
             .str("correlationId", &r.correlation_id)
@@ -144,7 +136,6 @@ impl pb::message_service_server::MessageService for Messages {
             .str("priority", &r.priority)
             .str("triggerMode", &r.trigger_mode)
             .structs("artifacts", r.artifacts)
-            .raw("contextRefs", c::context_refs(r.context_refs))
             .map("labels", r.labels)
             .str("idempotencyKey", &r.idempotency_key)
             .build();
@@ -228,299 +219,10 @@ impl pb::event_service_server::EventService for Events {
             .structure("data", r.data)
             .str("classification", &r.classification)
             .opt_bool("verified", r.verified)
-            .str("causedByTask", &r.caused_by_task)
             .str("occurredAt", &r.occurred_at)
             .build();
         let out = self.0.domain.publish_event(&ctx, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
         Ok(respond(&ctx, pb::PublishEventResponse { seq: out.seq, event_id: out.event_id, duplicate: out.duplicate, trace_id: tid(&ctx) }))
-    }
-}
-
-// ---- tasks ----------------------------------------------------------------------------------------------------------
-
-fn failure_doc(f: Option<pb::Failure>) -> Value {
-    match f {
-        Some(f) => {
-            let mut o = json!({"code": f.code, "message": f.message, "retryable": f.retryable});
-            if let Some(d) = f.details {
-                o["details"] = struct_to_json(d);
-            }
-            o
-        }
-        None => Value::Null,
-    }
-}
-
-#[tonic::async_trait]
-impl pb::task_service_server::TaskService for Tasks {
-    type WatchStream = BoxStream<pb::TaskUpdate>;
-
-    async fn submit(&self, req: Request<pb::SubmitTaskRequest>) -> Result<Response<pb::SubmitTaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new()
-            .raw("capability", r.capability.map(|k| json!({"id": k.id, "version": k.version})).unwrap_or(Value::Null))
-            .str("targetAgentId", &r.target_agent_id)
-            .str("conversationId", &r.conversation_id)
-            .str("parentTaskId", &r.parent_task_id)
-            .opt_u64("parentFencingToken", r.parent_fencing_token)
-            .structure("input", r.input)
-            .raw("contextRefs", c::context_refs(r.context_refs))
-            .str("deadlineAt", &r.deadline_at)
-            .structure("constraints", r.constraints)
-            .str("causedByEvent", &r.caused_by_event)
-            .build();
-        let out = self.0.domain.submit_task(&ctx, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        let v = to_json(&ctx, &out)?;
-        Ok(respond(&ctx, pb::SubmitTaskResponse { task: Some(c::task(&v)), approval_id: c::str_of(&v, "approvalId"), trace_id: tid(&ctx) }))
-    }
-
-    async fn get(&self, req: Request<pb::GetTaskRequest>) -> Result<Response<pb::TaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let out = self.0.domain.get_task(&ctx, &r.task_id).await.map_err(|e| fail(&ctx, e))?;
-        Ok(respond(&ctx, pb::TaskResponse { task: Some(c::task(&to_json(&ctx, &out)?)), trace_id: tid(&ctx) }))
-    }
-
-    async fn list_events(&self, req: Request<pb::ListTaskEventsRequest>) -> Result<Response<pb::ListTaskEventsResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let out = self.0.domain.list_task_events(&ctx, &r.task_id, r.after, if r.limit == 0 { 200 } else { r.limit }).await.map_err(|e| fail(&ctx, e))?;
-        let events = to_json(&ctx, &out)?.as_array().cloned().unwrap_or_default().iter().map(c::task_event).collect();
-        Ok(respond(&ctx, pb::ListTaskEventsResponse { events, trace_id: tid(&ctx) }))
-    }
-
-    async fn claim(&self, req: Request<pb::ClaimTaskRequest>) -> Result<Response<pb::ClaimTaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new().i64("leaseSeconds", r.lease_seconds).opt_u64("expectedRevision", r.expected_revision).build();
-        let out = self.0.domain.claim_task(&ctx, &r.task_id, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        let v = to_json(&ctx, &out)?;
-        Ok(respond(
-            &ctx,
-            pb::ClaimTaskResponse {
-                task: Some(c::task(&v["task"])),
-                lease: c::lease(&v["lease"]),
-                fencing_token: c::u64_of(&v, "fencingToken"),
-                authorization_token: c::str_of(&v, "authorizationToken"),
-                capability: c::structure(&v, "capability"),
-                authority: c::structure(&v, "authority"),
-                trace_id: tid(&ctx),
-            },
-        ))
-    }
-
-    async fn heartbeat(&self, req: Request<pb::HeartbeatTaskRequest>) -> Result<Response<pb::HeartbeatTaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new().u64("fencingToken", r.fencing_token).i64("leaseSeconds", r.lease_seconds).build();
-        let out = self.0.domain.heartbeat_task(&ctx, &r.task_id, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        let v = to_json(&ctx, &out)?;
-        Ok(respond(
-            &ctx,
-            pb::HeartbeatTaskResponse {
-                lease: c::lease(&v["lease"]),
-                state: c::task_state(&c::str_of(&v, "state")) as i32,
-                revision: c::u64_of(&v, "revision"),
-                cancel_requested: c::bool_of(&v, "cancelRequested"),
-                authorization_token: c::str_of(&v, "authorizationToken"),
-                trace_id: tid(&ctx),
-            },
-        ))
-    }
-
-    async fn progress(&self, req: Request<pb::ProgressTaskRequest>) -> Result<Response<pb::TaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let mut doc = Doc::new()
-            .u64("fencingToken", r.fencing_token)
-            .opt_u64("expectedRevision", r.expected_revision)
-            .str("message", &r.message)
-            .structure("checkpoint", r.checkpoint)
-            .f64("percent", r.percent)
-            .structure("question", r.question)
-            .strs("blockedOn", &r.blocked_on);
-        if let Some(status) = c::progress_status(r.status) {
-            doc = doc.str("status", status);
-        }
-        let out = self.0.domain.progress_task(&ctx, &r.task_id, from_doc(&ctx, doc.build())?).await.map_err(|e| fail(&ctx, e))?;
-        Ok(respond(&ctx, pb::TaskResponse { task: Some(c::task(&to_json(&ctx, &out)?)), trace_id: tid(&ctx) }))
-    }
-
-    async fn provide_input(&self, req: Request<pb::ProvideInputRequest>) -> Result<Response<pb::TaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new().structure("data", r.data).opt_u64("expectedRevision", r.expected_revision).build();
-        let out = self.0.domain.provide_input(&ctx, &r.task_id, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        Ok(respond(&ctx, pb::TaskResponse { task: Some(c::task(&to_json(&ctx, &out)?)), trace_id: tid(&ctx) }))
-    }
-
-    async fn complete(&self, req: Request<pb::CompleteTaskRequest>) -> Result<Response<pb::TaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new()
-            .u64("fencingToken", r.fencing_token)
-            .opt_u64("expectedRevision", r.expected_revision)
-            .structure("result", r.result)
-            .structs("artifacts", r.artifacts)
-            .build();
-        let out = self.0.domain.complete_task(&ctx, &r.task_id, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        Ok(respond(&ctx, pb::TaskResponse { task: Some(c::task(&to_json(&ctx, &out)?)), trace_id: tid(&ctx) }))
-    }
-
-    async fn fail(&self, req: Request<pb::FailTaskRequest>) -> Result<Response<pb::TaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc =
-            Doc::new().u64("fencingToken", r.fencing_token).opt_u64("expectedRevision", r.expected_revision).raw("failure", failure_doc(r.failure)).build();
-        let out = self.0.domain.fail_task(&ctx, &r.task_id, from_doc(&ctx, doc)?).await.map_err(|e| super::fail(&ctx, e))?;
-        Ok(respond(&ctx, pb::TaskResponse { task: Some(c::task(&to_json(&ctx, &out)?)), trace_id: tid(&ctx) }))
-    }
-
-    async fn cancel(&self, req: Request<pb::CancelTaskRequest>) -> Result<Response<pb::TaskResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new()
-            .opt_u64("expectedRevision", r.expected_revision)
-            .str("reason", &r.reason)
-            .bool("acknowledge", r.acknowledge)
-            .u64("fencingToken", r.fencing_token)
-            .build();
-        let out = self.0.domain.cancel_task(&ctx, &r.task_id, from_doc(&ctx, doc)?).await.map_err(|e| super::fail(&ctx, e))?;
-        Ok(respond(&ctx, pb::TaskResponse { task: Some(c::task(&to_json(&ctx, &out)?)), trace_id: tid(&ctx) }))
-    }
-
-    async fn watch(&self, req: Request<pb::WatchTaskRequest>) -> Result<Response<Self::WatchStream>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let task_id = req.into_inner().task_id;
-        let domain = self.0.domain.clone();
-        // Snapshot first (so authorization errors surface as the call's status), then follow new task events.
-        let snapshot = domain.get_task(&ctx, &task_id).await.map_err(|e| fail(&ctx, e))?;
-        let snapshot_json = to_json(&ctx, &snapshot)?;
-        let snapshot_revision = c::u64_of(&snapshot_json, "revision");
-        let terminal = snapshot.task.state.is_terminal();
-        let first = pb::TaskUpdate { task: Some(c::task(&snapshot_json)), event: None, snapshot: true };
-        let response_ctx = ctx.clone();
-        let stream = async_stream::stream! {
-            yield Ok(first);
-            if terminal {
-                return;
-            }
-            let mut after = 0i64;
-            loop {
-                let notified = domain.event_notify.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-                let events = match domain.list_task_events(&ctx, &task_id, after, 200).await {
-                    Ok(e) => e,
-                    Err(err) => { yield Err(fail(&ctx, err)); return; }
-                };
-                let mut ended = false;
-                for e in events {
-                    after = after.max(e.event_sequence);
-                    if (e.revision as u64) <= snapshot_revision {
-                        continue;
-                    }
-                    let current = match domain.get_task(&ctx, &task_id).await {
-                        Ok(t) => t,
-                        Err(err) => { yield Err(fail(&ctx, err)); return; }
-                    };
-                    let (ev, task_json) = match (serde_json::to_value(&e), serde_json::to_value(&current)) {
-                        (Ok(a), Ok(b)) => (a, b),
-                        _ => { yield Err(fail(&ctx, somework_core::Error::internal("serialize task update"))); return; }
-                    };
-                    ended = current.task.state.is_terminal() && e.to_state.as_deref() == Some(current.task.state.as_str());
-                    yield Ok(pb::TaskUpdate { task: Some(c::task(&task_json)), event: Some(c::task_event(&ev)), snapshot: false });
-                }
-                if ended {
-                    return;
-                }
-                let _ = tokio::time::timeout(Duration::from_secs(1), notified).await;
-            }
-        };
-        Ok(respond(&response_ctx, Box::pin(stream) as Self::WatchStream))
-    }
-}
-
-// ---- context --------------------------------------------------------------------------------------------------------
-
-#[tonic::async_trait]
-impl pb::context_service_server::ContextService for Contexts {
-    async fn create(&self, req: Request<pb::CreateContextPackRequest>) -> Result<Response<pb::ContextPackRecord>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let pack = some_struct(req.into_inner().pack).ok_or_else(|| invalid(&ctx, "pack is required"))?;
-        let out = self.0.domain.create_context_pack(&ctx, pack).await.map_err(|e| fail(&ctx, e))?;
-        let v = to_json(&ctx, &out)?;
-        Ok(respond(
-            &ctx,
-            pb::ContextPackRecord {
-                context_pack_id: c::str_of(&v, "contextPackId"),
-                version: c::u64_of(&v, "version"),
-                digest: c::str_of(&v, "digest"),
-                classification: c::str_of(&v, "classification"),
-                size_bytes: c::u64_of(&v, "sizeBytes"),
-                created_at: c::str_of(&v, "createdAt"),
-                trace_id: tid(&ctx),
-            },
-        ))
-    }
-
-    async fn get(&self, req: Request<pb::GetContextPackRequest>) -> Result<Response<pb::ContextPackView>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let sections = if r.sections.is_empty() { None } else { Some(r.sections) };
-        let task = if r.task_id.is_empty() { None } else { Some(r.task_id.as_str()) };
-        let out = self.0.domain.get_context_pack(&ctx, &r.context_pack_id, r.version, sections, task).await.map_err(|e| fail(&ctx, e))?;
-        let v = to_json(&ctx, &out)?;
-        Ok(respond(
-            &ctx,
-            pb::ContextPackView {
-                context_pack_id: c::str_of(&v, "contextPackId"),
-                version: c::u64_of(&v, "version"),
-                digest: c::str_of(&v, "digest"),
-                classification: c::str_of(&v, "classification"),
-                disclosed_sections: c::strings_of(&v, "disclosedSections"),
-                withheld_sections: c::strings_of(&v, "withheldSections"),
-                section_index: c::structure(&v, "sectionIndex"),
-                pack: c::structure(&v, "pack"),
-                trace_id: tid(&ctx),
-            },
-        ))
-    }
-
-    async fn offer(&self, req: Request<pb::OfferContextRequest>) -> Result<Response<pb::ContextOffer>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new()
-            .raw("to", r.to.map(|m| json!({"kind": m.kind, "id": m.id})).unwrap_or(Value::Null))
-            .str("mode", &r.mode)
-            .str("taskId", &r.task_id)
-            .strs("sections", &r.sections)
-            .i64("expiresInSeconds", r.expires_in_seconds)
-            .str("note", &r.note)
-            .build();
-        let out = self.0.domain.offer_context(&ctx, &r.context_pack_id, r.version, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        Ok(respond(&ctx, c::offer(&to_json(&ctx, &out)?, &tid(&ctx))))
-    }
-
-    async fn accept(&self, req: Request<pb::AcceptContextRequest>) -> Result<Response<pb::AcceptContextResponse>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new().str("offerId", &r.offer_id).i64("leaseSeconds", r.lease_seconds).build();
-        let out = self.0.domain.accept_context(&ctx, &r.context_pack_id, r.version, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        let v = to_json(&ctx, &out)?;
-        let trace = tid(&ctx);
-        Ok(respond(
-            &ctx,
-            pb::AcceptContextResponse {
-                offer: Some(c::offer(&v["offer"], &trace)),
-                task: v.get("task").filter(|t| !t.is_null()).map(c::task),
-                lease: v.get("lease").and_then(c::lease),
-                fencing_token: c::u64_of(&v, "fencingToken"),
-                authorization_token: c::str_of(&v, "authorizationToken"),
-                trace_id: trace,
-            },
-        ))
     }
 }
 
@@ -538,7 +240,6 @@ impl pb::artifact_service_server::ArtifactService for Artifacts {
             .u64("sizeBytes", r.size_bytes)
             .str("sha256", &r.sha256)
             .str("classification", &r.classification)
-            .str("sourceTaskId", &r.source_task_id)
             .structure("provenance", r.provenance)
             .str("expiresAt", &r.expires_at)
             .str("conversationId", &r.conversation_id)
@@ -575,16 +276,14 @@ impl pb::artifact_service_server::ArtifactService for Artifacts {
     async fn get_metadata(&self, req: Request<pb::GetArtifactRequest>) -> Result<Response<pb::ArtifactMetadata>, Status> {
         let ctx = call_ctx(&self.0, req.metadata()).await?;
         let r = req.into_inner();
-        let task = if r.task_id.is_empty() { None } else { Some(r.task_id.as_str()) };
-        let out = self.0.domain.get_artifact(&ctx, &r.artifact_id, r.version, task).await.map_err(|e| fail(&ctx, e))?;
+        let out = self.0.domain.get_artifact(&ctx, &r.artifact_id, r.version).await.map_err(|e| fail(&ctx, e))?;
         Ok(respond(&ctx, c::artifact(&to_json(&ctx, &out)?, &tid(&ctx))))
     }
 
     async fn get_download(&self, req: Request<pb::GetDownloadRequest>) -> Result<Response<pb::DownloadGrant>, Status> {
         let ctx = call_ctx(&self.0, req.metadata()).await?;
         let r = req.into_inner();
-        let doc = Doc::new().str("taskId", &r.task_id).opt_u64("fencingToken", r.fencing_token).build();
-        let out = self.0.domain.artifact_download_grant(&ctx, &r.artifact_id, r.version, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
+        let out = self.0.domain.artifact_download_grant(&ctx, &r.artifact_id, r.version).await.map_err(|e| fail(&ctx, e))?;
         let v = to_json(&ctx, &out)?;
         let trace = tid(&ctx);
         Ok(respond(
@@ -599,7 +298,7 @@ impl pb::artifact_service_server::ArtifactService for Artifacts {
     }
 }
 
-// ---- subscriptions & authorization ------------------------------------------------------------------------------------
+// ---- subscriptions ------------------------------------------------------------------------------------
 
 #[tonic::async_trait]
 impl pb::subscription_service_server::SubscriptionService for Subscriptions {
@@ -628,35 +327,5 @@ impl pb::subscription_service_server::SubscriptionService for Subscriptions {
         let r = req.into_inner();
         self.0.domain.delete_subscription(&ctx, &r.subscription_id).await.map_err(|e| fail(&ctx, e))?;
         Ok(respond(&ctx, pb::DeleteSubscriptionResponse { trace_id: tid(&ctx) }))
-    }
-}
-
-#[tonic::async_trait]
-impl pb::authorization_service_server::AuthorizationService for Authorization {
-    async fn delegate(&self, req: Request<pb::DelegateRequest>) -> Result<Response<pb::DelegatedGrant>, Status> {
-        let ctx = call_ctx(&self.0, req.metadata()).await?;
-        let r = req.into_inner();
-        let doc = Doc::new()
-            .raw("subject", r.subject.map(|m| json!({"kind": m.kind, "id": m.id})).unwrap_or(Value::Null))
-            .strs("actions", &r.actions)
-            .strs("capabilities", &r.capabilities)
-            .strs("resources", &r.resources)
-            .structure("constraints", r.constraints)
-            .str("classificationMax", &r.classification_max)
-            .i64("ttlSeconds", r.ttl_seconds)
-            .build();
-        let out = self.0.domain.delegate_grant(&ctx, from_doc(&ctx, doc)?).await.map_err(|e| fail(&ctx, e))?;
-        let v = to_json(&ctx, &out)?;
-        Ok(respond(
-            &ctx,
-            pb::DelegatedGrant {
-                token: c::str_of(&v, "token"),
-                jti: c::str_of(&v, "jti"),
-                parent_jti: c::str_of(&v, "parentJti"),
-                expires_at: c::str_of(&v, "expiresAt"),
-                remaining_depth: c::u64_of(&v, "remainingDepth") as u32,
-                trace_id: tid(&ctx),
-            },
-        ))
     }
 }

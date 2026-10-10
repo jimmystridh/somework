@@ -1,14 +1,13 @@
 use std::time::Duration;
 
 use serde_json::json;
-use somework_core::contracts::SideEffects;
 use somework_testkit::{
     Stack,
     sidecar::{McpProcess, agent_key_file},
 };
 
 async fn extended(stack: &Stack, id: &str) -> (somework_testkit::Agent, McpProcess) {
-    let agent = stack.requester(id, &[], SideEffects::Read).await;
+    let agent = stack.requester(id).await;
     let mcp = McpProcess::spawn(&stack.url, &agent_key_file(stack.dir.path(), &agent), &["--extended-tools"]).await;
     (agent, mcp)
 }
@@ -20,7 +19,7 @@ async fn tool_names(mcp: &mut McpProcess) -> Vec<String> {
 #[tokio::test]
 async fn extended_tools_are_offered_only_when_enabled() {
     let stack = Stack::start().await;
-    let agent = stack.requester("agent/alice", &[], SideEffects::Read).await;
+    let agent = stack.requester("agent/alice").await;
     let mut plain = McpProcess::spawn(&stack.url, &agent_key_file(stack.dir.path(), &agent), &[]).await;
     let names = tool_names(&mut plain).await;
     assert!(!names.contains(&"collab_inbox".to_string()) && !names.contains(&"collab_secret_seal".to_string()));

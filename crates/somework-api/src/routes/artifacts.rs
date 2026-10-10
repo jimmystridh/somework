@@ -1,13 +1,12 @@
 use axum::{
     Router,
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::{get, post, put},
 };
-use serde::Deserialize;
-use somework_domain::artifacts::{BeginUpload, CompleteUpload, DownloadRequest};
+use somework_domain::artifacts::{BeginUpload, CompleteUpload};
 
 use crate::{http::*, state::AppState};
 
@@ -28,18 +27,12 @@ async fn complete(State(s): State<AppState>, Auth(ctx): Auth, Path(id): Path<Str
     ok(s.domain.complete_artifact_upload(&ctx, &id, req).await?)
 }
 
-#[derive(Deserialize)]
-struct MetaQuery {
-    #[serde(rename = "taskId")]
-    task_id: Option<String>,
+async fn metadata(State(s): State<AppState>, Auth(ctx): Auth, Path((id, version)): Path<(String, u64)>) -> ApiResult {
+    ok(s.domain.get_artifact(&ctx, &id, version).await?)
 }
 
-async fn metadata(State(s): State<AppState>, Auth(ctx): Auth, Path((id, version)): Path<(String, u64)>, Query(q): Query<MetaQuery>) -> ApiResult {
-    ok(s.domain.get_artifact(&ctx, &id, version, q.task_id.as_deref()).await?)
-}
-
-async fn download_grant(State(s): State<AppState>, Auth(ctx): Auth, Path((id, version)): Path<(String, u64)>, Body(req): Body<DownloadRequest>) -> ApiResult {
-    created(s.domain.artifact_download_grant(&ctx, &id, version, req).await?)
+async fn download_grant(State(s): State<AppState>, Auth(ctx): Auth, Path((id, version)): Path<(String, u64)>) -> ApiResult {
+    created(s.domain.artifact_download_grant(&ctx, &id, version).await?)
 }
 
 /// Presigned PUT for the local filesystem object store. The grant itself is the credential (short-lived, signed).

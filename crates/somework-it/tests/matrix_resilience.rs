@@ -10,7 +10,7 @@ use std::{
 
 use matrix_common::*;
 use serde_json::{Value, json};
-use somework_core::{ErrorCode, contracts::ActorKind, contracts::SideEffects};
+use somework_core::{ErrorCode, contracts::ActorKind};
 use somework_domain::{config::MatrixProfile, policy::Permissions};
 use somework_testkit::{Agent, process::eventually};
 
@@ -18,15 +18,23 @@ use somework_testkit::{Agent, process::eventually};
 #[tokio::test]
 async fn matrix_outage_does_not_stop_work_and_the_timeline_catches_up_once() {
     let env = MxEnv::start().await;
-    let worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms(SideEffects::Read)).await;
-    let author = env.stack.requester("agent/author", &["code.review"], SideEffects::Read).await;
+    let worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms()).await;
+    let author = env.stack.requester("agent/author").await;
     env.mx.set_outage(true);
 
-    let task = author.client.submit_task(&json!({"capability": {"id": "code.review", "version": "2.1"}, "input": {"repository": "r"}}), None).await.unwrap();
-    let claim = worker.client.claim_task(&task.task_id, Some(30)).await.unwrap();
-    worker.client.progress_task(&task.task_id, &json!({"fencingToken": claim.fencing_token, "message": "working"})).await.unwrap();
-    worker.client.complete_task(&task.task_id, claim.fencing_token, &json!({"verdict": "approve"}), &[]).await.unwrap();
-    assert_eq!(author.client.get_task(&task.task_id).await.unwrap().state.as_str(), "succeeded", "canonical work completed while Matrix was down");
+    let conversation = env.conversation(&author, "Outage room", &[("agent", "agent/reviewer")], None).await;
+    let request = author
+        .client
+        .send_message(&json!({"conversationId": conversation, "recipients": [{"kind": "agent", "id": "agent/reviewer"}], "content": {"mediaType": "text/plain", "data": "please review"}}))
+        .await
+        .unwrap();
+    let answer = worker
+        .client
+        .send_message(&json!({"conversationId": conversation, "replyTo": request["messageId"], "recipients": [{"kind": "agent", "id": "agent/author"}], "content": {"mediaType": "text/plain", "data": "approved"}}))
+        .await
+        .unwrap();
+    let unread = author.client.get("/v1/inbox?unread=true").await.unwrap();
+    assert!(unread["messages"].as_array().unwrap().iter().any(|m| m["messageId"] == answer["messageId"]), "canonical messaging works while Matrix is down");
 
     let outbox = env.stack.admin.get("/v1/admin/outbox").await.unwrap();
     let matrix = outbox["sinks"].as_array().unwrap().iter().find(|s| s["sink"] == "matrix").unwrap().clone();
@@ -35,8 +43,10 @@ async fn matrix_outage_does_not_stop_work_and_the_timeline_catches_up_once() {
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
     env.mx.set_outage(false);
+    let id_of = |m: &Value| m["messageId"].as_str().unwrap().to_string();
+    let (request_id, answer_id) = (id_of(&request), id_of(&answer));
     let room = eventually("room after recovery", Duration::from_secs(30), || async {
-        env.mx.rooms().into_iter().find(|r| env.mx.events(r).iter().any(|e| e.kind == "dev.somework.task.v1" && e.content["state"] == "succeeded"))
+        env.mx.rooms().into_iter().find(|r| env.mx.events(r).iter().any(|e| e.content["dev.somework.ref"]["id"] == answer_id.as_str()))
     })
     .await;
     eventually("backlog drained", Duration::from_secs(30), || async {
@@ -47,12 +57,10 @@ async fn matrix_outage_does_not_stop_work_and_the_timeline_catches_up_once() {
     .await;
 
     let events = env.mx.events(&room);
-    for state in ["queued", "claimed", "running", "succeeded"] {
-        let n = events.iter().filter(|e| e.kind == "dev.somework.task.v1" && e.content["state"] == state).count();
-        assert_eq!(n, 1, "{state} projected {n} times");
+    for id in [&request_id, &answer_id] {
+        let n = events.iter().filter(|e| e.content["dev.somework.ref"]["id"] == id.as_str()).count();
+        assert_eq!(n, 1, "message {id} projected {n} times");
     }
-    let roots = events.iter().filter(|e| e.content["dev.somework.ref"]["type"] == "task" && e.body().starts_with(&format!("Task {} —", task.task_id))).count();
-    assert_eq!(roots, 1, "exactly one task root");
     env.stack.stop().await;
 }
 
@@ -60,7 +68,7 @@ async fn matrix_outage_does_not_stop_work_and_the_timeline_catches_up_once() {
 #[tokio::test]
 async fn oversized_projections_are_replaced_by_a_reference() {
     let env = MxEnv::start_with(|c| c.max_event_bytes = 1200, MatrixProfile::AuditableInternal).await;
-    let author = env.stack.requester("agent/author", &[], SideEffects::Read).await;
+    let author = env.stack.requester("agent/author").await;
     let alice = env.human("alice", "@alice:hs.test", human_perms()).await;
     let conversation = env.conversation(&author, "Big room", &[("human", "alice")], None).await;
     let big = "x".repeat(5000);
@@ -80,10 +88,9 @@ async fn oversized_projections_are_replaced_by_a_reference() {
 #[tokio::test]
 async fn sensitive_conversations_get_dedicated_rooms() {
     let env = MxEnv::start().await;
-    let _worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms(SideEffects::Read)).await;
+    let _worker = env.stack.worker("agent/reviewer", vec![review_cap()], worker_perms()).await;
     let mut perms = Permissions::default_agent();
     perms.classification_max = Some("confidential".into());
-    perms.capabilities = vec!["code.review".into()];
     let key = env.stack.create_principal(ActorKind::Agent, "agent/security-author", perms).await;
     let author = Agent {
         id: "agent/security-author".into(),
@@ -109,17 +116,15 @@ async fn sensitive_conversations_get_dedicated_rooms() {
     assert_eq!(marker.content["dedicated"], true);
     assert_eq!(env.mx.state_event(&normal_room, "dev.somework.room").unwrap().content["dedicated"], false);
 
-    // a task in the sensitive conversation lives as a thread inside that room only
-    let task = author
-        .client
-        .submit_task(&json!({"capability": {"id": "code.review", "version": "2.1"}, "conversationId": secret, "input": {"repository": "r"}}), None)
-        .await
-        .unwrap();
-    eventually("task thread in the sensitive room", Duration::from_secs(10), || async {
-        env.mx.events(&secret_room).into_iter().find(|e| e.content["dev.somework.ref"]["id"] == task.task_id.as_str())
+    // a message in the sensitive conversation lives in that room only
+    let sent =
+        author.client.send_message(&json!({"conversationId": secret, "content": {"mediaType": "text/plain", "data": "second sensitive note"}})).await.unwrap();
+    let sent_id = sent["messageId"].as_str().unwrap().to_string();
+    eventually("message in the sensitive room", Duration::from_secs(10), || async {
+        env.mx.events(&secret_room).into_iter().find(|e| e.content["dev.somework.ref"]["id"] == sent_id.as_str())
     })
     .await;
-    assert!(env.mx.events(&normal_room).iter().all(|e| e.content["dev.somework.ref"]["id"] != task.task_id.as_str()));
+    assert!(env.mx.events(&normal_room).iter().all(|e| e.content["dev.somework.ref"]["id"] != sent_id.as_str()));
     env.stack.stop().await;
 }
 
@@ -131,7 +136,7 @@ async fn encrypted_profiles_never_put_plaintext_into_matrix() {
     for (profile, observer) in [(MatrixProfile::MetadataOnlyPrivate, false), (MatrixProfile::EncryptedWithObserver, true)] {
         let env = MxEnv::start_with(|c| c.observer_user = Some("@auditor:hs.test".into()), profile).await;
         env.mx.add_user("@auditor:hs.test");
-        let author = env.stack.requester("agent/author", &[], SideEffects::Read).await;
+        let author = env.stack.requester("agent/author").await;
         env.human("alice", "@alice:hs.test", human_perms()).await;
         let conversation = env.conversation(&author, "Private matters", &[("human", "alice")], None).await;
         author
@@ -194,8 +199,8 @@ fn spawn_responder(agent: Agent, peer: &'static str) -> Responder {
 #[tokio::test]
 async fn agents_cannot_ping_pong_through_notices_or_forever() {
     let env = MxEnv::start().await;
-    let a = env.stack.requester("agent/echo-a", &[], SideEffects::Read).await;
-    let b = env.stack.requester("agent/echo-b", &[], SideEffects::Read).await;
+    let a = env.stack.requester("agent/echo-a").await;
+    let b = env.stack.requester("agent/echo-b").await;
     let ra = spawn_responder(a.clone(), "agent/echo-b");
     let rb = spawn_responder(b.clone(), "agent/echo-a");
 
@@ -206,10 +211,16 @@ async fn agents_cannot_ping_pong_through_notices_or_forever() {
     assert_eq!(rb.handled.load(Ordering::Relaxed), 0, "notices and notifications must not invoke an agent turn");
 
     // forbidden trigger modes are refused outright
-    for kind in ["chat.notice", "task.status"] {
-        let err = a.client.send_message(&json!({"recipients": [{"kind": "agent", "id": "agent/echo-b"}], "type": kind, "triggerMode": "directed", "content": {"mediaType": "text/plain", "data": "wake up"}})).await.unwrap_err();
-        assert_eq!(err.code, ErrorCode::TriggerNotAllowed, "{kind}");
-    }
+    let err = a.client.send_message(&json!({"recipients": [{"kind": "agent", "id": "agent/echo-b"}], "type": "chat.notice", "triggerMode": "directed", "content": {"mediaType": "text/plain", "data": "wake up"}})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::TriggerNotAllowed);
+    let err = a
+        .client
+        .send_message(
+            &json!({"recipients": [{"kind": "agent", "id": "agent/echo-b"}], "type": "task.status", "content": {"mediaType": "text/plain", "data": "gone"}}),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::ValidationFailed, "task message types no longer exist");
     let err = a
         .client
         .send_message(

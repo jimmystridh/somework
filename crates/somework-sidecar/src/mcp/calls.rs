@@ -1,12 +1,8 @@
-use std::time::Duration;
-
 use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::Method;
 use serde_json::{Value, json};
 use somework_client::{Client, ClientError};
 use somework_core::ErrorCode;
-
-use crate::worker::lease::{Leases, spawn_keepalive};
 
 pub type McpResult = Result<Value, ClientError>;
 
@@ -22,14 +18,6 @@ fn enc(s: &str) -> String {
     urlencoding::encode(s).into_owned()
 }
 
-/// Everything the model must never see: tokens and presigned credentials stay inside the sidecar.
-fn scrub(mut v: Value) -> Value {
-    if let Some(o) = v.as_object_mut() {
-        o.remove("authorizationToken");
-    }
-    v
-}
-
 fn without(args: &Value, keys: &[&str]) -> Value {
     let mut v = args.clone();
     if let Some(o) = v.as_object_mut() {
@@ -40,7 +28,7 @@ fn without(args: &Value, keys: &[&str]) -> Value {
     v
 }
 
-pub async fn call(client: &Client, leases: &Leases, name: &str, args: Value) -> McpResult {
+pub async fn call(client: &Client, name: &str, args: Value) -> McpResult {
     match name {
         "collab_catalog_search" => search_with_contracts(client, &args).await,
         "collab_agent_get" => client.get_agent(str_arg(&args, "agentId")?).await,
@@ -50,86 +38,6 @@ pub async fn call(client: &Client, leases: &Leases, name: &str, args: Value) -> 
                 body["content"] = json!({"mediaType": "text/plain", "data": text});
             }
             client.send_message(&body).await
-        }
-        "collab_task_submit" => {
-            let key = args.get("idempotencyKey").and_then(Value::as_str).map(String::from);
-            let body = without(&args, &["idempotencyKey"]);
-            let v = client.raw(Method::POST, "/v1/tasks", Some(&body), key.as_deref(), None).await?;
-            Ok(v)
-        }
-        "collab_task_get" => {
-            let id = str_arg(&args, "taskId")?;
-            let wait = args.get("waitSeconds").and_then(Value::as_u64).unwrap_or(0).min(30);
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
-            loop {
-                let v = client.get(&format!("/v1/tasks/{}", enc(id))).await?;
-                let terminal = matches!(v["state"].as_str(), Some("succeeded" | "failed" | "rejected" | "canceled" | "expired"));
-                if terminal || tokio::time::Instant::now() >= deadline {
-                    return Ok(v);
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-        "collab_task_claim" => {
-            let id = str_arg(&args, "taskId")?;
-            let lease = args.get("leaseSeconds").and_then(Value::as_i64).unwrap_or(30);
-            let claim = client.post(&format!("/v1/tasks/{}/claim", enc(id)), &json!({"leaseSeconds": lease})).await?;
-            let fence = claim["fencingToken"].as_u64().unwrap_or_default();
-            let handle = spawn_keepalive(client.clone(), id.to_string(), fence, lease, 0.33);
-            if let Some(previous) = leases.lock().expect("lease map").insert(id.to_string(), handle) {
-                previous.stop();
-            }
-            Ok(scrub(claim))
-        }
-        "collab_task_progress" => {
-            let id = str_arg(&args, "taskId")?;
-            client.post(&format!("/v1/tasks/{}/progress", enc(id)), &args).await
-        }
-        "collab_task_input" => {
-            let id = str_arg(&args, "taskId")?;
-            client.post(&format!("/v1/tasks/{}/input", enc(id)), &args).await
-        }
-        "collab_task_complete" | "collab_task_fail" => {
-            let id = str_arg(&args, "taskId")?;
-            let verb = if name.ends_with("complete") { "complete" } else { "fail" };
-            let out = client.post(&format!("/v1/tasks/{}/{verb}", enc(id)), &args).await;
-            if let Some(h) = leases.lock().expect("lease map").remove(id) {
-                h.stop();
-            }
-            out
-        }
-        "collab_task_cancel" => {
-            let id = str_arg(&args, "taskId")?;
-            let out = client.post(&format!("/v1/tasks/{}/cancel", enc(id)), &args).await;
-            if args.get("acknowledge").and_then(Value::as_bool).unwrap_or(false)
-                && let Some(h) = leases.lock().expect("lease map").remove(id)
-            {
-                h.stop();
-            }
-            out
-        }
-        "collab_context_create" => {
-            let pack = match args.get("pack") {
-                Some(pack) => pack.clone(),
-                None => context_pack_from_shorthand(client, &args).await?,
-            };
-            client.post("/v1/context-packs", &pack).await
-        }
-        "collab_context_offer" => {
-            let id = str_arg(&args, "contextPackId")?;
-            let version = args.get("version").and_then(Value::as_u64).ok_or_else(|| invalid("`version` is required"))?;
-            client.post(&format!("/v1/context-packs/{}/{version}/offer", enc(id)), &without(&args, &["contextPackId", "version"])).await
-        }
-        "collab_context_accept" => {
-            let id = str_arg(&args, "contextPackId")?;
-            let version = args.get("version").and_then(Value::as_u64).ok_or_else(|| invalid("`version` is required"))?;
-            let out = client.post(&format!("/v1/context-packs/{}/{version}/accept", enc(id)), &without(&args, &["contextPackId", "version"])).await?;
-            if let (Some(task_id), Some(fence)) = (out["task"]["taskId"].as_str(), out["fencingToken"].as_u64()) {
-                let lease = out["lease"]["leaseId"].as_str().map(|_| 30).unwrap_or(30);
-                let handle = spawn_keepalive(client.clone(), task_id.to_string(), fence, lease, 0.33);
-                leases.lock().expect("lease map").insert(task_id.to_string(), handle);
-            }
-            Ok(scrub(out))
         }
         "collab_artifact_begin_upload" => begin_upload(client, args).await,
         "collab_artifact_complete_upload" => {
@@ -142,7 +50,7 @@ pub async fn call(client: &Client, leases: &Leases, name: &str, args: Value) -> 
             "list" => client.get("/v1/subscriptions").await,
             "delete" => {
                 let id = str_arg(&args, "subscriptionId")?;
-                client.raw(Method::DELETE, &format!("/v1/subscriptions/{}", enc(id)), None, None, None).await.map(|_| json!({"deleted": id}))
+                client.raw(Method::DELETE, &format!("/v1/subscriptions/{}", enc(id)), None, None).await.map(|_| json!({"deleted": id}))
             }
             other => Err(invalid(format!("unknown subscribe action {other}"))),
         },
@@ -174,50 +82,6 @@ async fn search_with_contracts(client: &Client, args: &Value) -> McpResult {
         }
     }
     Ok(found)
-}
-
-/// `collab_context_create` shorthand: the model supplies the story, the sidecar supplies the contract boilerplate.
-async fn context_pack_from_shorthand(client: &Client, args: &Value) -> Result<Value, ClientError> {
-    let objective = str_arg(args, "objective").map_err(|_| invalid("provide either `pack` (a full ContextPack) or `objective` (shorthand)"))?;
-    let who = client.get("/v1/admin/whoami").await?;
-    let domain = who["actor"]["domainId"].as_str().unwrap_or_default().to_string();
-    let mut pack = json!({
-        "objective": objective,
-        "currentState": {
-            "summary": args.get("summary").and_then(Value::as_str).unwrap_or(objective),
-            "completed": args.get("completed").cloned().unwrap_or_else(|| json!([])),
-            "remaining": args.get("remaining").cloned().unwrap_or_else(|| json!([])),
-        },
-        "requestedContinuation": {
-            "mode": args.get("mode").and_then(Value::as_str).unwrap_or("consultation"),
-            "instruction": args.get("instruction").and_then(Value::as_str).unwrap_or(objective),
-        },
-        "security": {
-            "classification": args.get("classification").and_then(Value::as_str).unwrap_or("internal"),
-            "allowedDomains": [domain],
-            "instructionsTrusted": false,
-        },
-    });
-    if let Some(facts) = args.get("facts").and_then(Value::as_array) {
-        pack["facts"] = facts.iter().map(|fact| fact_from_shorthand(fact, &who["actor"])).collect();
-    }
-    for key in ["acceptanceCriteria", "hypotheses", "decisions", "openQuestions", "artifacts", "workspace"] {
-        if let Some(v) = args.get(key) {
-            pack[key] = v.clone();
-        }
-    }
-    if let Some(cap) = args.get("expectedOutputCapability").and_then(Value::as_str) {
-        pack["requestedContinuation"]["expectedOutputCapability"] = json!(cap);
-    }
-    Ok(pack)
-}
-
-/// A plain string becomes a fact asserted by the caller with neutral confidence; objects pass through untouched.
-fn fact_from_shorthand(fact: &Value, actor: &Value) -> Value {
-    match fact.as_str() {
-        Some(statement) => json!({"statement": statement, "confidence": 0.5, "assertedBy": actor}),
-        None => fact.clone(),
-    }
 }
 
 /// Uploads content for the model: with `text` or `contentBase64` the sidecar computes size and SHA-256, uploads the
@@ -270,12 +134,7 @@ async fn begin_upload(client: &Client, args: Value) -> McpResult {
 async fn artifact_get(client: &Client, args: Value) -> McpResult {
     let id = str_arg(&args, "artifactId")?;
     let version = args.get("version").and_then(Value::as_u64).ok_or_else(|| invalid("`version` is required"))?;
-    let task = args.get("taskId").and_then(Value::as_str);
-    let path = match task {
-        Some(t) => format!("/v1/artifacts/{}/{version}?taskId={}", enc(id), enc(t)),
-        None => format!("/v1/artifacts/{}/{version}", enc(id)),
-    };
-    let mut meta = client.get(&path).await?;
+    let mut meta = client.get(&format!("/v1/artifacts/{}/{version}", enc(id))).await?;
     if args.get("includeContent").and_then(Value::as_bool).unwrap_or(false) {
         if meta["sizeBytes"].as_u64().unwrap_or(0) > 1 << 20 {
             return Err(ClientError {
@@ -286,7 +145,7 @@ async fn artifact_get(client: &Client, args: Value) -> McpResult {
                 trace_id: None,
             });
         }
-        let bytes = client.download_artifact(id, version, None).await?;
+        let bytes = client.download_artifact(id, version).await?;
         meta["contentBase64"] = json!(STANDARD.encode(bytes));
     }
     Ok(meta)

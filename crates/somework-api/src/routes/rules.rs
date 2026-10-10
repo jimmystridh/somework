@@ -1,9 +1,8 @@
 use axum::{
     Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     routing::{get, post},
 };
-use serde::Deserialize;
 use serde_json::json;
 use somework_domain::rules::RuleSpec;
 
@@ -15,7 +14,6 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/rules/{name}", get(fetch).put(put).delete(remove))
         .route("/v1/rules/{name}/pause", post(pause))
         .route("/v1/rules/{name}/resume", post(resume))
-        .route("/v1/rules/{name}/firings", get(firings))
 }
 
 async fn list(State(s): State<AppState>, Auth(ctx): Auth) -> ApiResult {
@@ -42,13 +40,4 @@ async fn pause(State(s): State<AppState>, Auth(ctx): Auth, Path(name): Path<Stri
 
 async fn resume(State(s): State<AppState>, Auth(ctx): Auth, Path(name): Path<String>) -> ApiResult {
     ok(s.domain.set_rule_status(&ctx, &name, "active").await?)
-}
-
-#[derive(Deserialize)]
-struct FiringsQuery {
-    limit: Option<i64>,
-}
-
-async fn firings(State(s): State<AppState>, Auth(ctx): Auth, Path(name): Path<String>, Query(q): Query<FiringsQuery>) -> ApiResult {
-    ok(json!({"firings": s.domain.list_firings(&ctx, &name, q.limit.unwrap_or(100)).await?}))
 }

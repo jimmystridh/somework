@@ -152,10 +152,6 @@ impl FromRequestParts<AppState> for Auth {
             }
             ctx.idempotency_key = Some(key.to_string());
         }
-        if let Some(m) = header_str(&parts.headers, "if-match") {
-            let rev = m.trim().trim_matches('"').trim_start_matches("W/").trim_matches('"');
-            ctx.if_match = Some(rev.parse().map_err(|_| ApiError(Error::invalid("If-Match must carry the task revision as an integer")))?);
-        }
         Ok(Auth(ctx))
     }
 }
@@ -187,7 +183,7 @@ pub(crate) async fn session_actor(headers: &HeaderMap, method: &axum::http::Meth
                 .await?
                 .filter(|p| p.status == "active")
                 .ok_or_else(|| Error::unauthenticated("principal is disabled"))?;
-            Ok(state.domain.actor_for_principal(&principal, None).await)
+            Ok(state.domain.actor_for_principal(&principal).await)
         }
     }
 }

@@ -47,9 +47,7 @@ pub struct BackupManifest {
     pub created_at: String,
     pub schema_version: i64,
     pub audit_head: Option<Value>,
-    pub queued_tasks: i64,
-    pub active_tasks: i64,
-    pub total_tasks: i64,
+    pub total_messages: i64,
     pub complete_artifacts: i64,
     pub master_key_included: bool,
     pub object_store: Value,
@@ -60,7 +58,7 @@ pub struct BackupManifest {
 #[serde(rename_all = "camelCase")]
 pub struct RestoreReport {
     pub restore_seconds: f64,
-    pub queued_tasks: i64,
+    pub total_messages: i64,
     pub audit_intact: bool,
     pub artifacts_verified: usize,
     pub files_verified: usize,
@@ -121,7 +119,7 @@ async fn open_snapshot(path: &Path) -> Result<sqlx::SqliteConnection, Error> {
     SqliteConnectOptions::new().filename(path).read_only(true).connect().await.map_err(|e| io_err("open snapshot", e))
 }
 
-async fn snapshot_facts(path: &Path) -> Result<(i64, Option<Value>, i64, i64, i64, i64), Error> {
+async fn snapshot_facts(path: &Path) -> Result<(i64, Option<Value>, i64, i64), Error> {
     let mut conn = open_snapshot(path).await?;
     let integrity: String = sqlx::query_scalar("PRAGMA integrity_check").fetch_one(&mut conn).await.map_err(|e| io_err("integrity_check", e))?;
     if integrity != "ok" {
@@ -134,16 +132,11 @@ async fn snapshot_facts(path: &Path) -> Result<(i64, Option<Value>, i64, i64, i6
         .await
         .map_err(|e| io_err("audit head", e))?
         .map(|r| json!({"seq": r.get::<i64, _>("seq"), "hash": r.get::<String, _>("hash")}));
-    let queued: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE state = 'queued'").fetch_one(&mut conn).await.map_err(|e| io_err("count", e))?;
-    let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE state IN ('claimed','running','input_required','blocked','cancel_requested')")
-        .fetch_one(&mut conn)
-        .await
-        .map_err(|e| io_err("count", e))?;
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks").fetch_one(&mut conn).await.map_err(|e| io_err("count", e))?;
+    let messages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages").fetch_one(&mut conn).await.map_err(|e| io_err("count", e))?;
     let artifacts: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM artifacts WHERE status = 'complete'").fetch_one(&mut conn).await.map_err(|e| io_err("count", e))?;
     let _ = conn.close().await;
-    Ok((schema.unwrap_or(0), head, queued, active, total, artifacts))
+    Ok((schema.unwrap_or(0), head, messages, artifacts))
 }
 
 impl Domain {
@@ -156,7 +149,7 @@ impl Domain {
         }
         let created_at = self.now_ts();
         sqlx::query("VACUUM INTO ?").bind(db_path.to_string_lossy().to_string()).execute(self.db.writer()).await.map_err(|e| io_err("VACUUM INTO", e))?;
-        let (schema_version, audit_head, queued, active, total, artifacts) = snapshot_facts(&db_path).await?;
+        let (schema_version, audit_head, messages, artifacts) = snapshot_facts(&db_path).await?;
 
         let mut files = vec![];
         let mut master_key_included = false;
@@ -190,9 +183,7 @@ impl Domain {
             created_at,
             schema_version,
             audit_head,
-            queued_tasks: queued,
-            active_tasks: active,
-            total_tasks: total,
+            total_messages: messages,
             complete_artifacts: artifacts,
             master_key_included,
             object_store: opts.object_store.clone(),
@@ -252,9 +243,9 @@ pub async fn restore_backup(from: &Path, to: &Path, master_key: Option<String>) 
     if let Some(seq) = broken {
         return Err(Error::internal(format!("restored audit chain is broken at sequence {seq}")));
     }
-    let (_, _, queued, _, _, _) = snapshot_facts(&to.join(DB_FILE)).await?;
-    if queued != manifest.queued_tasks {
-        return Err(Error::internal(format!("restored database has {queued} queued tasks but the manifest recorded {}", manifest.queued_tasks)));
+    let (_, _, messages, _) = snapshot_facts(&to.join(DB_FILE)).await?;
+    if messages != manifest.total_messages {
+        return Err(Error::internal(format!("restored database has {messages} messages but the manifest recorded {}", manifest.total_messages)));
     }
     // Matrix E2EE state travels inside the database snapshot: prove it is still recoverable with the master key and
     // that the stored Megolm test vector decrypts.
@@ -280,7 +271,7 @@ pub async fn restore_backup(from: &Path, to: &Path, master_key: Option<String>) 
     domain.db.close().await;
     Ok(RestoreReport {
         restore_seconds: started.elapsed().as_secs_f64(),
-        queued_tasks: queued,
+        total_messages: messages,
         audit_intact: true,
         artifacts_verified,
         files_verified,

@@ -20,32 +20,16 @@ pub struct McpServer {
     extended: bool,
     actions: OnceCell<Vec<String>>,
     extended_state: crate::extended::ExtendedState,
-    leases: crate::worker::lease::Leases,
-    runtime: OnceCell<()>,
 }
 
 impl McpServer {
     pub fn new(client: Client, extended_tools: bool) -> Arc<Self> {
-        Arc::new(Self {
-            client,
-            extended: extended_tools,
-            actions: OnceCell::new(),
-            extended_state: Default::default(),
-            leases: Default::default(),
-            runtime: OnceCell::new(),
-        })
+        Arc::new(Self { client, extended: extended_tools, actions: OnceCell::new(), extended_state: Default::default() })
     }
 
     /// With the principal's key the sealed-secret tool can also open secrets addressed to it.
     pub fn with_key(client: Client, extended_tools: bool, key: ed25519_dalek::SigningKey) -> Arc<Self> {
-        Arc::new(Self {
-            client,
-            extended: extended_tools,
-            actions: OnceCell::new(),
-            extended_state: crate::extended::ExtendedState::with_key(key),
-            leases: Default::default(),
-            runtime: OnceCell::new(),
-        })
+        Arc::new(Self { client, extended: extended_tools, actions: OnceCell::new(), extended_state: crate::extended::ExtendedState::with_key(key) })
     }
 
     /// Actions the credential holds; used to hide tools the caller could never use. Falls back to showing everything
@@ -63,27 +47,8 @@ impl McpServer {
     fn visible(actions: Option<&Vec<String>>, tool: &ToolDef) -> bool {
         match actions {
             None => true,
-            Some(a) => a.iter().any(|x| x == "*" || x == tool.action) || (tool.action == "message.read" && a.iter().any(|x| x == "task.read")),
+            Some(a) => a.iter().any(|x| x == "*" || x == tool.action),
         }
-    }
-
-    /// Worker-style tools need a registered runtime instance; register once and keep it alive.
-    async fn ensure_runtime(&self) {
-        self.runtime
-            .get_or_init(|| async {
-                if self.client.register_runtime(json!({"via": "mcp"})).await.is_ok() {
-                    let client = self.client.clone();
-                    tokio::spawn(async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                            if client.runtime_heartbeat().await.is_err() {
-                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                            }
-                        }
-                    });
-                }
-            })
-            .await;
     }
 
     /// Handles one JSON-RPC message. Notifications (no id) yield `None`.
@@ -109,7 +74,7 @@ impl McpServer {
                     "protocolVersion": version,
                     "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}},
                     "serverInfo": {"name": "somework-sidecar", "title": "SomeWork collaboration sidecar", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": "SomeWork lets you hand work to other agents. Workflow: 1) collab_catalog_search describes what is available, including each capability's input and output JSON Schema. 2) collab_task_submit with {capability:{id,version}, input} where input satisfies that inputSchema (put small content such as file text directly in the input when the schema allows). 3) collab_task_get with waitSeconds to read the result. If the capability needs a larger file, store it with collab_artifact_begin_upload (give `text`; one call does size, hash, upload and verification) and reference the returned artifact. ContextPacks (collab_context_create/offer/accept) are for handing over working state or ownership, not for ordinary requests. If nothing matches the request, say so instead of improvising. No transport credentials are required or exposed."
+                    "instructions": "SomeWork lets you work with other agents by talking to them. Workflow: 1) collab_catalog_search shows which agents exist and what they advertise. 2) collab_message_send asks an agent for something in plain words (every message wakes the agent; it decides what to do and answers with a message of its own). 3) collab_inbox / collab_events_poll (extended tools) read the answers. To send a file, store it with collab_artifact_begin_upload (give `text`; one call does size, hash, upload and verification) and attach the returned artifact to the message. If nothing matches the request, say so instead of improvising. No transport credentials are required or exposed."
                 }))
             }
             "notifications/initialized" | "notifications/cancelled" => Ok(Value::Null),
@@ -152,13 +117,10 @@ impl McpServer {
         {
             return Self::error_result("policy_denied", 403, &format!("tool {name} is not available to this principal"), None);
         }
-        if matches!(name, "collab_task_claim" | "collab_context_accept") {
-            self.ensure_runtime().await;
-        }
         let outcome = if extended.is_some() {
             crate::extended::call(&self.client, &self.extended_state, name, args).await
         } else {
-            calls::call(&self.client, &self.leases, name, args).await
+            calls::call(&self.client, name, args).await
         };
         match outcome {
             Ok(value) => Self::ok_result(value),

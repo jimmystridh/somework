@@ -11,7 +11,7 @@ async fn env_with_agents() -> (Env, Principal, Principal) {
         .worker(
             "agent/reviewer",
             vec![capability("code.review", "2.1", "read", "Reviews pull requests for correctness and security vulnerabilities")],
-            worker_permissions(SideEffects::Read),
+            agent_permissions(),
         )
         .await;
     let deployer = env
@@ -21,7 +21,7 @@ async fn env_with_agents() -> (Env, Principal, Principal) {
                 capability("deployment.inspect", "1", "read", "Inspect production deployments"),
                 capability("deployment.execute", "1", "irreversible", "Execute a production deployment"),
             ],
-            worker_permissions(SideEffects::Irreversible),
+            agent_permissions(),
         )
         .await;
     (env, reviewer, deployer)
@@ -30,7 +30,7 @@ async fn env_with_agents() -> (Env, Principal, Principal) {
 #[tokio::test]
 async fn self_registered_cards_start_as_draft_and_are_invisible_until_approved() {
     let env = Env::new().await;
-    let p = env.create_principal(ActorKind::Agent, "agent/newbie", Some(worker_permissions(SideEffects::Read))).await;
+    let p = env.create_principal(ActorKind::Agent, "agent/newbie", Some(agent_permissions())).await;
     let ctx = env.ctx(&p).await;
     let entry = env
         .domain
@@ -39,7 +39,7 @@ async fn self_registered_cards_start_as_draft_and_are_invisible_until_approved()
         .unwrap();
     assert_eq!(entry.approval.status, ApprovalStatus::Draft);
 
-    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(caller_permissions(&["code.review"], SideEffects::Read))).await;
+    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(agent_permissions())).await;
     let s = env.ctx(&seeker).await;
     let res = env.domain.search_catalog(&s, SearchRequest { query: Some("review code".into()), ..Default::default() }).await.unwrap();
     assert!(res.matches.is_empty(), "drafts never show up in search");
@@ -58,7 +58,7 @@ async fn self_registered_cards_start_as_draft_and_are_invisible_until_approved()
 #[tokio::test]
 async fn natural_language_and_capability_search_find_the_agent_without_its_id() {
     let (env, _r, _d) = env_with_agents().await;
-    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(caller_permissions(&["code.*", "deployment.*"], SideEffects::Read))).await;
+    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(agent_permissions())).await;
     let s = env.ctx(&seeker).await;
     let nl = env
         .domain
@@ -77,17 +77,7 @@ async fn natural_language_and_capability_search_find_the_agent_without_its_id() 
 #[tokio::test]
 async fn hard_constraints_beat_relevance() {
     let (env, _r, _d) = env_with_agents().await;
-    let seeker = env
-        .create_principal(
-            ActorKind::Agent,
-            "agent/seeker",
-            Some({
-                let mut p = caller_permissions(&["*"], SideEffects::Irreversible);
-                p.discover = vec!["*".into()];
-                p
-            }),
-        )
-        .await;
+    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(agent_permissions())).await;
     let s = env.ctx(&seeker).await;
     let all = env.domain.search_catalog(&s, SearchRequest { query: Some("deployment".into()), ..Default::default() }).await.unwrap();
     assert_eq!(all.matches[0].matched_capabilities.len(), 2);
@@ -135,7 +125,7 @@ async fn hard_constraints_beat_relevance() {
 #[tokio::test]
 async fn structured_input_compatibility_filters_results() {
     let (env, _r, _d) = env_with_agents().await;
-    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(caller_permissions(&["code.review"], SideEffects::Read))).await;
+    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(agent_permissions())).await;
     let s = env.ctx(&seeker).await;
     let ok = env
         .domain
@@ -198,32 +188,6 @@ async fn structured_input_compatibility_filters_results() {
 }
 
 #[tokio::test]
-async fn policy_filtering_happens_before_results_so_hidden_capabilities_are_not_leaked() {
-    let (env, _r, _d) = env_with_agents().await;
-    // may only see code.review: the deployer's capabilities (and the deployer itself) must be invisible
-    let limited = env.create_principal(ActorKind::Agent, "agent/limited", Some(caller_permissions(&["code.review"], SideEffects::Read))).await;
-    let l = env.ctx(&limited).await;
-    let res = env.domain.search_catalog(&l, SearchRequest { query: Some("production deployment execute".into()), ..Default::default() }).await.unwrap();
-    assert!(res.matches.is_empty());
-    let probe_hidden =
-        env.domain.search_catalog(&l, SearchRequest { required_capabilities: vec!["deployment.execute".into()], ..Default::default() }).await.unwrap();
-    let probe_missing =
-        env.domain.search_catalog(&l, SearchRequest { required_capabilities: vec!["totally.absent".into()], ..Default::default() }).await.unwrap();
-    assert_eq!(
-        serde_json::to_value(&probe_hidden.matches).unwrap(),
-        serde_json::to_value(&probe_missing.matches).unwrap(),
-        "hidden and nonexistent are indistinguishable"
-    );
-    assert_eq!(env.domain.get_agent(&l, "agent/deployer").await.unwrap_err().code, ErrorCode::NotFound);
-    assert_eq!(env.domain.get_capability(&l, "deployment.execute", "1").await.unwrap_err().code, ErrorCode::NotFound);
-    assert!(env.domain.get_capability(&l, "code.review", "2.1").await.is_ok());
-    // a mixed card is trimmed to the visible capability
-    let mixed = env.create_principal(ActorKind::Agent, "agent/mixed", Some(caller_permissions(&["deployment.inspect"], SideEffects::Read))).await;
-    let card = env.domain.get_agent(&env.ctx(&mixed).await, "agent/deployer").await.unwrap();
-    assert_eq!(card.agent_card.capabilities.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["deployment.inspect"]);
-}
-
-#[tokio::test]
 async fn capability_contracts_are_immutable_per_version() {
     let (env, reviewer, _d) = env_with_agents().await;
     let ctx = env.ctx(&reviewer).await;
@@ -238,9 +202,9 @@ async fn capability_contracts_are_immutable_per_version() {
 }
 
 #[tokio::test]
-async fn an_agent_cannot_register_a_card_for_someone_else_or_exceed_its_authority() {
+async fn an_agent_cannot_register_a_card_for_someone_else() {
     let env = Env::new().await;
-    let p = env.create_principal(ActorKind::Agent, "agent/mallory", Some(worker_permissions(SideEffects::Read))).await;
+    let p = env.create_principal(ActorKind::Agent, "agent/mallory", Some(agent_permissions())).await;
     let ctx = env.ctx(&p).await;
     let err = env
         .domain
@@ -248,15 +212,6 @@ async fn an_agent_cannot_register_a_card_for_someone_else_or_exceed_its_authorit
         .await
         .unwrap_err();
     assert_eq!(err.code, ErrorCode::SenderMismatch);
-    let err = env
-        .domain
-        .register_agent(
-            &ctx,
-            RegisterAgent { card: card("agent/mallory", vec![capability("deployment.execute", "1", "irreversible", "x")]), ..Default::default() },
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(err.code, ErrorCode::PolicyDenied, "declaring irreversible effects above the agent's own maximum is refused");
     let mut bad_schema = capability("bad.schema", "1", "read", "x");
     bad_schema["inputSchema"] = json!({"type": "not-a-type"});
     let err = env.domain.register_agent(&ctx, RegisterAgent { card: card("agent/mallory", vec![bad_schema]), ..Default::default() }).await.unwrap_err();
@@ -269,8 +224,8 @@ async fn an_agent_cannot_register_a_card_for_someone_else_or_exceed_its_authorit
 #[tokio::test]
 async fn logical_agents_are_distinct_from_runtime_instances() {
     let env = Env::new().await;
-    let w = env.worker("agent/reviewer", vec![capability("code.review", "2.1", "read", "Review")], worker_permissions(SideEffects::Read)).await;
-    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(caller_permissions(&["code.review"], SideEffects::Read))).await;
+    let w = env.worker("agent/reviewer", vec![capability("code.review", "2.1", "read", "Review")], agent_permissions()).await;
+    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(agent_permissions())).await;
     let s = env.ctx(&seeker).await;
     let find = || async {
         env.domain.search_catalog(&s, SearchRequest { required_capabilities: vec!["code.review".into()], ..Default::default() }).await.unwrap().matches[0]
@@ -283,7 +238,7 @@ async fn logical_agents_are_distinct_from_runtime_instances() {
     let res = env.domain.search_catalog(&s, SearchRequest { required_capabilities: vec!["code.review".into()], ..Default::default() }).await.unwrap();
     assert_eq!(res.matches.len(), 1);
     // runtime ids are unique per process (ID-02): reusing one for another agent is refused
-    let other = env.worker("agent/other", vec![capability("code.format", "1", "read", "Format")], worker_permissions(SideEffects::Read)).await;
+    let other = env.worker("agent/other", vec![capability("code.format", "1", "read", "Format")], agent_permissions()).await;
     let mut hijack = other.clone();
     hijack.runtime = w.runtime.clone();
     let refused = env.try_ctx(&hijack).await.unwrap_err();
@@ -296,7 +251,7 @@ async fn logical_agents_are_distinct_from_runtime_instances() {
 #[tokio::test]
 async fn a_disabled_agent_is_not_offered_unless_offline_entries_are_asked_for() {
     let (env, _r, _d) = env_with_agents().await;
-    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(caller_permissions(&["code.*", "deployment.*"], SideEffects::Read))).await;
+    let seeker = env.create_principal(ActorKind::Agent, "agent/seeker", Some(agent_permissions())).await;
     let s = env.ctx(&seeker).await;
     let by_cap = || SearchRequest { required_capabilities: vec!["code.review".into()], ..Default::default() };
     assert_eq!(env.domain.search_catalog(&s, by_cap()).await.unwrap().matches.len(), 1);

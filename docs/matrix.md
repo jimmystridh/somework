@@ -40,16 +40,13 @@ observer_user = "@auditor:example.org"   # encrypted_with_observer profile only
 | Platform object | Matrix |
 |---|---|
 | Conversation | one room per conversation (alias `#somework-<conv>`; created idempotently, so a crash cannot duplicate rooms) |
-| Task | thread rooted at a task-root notice in the conversation's room |
 | Agent | Application Service virtual user `@_agent_<slug>:server` (reversible slug; display name set) |
 | Human chat / agent chat | `m.room.message` `m.text` (agents as their virtual user; REST-authored human chat via the bot, prefixed with the sender) |
-| Progress, status, results | `m.notice` from the bot (non-triggering for bots) |
-| Task state change | `dev.somework.task.v1` structured event + companion `m.notice` carrying `dev.somework.ref` |
-| Context offer / artifact / approval | `dev.somework.context.v1` / `.artifact.v1` / `.approval.v1` + readable notice |
-| Approval reaction | UX signal only; translated into `decide_approval` after authorization |
+| Notices and event notifications | `m.notice` (non-triggering for bots) |
+| Artifact published | `dev.somework.artifact.v1` + readable notice |
 
-`canonical_ref` fields (`somework://tasks/<id>`, `somework://contexts/<id>/versions/<v>`, …) resolve to the platform's
-objects. `m.relates_to` thread fields follow the spec examples (`is_falling_back`, `m.in_reply_to` = task root).
+Every projected message carries `dev.somework.ref` (`{type: "message", id, message_type}`); `canonical_ref` fields (`somework://messages/<id>`, `somework://artifacts/<id>/versions/<v>/metadata`) resolve to the platform's
+objects. A message with `replyTo` is projected with `m.in_reply_to` pointing at the Matrix event of the message it answers.
 Every conversation owns its own room so Matrix membership always equals conversation membership; a conversation at
 or above `policy.dedicatedRoomClassification` is flagged `dedicated` (`dev.somework.room` state, `[classification]`
 name prefix) and is never shared with, or threaded into, another room.
@@ -58,11 +55,7 @@ name prefix) and is never shared with, or threaded into, another room.
 
 The outbox sink `matrix` reads canonical state through the `Domain` API (system context) and projects it. Sends use
 `txnId` = the outbox dedupe key, so retries and replays never duplicate. Failures retry with exponential backoff and
-dead-letter after 12 attempts (`GET /v1/admin/outbox`, requeue with `POST /v1/admin/outbox/requeue`). Progress rows
-share a coalesce key (`task:<id>:progress`), so the domain outbox drops superseded rows and publishes at most one per
-`progress_throttle_ms`; the bridge keeps **one** progress notice per task and edits it with `m.replace`.
-Mappings live in `transport_mappings` (`transport='matrix'`): conversation↔room, task↔thread root,
-message↔event, approval prompt↔approval (id, action digest, task revision, expiry).
+dead-letter after 12 attempts (`GET /v1/admin/outbox`, requeue with `POST /v1/admin/outbox/requeue`). Mappings live in `transport_mappings` (`transport='matrix'`): conversation↔room, message↔event. There are no progress notices any more.
 
 Size guard: a projection whose JSON exceeds `max_event_bytes` is never sent; a notice with
 `dev.somework.oversize: true` and the canonical reference is sent instead.
@@ -79,18 +72,15 @@ Size guard: a projection whose JSON exceeds `max_event_bytes` is never sent; a n
   audited (`matrix.ingest.unmapped_sender`) and can do nothing.
 * Mention gating (Hermes-style): a message that mentions an agent virtual user (`m.mentions`, pill or text) becomes a
   `chat.message` addressed to that agent with trigger `directed`; everything else is stored with trigger `never`.
-* Commands run as the human: `!task <capability>[@version] [to=<agent>] {json}`, `!approve <id>`, `!deny <id>`,
-  `!input <json|text>` and `!cancel` (inside a task thread). Domain errors, including policy denials (which are
-  recorded and audited by the domain), come back as `m.notice` replies.
-* Reactions 👍/👎 on an approval prompt call `decide_approval` with the digest and revision **stored when the prompt
-  was projected**; a stale (task changed/canceled), expired or unauthorized approval is refused by the domain and the
-  bridge says so.
+* There are no chat commands (`!task`, `!approve`, `!input`, `!cancel` are gone). A human message is sent as a canonical
+  `chat.message` as the mapped human; domain errors, including policy denials (recorded and audited by the domain), come back as
+  an `m.notice` reply ("Message not delivered: …").
 
 ## Failure modes covered by tests
 
 Matrix outage (machine workflow continues, backlog visible, catch-up without duplicates), replay of transactions and
 events, oversize events, forged `hs_token`, token rotation, `user_id` masquerade outside the namespace refused by the
-homeserver, unmapped and ungranted humans, agent loops (notices cannot wake; hop guard stops chat ping-pong).
+homeserver, unmapped humans and humans without `message.send`, agent loops (notices cannot wake; hop guard stops chat ping-pong).
 `running_bridge(db_path)` exposes the live bridge so operators/tests can rotate tokens without a restart.
 
 ## E2EE profiles
