@@ -125,7 +125,15 @@ function Wait-Ready([int]$seconds) {
         try {
             $answer = Invoke-WebRequest -UseBasicParsing -Uri "http://${bind}:$port/ready" -TimeoutSec 5
             if ($answer.StatusCode -eq 200 -and $answer.Content -match '"ready"\s*:\s*true') { return $true }
-        } catch { }
+        } catch {
+            # the agent runs and answers; only the ticket system does not (an outage on the Jira side): rolling good code back would not help
+            $body = ''
+            if ($_.Exception.Response) { try { $body = (New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())).ReadToEnd() } catch { } }
+            if ($body -match '"ready"\s*:\s*false' -and $body -match '"failed"\s*:\s*\[\s*"ticketSystem"\s*\]') {
+                Write-Host 'the agent is up; its ticket system does not answer (not the deploy''s fault): counted as started'
+                return $true
+            }
+        }
         Start-Sleep -Seconds 3
     }
     return $false
