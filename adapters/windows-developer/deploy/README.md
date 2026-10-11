@@ -65,6 +65,11 @@ change, so the refresh task re-resolves the names every 30 minutes (until the ne
 blocked, so a long outage of name resolution can break a job, not weaken the rules). Other accounts are untouched. An administrator can
 change the rules. If you need a tighter boundary than this, run the role in a throwaway VM or a Windows container.
 
+The pilot list (`firewall-allow.pilot.txt`) also holds the hosts of the agent's own channels: `api.telegram.org` for a Telegram bot and, for a Slack app in
+Socket Mode, `slack.com`, `wss-primary.slack.com`, `wss-backup.slack.com`, `edgeapi.slack.com` and `files.slack.com` (names, because Slack's addresses
+rotate). The channel is off until `agent.env` names its token files and who may write to the agent: `SLACK_BOT_TOKEN_FILE`, `SLACK_APP_TOKEN_FILE`,
+`SLACK_ALLOWED_USER_IDS`, optionally `SLACK_ALLOWED_CHANNELS` (see `agent.env.example` and the kit README, "Slack").
+
 ## 5. Smoke test, start, verify
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\somework\agent\adapters\windows-developer\deploy\smoke.ps1

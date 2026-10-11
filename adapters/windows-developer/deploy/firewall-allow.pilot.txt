@@ -34,3 +34,9 @@ objects.githubusercontent.com
 # the agent's own Telegram bot (Bot API; Telegram publishes its ranges at core.telegram.org/resources/cidr.txt)
 api.telegram.org
 149.154.160.0/20
+# the agent's own Slack app (Socket Mode: the Web API and the WebSocket to Slack, no inbound port; Slack's addresses rotate, so the names are listed)
+slack.com
+wss-primary.slack.com
+wss-backup.slack.com
+edgeapi.slack.com
+files.slack.com

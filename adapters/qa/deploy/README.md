@@ -77,6 +77,11 @@ addresses, not names: a host behind a shared CDN address admits every site on th
 minutes. Other accounts are untouched; an administrator can change the rules. The browser has a second, independent fence: it can only
 open the hosts in `QA_BROWSER_ALLOW_HOSTS`.
 
+The pilot list (`firewall-allow.pilot.txt`) also holds the hosts of the agent's own channels: `api.telegram.org` for a Telegram bot and, for a Slack app in
+Socket Mode, `slack.com`, `wss-primary.slack.com`, `wss-backup.slack.com`, `edgeapi.slack.com` and `files.slack.com` (names, because Slack's addresses
+rotate). The channel is off until `agent.env` names its token files and who may write to the agent: `SLACK_BOT_TOKEN_FILE`, `SLACK_APP_TOKEN_FILE`,
+`SLACK_ALLOWED_USER_IDS`, optionally `SLACK_ALLOWED_CHANNELS` (see `agent.env.example` and the kit README, "Slack").
+
 ## 5. Smoke test, start, verify
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\somework\agent\adapters\qa\deploy\smoke.ps1
