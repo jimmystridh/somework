@@ -90,7 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		setup: {
 			dir: env.MANAGER_SETUP_DIR ?? join(configDir, "setup"),
 			piAgentDir: env.MANAGER_PI_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
-			piAgentDirInContainer: env.MANAGER_PI_AGENT_DIR_IN_CONTAINER ?? "~/.pi/agent",
+			piAgentDirInContainer: env.MANAGER_PI_AGENT_DIR_IN_CONTAINER ?? "/home/node/.pi/agent",
 			os: env.MANAGER_PI_OS ?? "linux",
 		},
 		health: { bind: env.MANAGER_HEALTH_BIND ?? "0.0.0.0", port: healthPort },

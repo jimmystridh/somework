@@ -6,6 +6,9 @@ export interface PiLaunch {
 	/** Appended to the built-in prompt after it, so it can add to the rules and never take one away. */
 	addendum?: string;
 	model?: { provider: string; modelId: string };
+	/** The container's Pi starts with `--no-extensions --no-skills`: its built-in MCP support and the library skills have to be asked for by name. */
+	mcp?: boolean;
+	skillsDir?: string;
 	/** Environment variables Pi's `${NAME}` expansion needs: passed from the Manager's environment into the container by name. */
 	secrets: string[];
 }
@@ -24,6 +27,8 @@ export function piArguments(composeFiles: string[], sessionPath: string, launch:
 		...launch.secrets.flatMap((name) => ["-e", name]),
 		"pi",
 		"-e", "/opt/manager/somework-tools.ts",
+		...(launch.mcp ? ["-e", "builtin:mcp"] : []),
+		...(launch.skillsDir ? ["--skill", launch.skillsDir] : []),
 		"--mode", "rpc", "--session", sessionPath,
 		"--append-system-prompt", SYSTEM_PROMPT,
 		...(launch.addendum ? ["--append-system-prompt", launch.addendum] : []),

@@ -5,7 +5,7 @@ import { addendumPrompt, noOperatorSetup, type PiLaunch } from "../pi-process.ts
 import type { FleetLimits, SetupOverride } from "./contract.ts";
 import { ensureLocalServer, type FetchBytes } from "./download.ts";
 import { buildMcpServers, requireSecrets, usesLocalServer, type McpBuild } from "./mcp.ts";
-import { skillFiles, writeSkills } from "./skills.ts";
+import { LIBRARY_FOLDER, skillFiles, writeSkills } from "./skills.ts";
 import type { SetupStore } from "./store.ts";
 
 export interface ApplierDeps {
@@ -94,12 +94,15 @@ export class SetupApplier {
 		const approvals: ApprovalSettings = { patterns: override.approvalPatterns ?? [], mcp: Object.fromEntries(override.mcp.map((entry) => [entry.name, entry.approval])) };
 		new ApprovalRules().replace(approvals);
 		const model = override.model ?? store.baselineModel;
+		const skills = skillFiles(override);
 		const launch: PiLaunch = {
 			...(override.instructions?.trim() ? { addendum: addendumPrompt(override.revision, override.instructions.trim()) } : {}),
 			...(model ? { model } : {}),
+			...(override.mcp.length > 0 ? { mcp: true } : {}),
+			...(skills.size > 0 ? { skillsDir: `${this.#deps.containerAgentDir}/skills/${LIBRARY_FOLDER}` } : {}),
 			secrets: mcp.secrets,
 		};
-		return { mcp, skills: skillFiles(override), approvals, launch };
+		return { mcp, skills, approvals, launch };
 	}
 
 	async #materialise(prepared: Prepared): Promise<void> {

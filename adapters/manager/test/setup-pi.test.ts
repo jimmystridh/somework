@@ -162,9 +162,18 @@ test("the setup, health and Pi folder settings come from the environment", () =>
 	const config = loadConfig({ ...base, MANAGER_PI_AGENT_DIR: "/home/js/.pi/agent", MANAGER_HEALTH_PORT: "7090" });
 	assert.equal(config.setup.dir, "/cfg/setup");
 	assert.equal(config.setup.piAgentDir, "/home/js/.pi/agent");
-	assert.equal(config.setup.piAgentDirInContainer, "~/.pi/agent");
+	assert.equal(config.setup.piAgentDirInContainer, "/home/node/.pi/agent");
 	assert.equal(config.setup.os, "linux");
 	assert.deepEqual(config.health, { bind: "0.0.0.0", port: 7090 });
 	assert.equal(loadConfig({ ...base, MANAGER_HEALTH_PORT: "0" }).health.port, 0);
 	assert.throws(() => loadConfig({ ...base, MANAGER_HEALTH_PORT: "x" }), /MANAGER_HEALTH_PORT/);
+});
+
+test("MCP and library skills are asked for by name, because the Pi image starts without extensions and skills", () => {
+	const plain = piArguments(["a.yaml"], "/s.jsonl", noOperatorSetup);
+	assert.equal(plain.includes("builtin:mcp"), false);
+	assert.equal(plain.includes("--skill"), false);
+	const wanted = piArguments(["a.yaml"], "/s.jsonl", { secrets: [], mcp: true, skillsDir: "/home/node/.pi/agent/skills/library" });
+	assert.deepEqual(wanted.slice(wanted.indexOf("builtin:mcp") - 1, wanted.indexOf("builtin:mcp") + 1), ["-e", "builtin:mcp"]);
+	assert.deepEqual(wanted.slice(wanted.indexOf("--skill"), wanted.indexOf("--skill") + 2), ["--skill", "/home/node/.pi/agent/skills/library"]);
 });
