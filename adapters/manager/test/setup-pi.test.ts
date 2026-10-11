@@ -121,6 +121,7 @@ test("/profile serves the applied setup in the kit's shape, with no secret in it
 	});
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	assert.deepEqual(await (await fetch(`${base}/status`)).json(), { handlers: [] });
 	const text = await (await fetch(`${base}/profile`)).text();
 	const profile = JSON.parse(text);
 	assert.equal(profile.role, "manager");
