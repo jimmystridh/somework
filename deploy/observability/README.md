@@ -30,6 +30,10 @@ Linux (as root; reads the host's identity and write account from the existing Al
 
     sudo bash install-metrics.sh pi-agent=10.10.10.11:8081 reviewer=10.10.10.11:8082
 
+When the Jira triage stack is set up on the agents VM (`adapters/jira-triage/deploy/README.md`), add its target to the same command: `jira-triage=10.10.10.11:8085`
+(the others on that VM are `pi-agent=...:8081`, `reviewer=...:8082`, `aikido-fixer=...:8083`, `datadog-triage=...:8084`). The LLM usage and cost series of the
+conversations then appear under `agent="agent/jira-triage"`; a triage itself runs no model, so its jobs add no tokens.
+
 Windows (as administrator; same contract, `-Target name=address:port`):
 
     powershell -NoProfile -ExecutionPolicy Bypass -File install-metrics.ps1 -Target 'qa=10.10.10.44:8082'

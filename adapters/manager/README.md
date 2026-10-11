@@ -128,7 +128,7 @@ npm ci && npm test -w @somework/manager      # from the repository root (npm wor
 With `MANAGER_HOST_CONTROL` (a JSON file, see `src/host.ts`) it also stops the processes, after the platform steps: the agent stacks on the Manager's own VM with `docker compose stop` (agents first, the event hub last) and the Windows agents over ssh. `/unsuspend` does the reverse first: it starts the hub, then the agents, then the Windows agents, waits for the hub, and only then resumes the rules, sources and handlers. While the processes are stopped the file `<pilotDir>/SUSPENDED` exists; the CI deploy wrappers refuse to deploy while it (or a disabled agent task) is there, because a deployment would start the stopped agents again, and `/status` and the approval guard honour it too, so a suspension made by hand with `scripts/fleet-suspend.sh` is resumed with `/unsuspend` as well.
 
 ```json
-{ "pilotDir": "/home/js/somework-pilot", "firstStacks": ["events-hub"], "stacks": ["pi-agent", "reviewer", "aikido-fixer", "datadog-triage"],
+{ "pilotDir": "/home/js/somework-pilot", "firstStacks": ["events-hub"], "stacks": ["pi-agent", "reviewer", "aikido-fixer", "datadog-triage", "jira-triage"],
   "windows": [{ "name": "qa", "host": "10.10.10.44" }],
   "ssh": { "user": "js", "keyFile": "/home/js/.config/agent-cluster-telegram/fleet-control-key", "knownHostsFile": "/home/js/.config/agent-cluster-telegram/fleet-known-hosts" } }
 ```

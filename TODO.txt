@@ -340,6 +340,21 @@ DATADOG TRIAGE (adapters/datadog-triage, ops.triage v1; built and tested, NOT de
   network) is the boundary.
 - Kit: `profile.noRepository` is new. The kit's `observe` module is not enabled here (chat.ts says where it would plug in).
 
+JIRA TRIAGE (adapters/jira-triage, jira.triage v1 + jira.ticket.create v1; built and tested, NOT deployed; 2026-10-11)
+- Manual steps (adapters/jira-triage/deploy/README.md has the commands): enrol agent/jira-triage with `--publish 'agent.jira_triage.*'` (this domain build has no
+  `--may-invoke`/`--side-effects`: the read-only request to agent/pi-agent is a plain message), SIGHUP the NATS broker, check the Jira webhook sends issue_created,
+  issue_updated and comment_created, a model login of its own, a Jira PAT + client certificate (secrets/jira-token, jira.pfx, jira-pfx-password), the Slack app from
+  deploy/slack-app-manifest.yaml (adds users:read and users:read.email; the shared manifest is unchanged) with its two tokens and SLACK_ALLOWED_USER_IDS, health port
+  8085 in HEALTH_PORTS, then `git mv adapters/jira-triage/deploy/rules/*.yaml rules/` (held until the owner exists, like the Datadog rule). CI (deploy-from-ci.sh) builds and
+  rolls the stack only when ~/somework-pilot/jira-triage/compose.yaml exists. Start with TRIAGE_DRY_RUN=1.
+- Never run live: the Slack API (users.lookupByEmail, conversations.open/history, chat.postMessage: tested only against a fake fetch, scopes users:read, users:read.email, im:write,
+  im:history, chat:write), the real Jira (REST v2 field shapes from QA's client and memory: description/environment as wiki text, labels via update ops, createIssue), pi-agent's behaviour
+  on the read-only request (its chat has no checkout configured; nothing enforces "no job" beyond the wording), and Docker (image and compose checked by tests that read the files).
+- The checklist heuristics (English and Swedish text patterns) are tuned on invented fixtures: run the dry run on real tickets first.
+- Design choices the owner has not confirmed: the three rules are held in adapters/jira-triage/deploy/rules (not rules/); reporters' Slack replies are read by polling conversations.history of the DM
+  the bot opened (no change in the kit's Slack allow-list); no model run in a triage (questions are fixed texts); one manager notice per triage job (EVENTS_NOTIFY_TO moves them); the developer agent's
+  FINDING lines may close only the steps item; the companion has createAnyway and searches for duplicates before creating; Jira client and fake Jira are copies of QA's (not moved into the kit).
+
 --------------------------------------------------------------------------------------
 6. MANAGER AGENT (Telegram)
 --------------------------------------------------------------------------------------
