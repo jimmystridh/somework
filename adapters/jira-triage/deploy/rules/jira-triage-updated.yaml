@@ -1,0 +1,5 @@
+name: jira-triage-updated
+description: "A Jira ticket update wakes the Jira triage agent, whose own handler drops every update that changed only fields the checklist does not read (labels, comments, the bot's own edits) and every ticket it did not see created; what is left starts a jira.triage job that compares the ticket with what the agent last saw and judges it again only when a person changed a field the checklist reads."
+owner: agent/jira-triage
+selector: jira.issue.updated
+wake: true

@@ -1,0 +1,5 @@
+name: jira-triage-comment
+description: "A new Jira comment wakes the Jira triage agent, whose own handler drops comments the bot wrote itself and comments on tickets it did not see created; what is left starts a jira.triage job, which counts the comment only when the reporter, whom the agent asked about this ticket, wrote it (the reporter's reply in Jira is the fallback to the reply on Slack)."
+owner: agent/jira-triage
+selector: jira.comment.created
+wake: true

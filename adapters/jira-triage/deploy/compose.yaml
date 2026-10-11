@@ -1,0 +1,176 @@
+# The Jira triage agent on the agent Docker host: the harness and a sandbox, isolated from each other, in their own compose project.
+# - `sandbox-net` is internal and the sandbox is on it ALONE: there is no egress proxy and no route out at all. A triage is code in the harness, not
+#   a model run; the sandbox exists for the kit (the event handler runs there, and the model of a Slack conversation has a scratch directory in it) and
+#   has no credentials and no network. The profile asks for an approval for every command and every file write and the harness refuses it: the model
+#   has the ticket tools and nothing else.
+# - The harness holds the credentials: its OWN SomeWork key, its OWN model login, the Jira personal access token with the client certificate the host
+#   demands, and the Slack app's tokens. It reaches the domain, the model API, the Jira host and slack.com (and the Socket Mode hosts) over `outside`.
+#   Restrict `outside` further on the host if you can: the agent needs exactly those hosts. The Jira credentials never leave the harness.
+# - The sandbox image is the developer role's (`somework-pi-sandbox`): the sandbox daemon is role-agnostic. Only the harness image is this role's.
+name: somework-jira-triage
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  privileged: false
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+networks:
+  sandbox-net:
+    internal: true
+  outside: {}
+
+services:
+  agent:
+    <<: *hardened
+    image: somework-jira-triage:${TRIAGE_VERSION:?set TRIAGE_VERSION to the built image tag}
+    user: "10001:10001"
+    group_add: ["10010"]          # reads the shared sandbox token
+    networks: [sandbox-net, outside]
+    environment:
+      SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
+      SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
+      SOMEWORK_CA_FILE: /run/somework/ca.pem
+      SOMEWORK_REQUIRE_TLS: "1"
+      SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
+      AGENT_VERSION: ${TRIAGE_VERSION}                         # shown on /profile (the image tag this container runs)
+      PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
+      PI_MODEL: ${PI_MODEL:-gpt-5.5}
+      PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
+      PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}
+      PI_AUTH_FILE: /run/secrets/pi/auth.json
+      PI_STATE_DIR: /state
+      PI_CONCURRENCY: ${PI_CONCURRENCY:-2}                     # jobs are quick (a pass over one ticket, no model run); conversations have slots of their own
+      SANDBOX_URL: http://sandbox:7070
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_WORKSPACES: /workspace
+      # The ticket system: the same names the QA role uses. The personal access token acts as its owner; the host also demands a client certificate.
+      JIRA_URL: ${JIRA_URL:?https URL of the Jira host}
+      JIRA_TOKEN_FILE: /run/secrets/jira-token
+      JIRA_PFX_FILE: /run/secrets/jira.pfx
+      JIRA_PFX_PASSWORD_FILE: /run/secrets/jira-pfx-password   # an empty file for a certificate without a password
+      JIRA_CA_FILE: /run/secrets/jira-ca.pem                   # empty (/dev/null) when the platform trust store knows the host's certificate
+      JIRA_PROJECTS: ${JIRA_PROJECTS:-SAD}                     # project keys this agent triages and creates tickets in; events of other projects are ignored
+      JIRA_TRIAGE_LABEL: ${JIRA_TRIAGE_LABEL:-triaged-by-bot}      # the marker: a ticket that carries it is not triaged again
+      JIRA_NEEDS_INFO_LABEL: ${JIRA_NEEDS_INFO_LABEL:-needs-info}  # while the reporter is being asked
+      JIRA_BOT_CREATED_LABEL: ${JIRA_BOT_CREATED_LABEL:-created-by-bot}   # on tickets created from Slack, next to the marker
+      JIRA_BOT_USER: ${JIRA_BOT_USER:-}                        # the Jira user name of the token's owner when it is a service account: its updates are the bot's own echo and are dropped; leave empty for a person's token
+      JIRA_RESEED_HANDLER: ${JIRA_RESEED_HANDLER:-0}           # 1 = write the shipped handler again, with these settings, as a new version
+      TRIAGE_DRY_RUN: ${TRIAGE_DRY_RUN:-0}                     # 1 = judge and record only: nothing is written to Jira, nobody is messaged or asked
+      TRIAGE_LANGUAGE: ${TRIAGE_LANGUAGE:-en}                  # en | sv: the language of the questions to reporters
+      TRIAGE_ENRICH: ${TRIAGE_ENRICH:-1}                       # 0 = never ask the developer agent for a read-only look first
+      TRIAGE_DEVELOPER_AGENT: ${TRIAGE_DEVELOPER_AGENT:-agent/pi-agent}
+      TRIAGE_DEVELOPER_WAIT_MINUTES: ${TRIAGE_DEVELOPER_WAIT_MINUTES:-10}
+      TRIAGE_REPORTER_WAIT_HOURS: ${TRIAGE_REPORTER_WAIT_HOURS:-48}
+      TRIAGE_REPORTER_POLL_MINUTES: ${TRIAGE_REPORTER_POLL_MINUTES:-5}
+      TRIAGE_MAX_ROUNDS: ${TRIAGE_MAX_ROUNDS:-2}               # rounds of questions to one reporter per ticket
+      TRIAGE_RETRY_MINUTES: ${TRIAGE_RETRY_MINUTES:-2,5,15,30,60,120,240,480}   # pauses between the failed passes over one ticket (Jira down); the last repeats
+      TRIAGE_MAX_ATTEMPTS: ${TRIAGE_MAX_ATTEMPTS:-12}          # failed passes of a first triage after which a person is told
+      TRIAGE_CREATE_TYPES: ${TRIAGE_CREATE_TYPES:-Bug,Story,Task,Improvement}   # issue types a ticket may be created as from Slack
+      TRIAGE_DAILY_CAP: ${TRIAGE_DAILY_CAP:-200}               # triage jobs the shipped handler starts per day (a flood guard)
+      BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-200000}
+      BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-15}
+      DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-1000000}
+      EVENTS_ENABLED: "1"                                      # the shipped handler is how Jira events become triage jobs (docs/EVENTS.md)
+      EVENTS_NOTIFY_TO: ${EVENTS_NOTIFY_TO:-agent/manager}     # who hears how each triage job ended (one notice per ticket); also tells of a handler switched off
+      EVENTS_CONTROLLERS: ${EVENTS_CONTROLLERS:-agent/manager}
+      EVENTS_TOKEN_SHARE: ${EVENTS_TOKEN_SHARE:-0.3}
+      EVENTS_THROTTLE_AT: ${EVENTS_THROTTLE_AT:-0.8}
+      EVENTS_MAX_FAILURES: ${EVENTS_MAX_FAILURES:-5}
+      EVENTS_MAX_WAKES_PER_HOUR: ${EVENTS_MAX_WAKES_PER_HOUR:-20}
+      CHAT_MODE: ${CHAT_MODE:-on}                              # on = every message is read by the model (the Slack conversations); off = the agent takes no part in conversations
+      APPROVERS: ${APPROVERS:-}                                # who may decide an approval: ids or kind:<kind>; empty = agent/manager and every human (every approval of this role is refused anyway)
+      CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.3}               # share of DAILY_TOKEN_LIMIT that conversations may use; the model is not called when it is used up
+      CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-120000}    # tokens of one conversation run
+      CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-10}
+      # Observe tools (read-only logs, alert states and dashboard search; off unless OBSERVE_ENABLED=1 in .env). OBSERVE_OWN limits every query to this agent's own container.
+      OBSERVE_ENABLED: ${OBSERVE_ENABLED:-}
+      OBSERVE_SCOPE: ${OBSERVE_SCOPE:-own}
+      OBSERVE_OWN: ${OBSERVE_OWN:-}
+      GRAFANA_URL: ${GRAFANA_URL:-}
+      GRAFANA_TOKEN_FILE: /run/secrets/grafana-token
+      GRAFANA_CA_FILE: /run/somework/grafana-ca.pem
+      # The agent's own Telegram bot (packages/agent-kit/README.md, "Telegram"). Off while no token file is mounted or TELEGRAM_ALLOWED_USER_IDS is empty.
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram-bot-token
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      # The agent's own Slack app in Socket Mode (packages/agent-kit/README.md, "Slack"). Off while either token file is empty or SLACK_ALLOWED_USER_IDS is empty.
+      # With it on, the same bot token also writes the direct messages to reporters (scopes users:read, users:read.email, im:write, im:history, chat:write: see
+      # slack-app-manifest.yaml in this directory). SLACK_ALLOWED_USER_IDS are the people the Slack companion creates tickets for; reporters are not on it.
+      SLACK_BOT_TOKEN_FILE: /run/secrets/slack-bot-token
+      SLACK_APP_TOKEN_FILE: /run/secrets/slack-app-token
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS:-}
+      HEALTH_PORT: "8081"
+    volumes:
+      - ${TRIAGE_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
+      - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ./secrets/pi:/run/secrets/pi                         # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - ./secrets/jira-token:/run/secrets/jira-token:ro                 # the personal access token (0440, uid 10001)
+      - ./secrets/jira.pfx:/run/secrets/jira.pfx:ro                     # the client certificate the Jira host demands (0440, uid 10001)
+      - ./secrets/jira-pfx-password:/run/secrets/jira-pfx-password:ro   # its password (an empty file for none)
+      - ${JIRA_CA_HOST:-/dev/null}:/run/secrets/jira-ca.pem:ro          # jira: ./config/jira-ca.pem when a private CA signed the host's certificate; /dev/null = the platform's trust store
+      - ${GRAFANA_TOKEN_HOST:-/dev/null}:/run/secrets/grafana-token:ro      # observe: ./secrets/grafana-token (the Viewer service account's token); /dev/null while observe is off
+      - ${GRAFANA_CA_HOST:-/dev/null}:/run/somework/grafana-ca.pem:ro      # observe: ./config/grafana-ca.pem
+      - ${TELEGRAM_TOKEN_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro   # telegram: ./secrets/telegram-bot-token (the BotFather token, readable by the container user); /dev/null = no bot
+      - ${SLACK_BOT_TOKEN_HOST:-/dev/null}:/run/secrets/slack-bot-token:ro   # slack: ./secrets/slack-bot-token (the xoxb- bot token, readable by the container user); /dev/null = no Slack app
+      - ${SLACK_APP_TOKEN_HOST:-/dev/null}:/run/secrets/slack-app-token:ro   # slack: ./secrets/slack-app-token (the xapp- app-level token with connections:write); /dev/null = no Slack app
+      - state:/state
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    ports: ["${HEALTH_BIND:-127.0.0.1}:8085:8081"]      # health, handlers and token pools (8081 developer, 8082 reviewer, 8083 Aikido fixer, 8084 Datadog triage, on the same host)
+    depends_on:
+      sandbox: {condition: service_healthy}
+    mem_limit: 512m
+    pids_limit: 256
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  # Where the kit runs the event handler and gives the model of a conversation its scratch directory. On the internal network only: no proxy variables, no egress service, no credentials.
+  sandbox:
+    <<: *hardened
+    image: somework-pi-sandbox:${SANDBOX_VERSION:?set SANDBOX_VERSION to the developer role's sandbox image tag}
+    user: "10002:10002"
+    group_add: ["10010"]
+    networks: [sandbox-net]
+    environment:
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_ROOT: /workspace
+      SANDBOX_PORT: "7070"
+    volumes:
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - workspace:/workspace
+    tmpfs: ["/tmp:size=256m,nosuid"]
+    mem_limit: ${SANDBOX_MEMORY:-1g}
+    cpus: ${SANDBOX_CPUS:-1}
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7070/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # One-shot: named volumes start root-owned but each service runs as its own uid.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    image: somework-jira-triage:${TRIAGE_VERSION:?set TRIAGE_VERSION}
+    profiles: ["init"]
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 10001:10001 /state && chown 10002:10002 /workspace"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - state:/state
+      - workspace:/workspace
+
+volumes:
+  state:
+  workspace:

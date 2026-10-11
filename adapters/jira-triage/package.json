@@ -1,0 +1,21 @@
+{
+  "name": "@somework/jira-triage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Jira triage role: checks every new ticket against a fixed checklist for its issue type, asks the reporter (on Slack, else in Jira) for what is missing, optionally has the developer agent investigate read-only first, and creates tickets from Slack conversations (jira.triage). A card, a profile, a seeded event handler and a durable triage queue on top of @somework/agent-kit.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.3",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-durable": "1.0.3",
+    "@somework/agent-kit": "0.1.0",
+    "@somework/sdk": "0.1.0"
+  }
+}

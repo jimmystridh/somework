@@ -1,0 +1,41 @@
+# Slack app manifest for the Jira triage agent (adapters/jira-triage/README.md, "Slack"). It is packages/agent-kit/docs/slack-app-manifest.yaml plus the two scopes
+# this role needs to find a reporter: `users:read` and `users:read.email` (users.lookupByEmail and users.info). The other roles' manifest stays as it is.
+# Create the app: api.slack.com/apps -> Create New App -> From a manifest -> pick the workspace -> YAML tab -> paste this in -> Create. Then install it, copy the
+# Bot User OAuth Token (xoxb-...) and generate the app-level token (xapp-..., scope connections:write), as in packages/agent-kit/README.md, "Turning the Slack app on".
+# What each scope is for:
+#   chat:write                   the questions to a reporter, and the answers to the people the companion talks to
+#   im:write                     conversations.open: a direct message with the reporter
+#   im:history, im:read          the companion's own DMs, and reading what a reporter answered in the DM the bot opened for a ticket
+#   app_mentions:read            the companion in an allowed channel
+#   users:read, users:read.email find the reporter by the e-mail address Jira holds, and a display name for the line that says who asked for a ticket
+display_information:
+  name: SomeWork Jira triage
+  description: Checks new Jira tickets, asks reporters for what is missing, and helps people create tickets.
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: jira-triage
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - im:history
+      - im:read
+      - im:write
+      - app_mentions:read
+      - users:read
+      - users:read.email
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

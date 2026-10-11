@@ -1,0 +1,5 @@
+name: jira-triage-created
+description: "A new Jira ticket wakes the Jira triage agent, whose own handler decides whether it belongs to a triaged project and starts at most one jira.triage job for itself (the agent reads the full ticket through the Jira API: the event carries only the key, a short summary, the type, the project and the actor). The job checks the ticket against the checklist of its issue type; a ticket that carries the marker label is never triaged again."
+owner: agent/jira-triage
+selector: jira.issue.created
+wake: true

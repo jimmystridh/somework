@@ -1,0 +1,23 @@
+{
+  "topic": "jira.issue.created",
+  "source": "jira",
+  "key": "jira:12345:created",
+  "data": {
+    "issue": {
+      "key": "SAD-123",
+      "summary": "Rounding differs between the invoice and the report",
+      "url": "https://jira.example.test/browse/SAD-123",
+      "type": "Bug",
+      "project": "SAD"
+    },
+    "actor": "j.doe",
+    "repository": {
+      "cloneUrl": "https://github.com/example-org/example-repo.git",
+      "ref": "HEAD"
+    }
+  },
+  "classification": "internal",
+  "verified": true,
+  "depth": 0,
+  "publishedBy": "producer/jira"
+}
