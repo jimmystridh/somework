@@ -12,6 +12,11 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
 fleet-shared = { path = "shared" }
 
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+result_large_err = "allow"
+type_complexity = "allow"
+
 [profile.release]
 lto = "thin"
 strip = true

@@ -4,6 +4,7 @@ mod certs;
 mod events;
 mod history;
 mod jobs;
+mod ops;
 mod prometheus;
 mod proxmox;
 mod setup;
@@ -16,8 +17,9 @@ use axum::{
     http::{HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{any, get, post},
 };
+use tower::ServiceExt as _;
 use axum_server::tls_rustls::RustlsConfig;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fleet_shared::{Agent, Fleet, Heartbeat, somework::SomeWork, timestamp_ms};
@@ -37,7 +39,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 struct AppState {
     fleet: RwLock<Fleet>,
-    somework: RwLock<SomeWork>,
+    somework: Arc<RwLock<SomeWork>>,
     heartbeat: Mutex<Option<Heartbeat>>,
     proxy_token: String,
     heartbeat_token: String,
@@ -52,6 +54,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .install_default()
         .ok();
     let secrets = PathBuf::from(env::var("SECRETS_DIR").unwrap_or_else(|_| "/run/secrets".into()));
+    let arguments: Vec<String> = env::args().collect();
+    if arguments.iter().any(|arg| arg == "--operations-keygen") {
+        println!("{}", ops::keygen::run(&arguments)?);
+        return Ok(());
+    }
     if env::args().any(|arg| arg == "--healthcheck") {
         let client = reqwest::Client::builder()
             .add_root_certificate(reqwest::Certificate::from_pem(
@@ -84,10 +91,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             error: Some("Waiting for the first hypervisor sample".into()),
             ..Default::default()
         }),
-        somework: RwLock::new(SomeWork {
+        somework: Arc::new(RwLock::new(SomeWork {
             error: Some("Waiting for the first SomeWork sample".into()),
             ..Default::default()
-        }),
+        })),
         heartbeat: Mutex::new(heartbeat),
         proxy_token: if preview {
             String::new()
@@ -124,16 +131,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state.somework.write().await.error = Some(format!("SomeWork integration is unavailable: {reason}"));
         }
     }
-    let app = Router::new()
-        .route(
-            "/healthz",
-            get(|| async { Json(serde_json::json!({"ok":true})) }),
-        )
-        .route("/ingest/pi", post(ingest))
-        .nest("/fleet/", dashboard(public))
-        .layer(DefaultBodyLimit::max(16 * 1024))
-        .layer(middleware::from_fn_with_state(state.clone(), gateway))
-        .with_state(state);
     let port = env::var("PORT").unwrap_or_else(|_| "8443".into()).parse()?;
     let address = SocketAddr::from((
         if preview {
@@ -143,6 +140,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         port,
     ));
+    let operations = ops::start(ops::StartInputs {
+        secrets: &secrets,
+        loopback: address.ip().is_loopback(),
+        sample: state.somework.clone(),
+        targets: agent_targets(&secrets).await.unwrap_or_default(),
+    })
+    .await?;
+    match &operations {
+        Some(_) => println!("Operations is on"),
+        None => println!("Operations is off (no DATABASE_URL)"),
+    }
+    let app = application(state, public, operations);
     println!("Fleet Rust/Dioxus service listening");
     if preview {
         axum::serve(tokio::net::TcpListener::bind(address).await?, app)
@@ -166,12 +175,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn dashboard(public: PathBuf) -> Router<Arc<AppState>> {
+fn application(state: Arc<AppState>, public: PathBuf, operations: Option<Arc<ops::Ops>>) -> Router {
+    Router::new()
+        .route(
+            "/healthz",
+            get(|| async { Json(serde_json::json!({"ok":true})) }),
+        )
+        .route("/ingest/pi", post(ingest))
+        .nest("/fleet/", dashboard(public, operations))
+        .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(middleware::from_fn_with_state(state.clone(), gateway))
+        .with_state(state)
+}
+
+/// The old read routes (`/api/fleet`, `/api/somework`) stay readable behind the gateway as before. The Operations routes under `/api/ops` and the
+/// sign-in under `/auth` sit behind the gateway too and additionally need an Entra session; without a database they answer 503.
+fn dashboard(public: PathBuf, operations: Option<Arc<ops::Ops>>) -> Router<Arc<AppState>> {
+    let (api, auth) = match operations {
+        Some(operations) => (ops::api::router(operations.clone()), ops::api::auth_router(operations)),
+        None => (ops::api::off_router(), ops::api::off_router()),
+    };
     Router::new()
         .route("/api/fleet", get(fleet))
         .route("/api/somework", get(somework_view))
+        .nest_service("/api/ops", api)
+        .nest_service("/auth", auth)
         .route_service("/", ServeFile::new(public.join("index.html")))
-        .fallback_service(ServeDir::new(public))
+        .fallback(single_page(public))
+}
+
+/// A page the browser router knows (`/fleet/agents/qa/setup`) opens `index.html`; an unknown API or sign-in path stays a 404, not a page.
+fn single_page(public: PathBuf) -> axum::routing::MethodRouter<Arc<AppState>> {
+    let files = ServeDir::new(public.clone()).fallback(ServeFile::new(public.join("index.html")));
+    any(move |request: Request| {
+        let files = files.clone();
+        async move {
+            let path = request.uri().path();
+            if path.starts_with("/api/") || path.starts_with("/auth/") {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            files.oneshot(request).await.into_response()
+        }
+    })
 }
 
 /// `SOMEWORK_URL` switches the integration on; its key and CA are secrets-directory files. Plain HTTP is only possible in
@@ -207,6 +252,14 @@ async fn somework_collector(secrets: &std::path::Path, preview: bool) -> Result<
         collector = collector.with_agent_targets(events::parse_agent_targets(&contents)?);
     }
     Ok(Some(collector))
+}
+
+/// `agents-health.json` of the secrets directory: the agents whose health endpoints Operations reads and talks to. Missing is not an error.
+async fn agent_targets(secrets: &std::path::Path) -> Result<Vec<events::AgentTarget>, String> {
+    match fs::read(secrets.join("agents-health.json")).await {
+        Ok(contents) => events::parse_agent_targets(&contents),
+        Err(_) => Ok(Vec::new()),
+    }
 }
 
 async fn collect_somework(state: Arc<AppState>, mut collector: somework::Collector) {
@@ -383,7 +436,7 @@ mod tests {
             .unwrap();
         let state = Arc::new(AppState {
             fleet: RwLock::new(Fleet::default()),
-            somework: RwLock::new(SomeWork::default()),
+            somework: Arc::new(RwLock::new(SomeWork::default())),
             heartbeat: Mutex::new(None),
             proxy_token: "test-proxy".into(),
             heartbeat_token: "test-heartbeat".into(),
@@ -392,12 +445,13 @@ mod tests {
             preview: false,
         });
         let app = Router::new()
-            .nest("/fleet/", dashboard(public.clone()))
+            .nest("/fleet/", dashboard(public.clone(), None))
             .layer(middleware::from_fn_with_state(state.clone(), gateway))
             .with_state(state);
         for (path, expected) in [
             ("/fleet/", "<main>Fleet</main>"),
             ("/fleet/style.css", "main { color: green; }"),
+            ("/fleet/agents/qa/setup", "<main>Fleet</main>"),
         ] {
             let anonymous = app
                 .clone()
@@ -433,5 +487,81 @@ mod tests {
         assert!(policy.contains("sha256-"));
         assert!(!policy.contains("unsafe-inline"));
         assert_eq!(policy.matches("sha256-").count(), 1);
+    }
+
+    fn test_state(public: &std::path::Path) -> Arc<AppState> {
+        Arc::new(AppState {
+            fleet: RwLock::new(Fleet::default()),
+            somework: Arc::new(RwLock::new(SomeWork::default())),
+            heartbeat: Mutex::new(None),
+            proxy_token: "test-proxy".into(),
+            heartbeat_token: "test-heartbeat".into(),
+            data: public.to_path_buf(),
+            csp: HeaderValue::from_static("default-src 'self'"),
+            preview: false,
+        })
+    }
+
+    async fn public_dir() -> PathBuf {
+        let public = env::temp_dir().join(format!("fleet-ops-routing-{}-{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        fs::create_dir(&public).await.unwrap();
+        fs::write(public.join("index.html"), "<main>Fleet</main>").await.unwrap();
+        public
+    }
+
+    async fn call(app: &Router, method: &str, path: &str, headers: &[(&str, &str)], body: String) -> (StatusCode, Vec<u8>) {
+        let mut request = Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = app.clone().oneshot(request.body(Body::from(body)).unwrap()).await.unwrap();
+        (response.status(), to_bytes(response.into_body(), 1024 * 1024).await.unwrap().to_vec())
+    }
+
+    #[tokio::test]
+    async fn operations_routes_sit_behind_the_gateway_and_beside_the_old_routes() {
+        let Some(pg) = ops::testing::postgres("operations_routes_sit_behind_the_gateway_and_beside_the_old_routes") else { return };
+        let store = pg.store("routing").await;
+        let public = public_dir().await;
+        let state = test_state(&public);
+        let operations = ops::testing::stub_ops(&store, fleet_shared::operations::Role::Editor, None, vec![]);
+        let app = application(state, public.clone(), Some(operations));
+        let gateway = [("Authorization", "Bearer test-proxy")];
+        let signed_in = [("Authorization", "Bearer test-proxy"), ("x-operations-request", "1"), ("content-type", "application/json")];
+
+        let (status, _) = call(&app, "GET", "/fleet/api/ops/me", &[], String::new()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "the gateway still guards every route");
+        let (status, body) = call(&app, "GET", "/fleet/api/ops/me", &gateway, String::new()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["email"], "editor@example.com");
+        assert_eq!(call(&app, "GET", "/fleet/api/somework", &gateway, String::new()).await.0, StatusCode::OK, "the old read routes keep working behind the gateway alone");
+        assert_eq!(call(&app, "GET", "/fleet/api/fleet", &gateway, String::new()).await.0, StatusCode::OK);
+        let (status, body) = call(&app, "GET", "/fleet/", &gateway, String::new()).await;
+        assert_eq!((status, body.as_slice()), (StatusCode::OK, &b"<main>Fleet</main>"[..]), "the page is still served");
+        assert_eq!(call(&app, "GET", "/healthz", &[], String::new()).await.0, StatusCode::OK);
+
+        let skill = serde_json::json!({"baseVersion": 0, "content": format!("---\ndescription: big\n---\n{}", "x".repeat(40 * 1024))}).to_string();
+        assert!(skill.len() > 16 * 1024);
+        let (status, body) = call(&app, "PUT", "/fleet/api/ops/library/big", &signed_in, skill).await;
+        assert_eq!(status, StatusCode::OK, "ops bodies may be larger than the 16 KiB of the heartbeat route: {}", String::from_utf8_lossy(&body));
+        let (status, _) = call(&app, "POST", "/ingest/pi", &[("Authorization", "Bearer test-heartbeat"), ("content-type", "application/json")], "x".repeat(20 * 1024)).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "the heartbeat route keeps its small limit");
+        let too_big = serde_json::json!({"baseVersion": 0, "content": "x".repeat(2 * 1024 * 1024)}).to_string();
+        assert_eq!(call(&app, "PUT", "/fleet/api/ops/library/huge", &signed_in, too_big).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+        let _ = fs::remove_dir_all(&public).await;
+    }
+
+    #[tokio::test]
+    async fn without_a_database_the_operations_routes_say_so_and_the_rest_works() {
+        let public = public_dir().await;
+        let app = application(test_state(&public), public.clone(), None);
+        let gateway = [("Authorization", "Bearer test-proxy")];
+        for path in ["/fleet/api/ops/me", "/fleet/api/ops/agents", "/fleet/auth/login"] {
+            let (status, body) = call(&app, "GET", path, &gateway, String::new()).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["code"], "unavailable");
+        }
+        assert_eq!(call(&app, "GET", "/fleet/api/somework", &gateway, String::new()).await.0, StatusCode::OK);
+        let _ = fs::remove_dir_all(&public).await;
     }
 }

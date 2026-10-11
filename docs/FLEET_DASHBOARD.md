@@ -1,9 +1,9 @@
-# Showing SomeWork in the Fleet dashboard
+# Showing SomeWork in Operations (the former Fleet dashboard)
 
-The private Fleet dashboard (a Rust Axum server with a Dioxus WebAssembly page, outside this repository) has a SomeWork section: which agents
+The private Operations console, formerly the Fleet dashboard (a Rust Axum server with a Dioxus WebAssembly page, in `dashboard/`) has a SomeWork section: which agents
 exist and are alive, which jobs run and wait, and the health of the domain and its message bus. This note records what the integration reads, which
 identity it uses and how to undo it. The dashboard shows **metadata only**: no job input, result, message body, artifact content or digest is
-ever read.
+ever read. That rule holds for everything read from agents and the domain. Setup editing (ADR 0004, below) is the one deliberate exception, and it flows the other way: operator wording is written in Operations and sent to the agents.
 
 ## The identity
 
@@ -94,9 +94,13 @@ losing the receiver, the oldest queued webhook older than 5 minutes, an unreacha
 agent status endpoint or hub. Everything is read by the single 10 second collector; viewers only read the cached sample. Tests feed
 every reader responses stuffed with content-bearing fields and assert none of it reaches the output.
 
+## Setup editing (ADR 0004)
+
+Operations also writes. Operators edit an agent's instructions, skills, MCP servers, model and approval patterns, the MCP catalog, the skill library and the fleet limits; Postgres on VM104 keeps every save as an append-only revision, Entra ID sign-in with an allow list (viewer, editor, admin) guards it, and the server sends the result to the agents as a document from the service principal `operations` (`message.send` and `artifact.write`, nothing else; the signing key is made on and never leaves the Operations host). Postgres holds no agent secret and no job content; catalog entries name secrets and never hold them. What the agents report back (`setup` of `/profile`) goes through the same restricted readers as everything else in this document. Design and routes: `docs/OPERATIONS_SETUP.md`; running and deploying it: `dashboard/README.md`. The old read routes keep their gateway-only access; the new routes need the sign-in too.
+
 ## Rolling back
 
-1. The dashboard: retag the previous image and recreate the container (`docker tag <fleet image>-prev <fleet image>` then
+1. Operations (setup editing): unset `DATABASE_URL_FILE` and recreate the container; the console switches off, nothing is sent, and agents keep the setup they last applied. To stop it sending without removing anything, remove `operations-key.json` from the secrets directory. The dashboard: retag the previous image and recreate the container (`docker tag <fleet image>-prev <fleet image>` then
    `docker compose up -d`), or simply remove `SOMEWORK_URL` from its compose file and restart: with no URL the section reports that the
    integration is not configured and nothing calls the domain.
 2. The identity: `somework admin set-agent-status --id agent/fleet-reader --status disabled` stops it from authenticating at once. To remove its

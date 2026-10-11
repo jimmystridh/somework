@@ -4,7 +4,7 @@ sub_package = "fleet-ui"
 asset_dir = "public"
 
 [web.app]
-title = "Fleet — Agent operations"
+title = "Operations — Agent cluster"
 base_path = "fleet"
 
 [web.resource]

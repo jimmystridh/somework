@@ -98,8 +98,6 @@ fn OutcomeChip(name: String, n: usize, active: bool, pick: EventHandler<String>)
 #[component]
 pub fn WorkHistory(data: Option<SomeWork>, now: i64) -> Element {
     let mut selected = use_signal(String::new);
-    let mut outcome = use_signal(String::new);
-    let mut limit = use_signal(|| PAGE);
     let Some(data) = data else {
         return rsx! { section { id: "history", class: "section", div { class: "section-heading", h2 { span { "02 /" }, "Work history" } }, p { class: "empty", "Waiting for the first SomeWork sample…" } } };
     };
@@ -109,53 +107,62 @@ pub fn WorkHistory(data: Option<SomeWork>, now: i64) -> Element {
     }
     let wanted = selected.read().clone();
     let current = agents.iter().find(|agent| agent.id == wanted).or_else(|| agents.first()).cloned().expect("at least one agent");
-    let filter = outcome.read().clone();
-    let counts = outcome_counts(&current.jobs);
-    let filter_active = counts.iter().any(|(name, _)| *name == filter);
-    let matching: Vec<JobView> = current.jobs.iter().filter(|job| !filter_active || outcome_of(job) == filter).cloned().collect();
-    let hidden = matching.len().saturating_sub(limit());
-    let shown: Vec<JobView> = matching.iter().take(limit()).cloned().collect();
-    let matching_count = matching.len();
-    let (input, output, cost) = totals(&current.jobs);
-    let durations: Vec<f64> = current.jobs.iter().filter_map(|job| job.seconds).collect();
-    let average = if durations.is_empty() { None } else { Some(durations.iter().sum::<f64>() / durations.len() as f64) };
-    let since = current.jobs.last().and_then(|job| job.ended_at.clone());
-    let since_text = ago(since.as_deref(), now);
-    let reachable = current.reachable;
     let id = current.id.clone();
     rsx! {
         section { id: "history", class: "section",
             div { class: "section-heading", h2 { span { "02 /" }, "Work history" }, span { class: "section-note", "FROM EACH AGENT'S OWN JOB RECORD · REDACTED SUMMARIES" } }
             div { class: "tabs", role: "tablist",
                 for agent in agents.iter() {
-                    AgentTab { key: "{agent.id}", id: agent.id.clone(), jobs: agent.jobs.len(), active: agent.id == id, pick: move |picked: String| { selected.set(picked); outcome.set(String::new()); limit.set(PAGE); } }
+                    AgentTab { key: "{agent.id}", id: agent.id.clone(), jobs: agent.jobs.len(), active: agent.id == id, pick: move |picked: String| selected.set(picked) }
                 }
             }
-            if !reachable { div { class: "notice", role: "status", "{id} did not answer: its jobs are not shown." } }
-            div { class: "summary six", "aria-label": "Jobs of {id}",
-                div { span { class: "metric-label", "JOBS RECORDED" }, strong { "{current.jobs.len()}" }, small { "oldest {since_text}" } }
-                div { span { class: "metric-label", "AVERAGE DURATION" }, strong { "{age(average)}" }, small { "per job" } }
-                div { span { class: "metric-label", "INPUT TOKENS" }, strong { "{compact(input)}" }, small { "in the recorded jobs" } }
-                div { span { class: "metric-label", "OUTPUT TOKENS" }, strong { "{compact(output)}" }, small { "in the recorded jobs" } }
-                div { span { class: "metric-label", "COST" }, strong { "{money(cost)}" }, small { "in the recorded jobs" } }
-                div { span { class: "metric-label", "MATCHING" }, strong { "{matching_count}" }, small { if filter_active { "outcome: {filter}" } else { "all outcomes" } } }
-            }
-            div { class: "chips pickers",
-                for (name , n) in counts.iter() {
-                    OutcomeChip { key: "{name}", name: name.clone(), n: *n, active: filter_active && *name == filter, pick: move |picked: String| { limit.set(PAGE); if *outcome.read() == picked { outcome.set(String::new()) } else { outcome.set(picked) } } }
-                }
-            }
-            div { class: "machine-table history", table {
-                caption { "Newest first · click a job for its details · only what the agent's job record holds, not the job input" }
-                thead { tr { th { "Ended" }, th { "About" }, th { "Outcome" }, th { "Duration" }, th { "Tokens in / out" }, th { "Cost" } } }
-                tbody {
-                    if shown.is_empty() { tr { td { colspan: "6", class: "empty", "No jobs recorded for this agent yet." } } }
-                    for job in shown { JobRows { key: "{job.job}{job.ended_at:?}", job, now } }
-                }
-            } }
-            if hidden > 0 { p { class: "more", button { class: "tab", onclick: move |_| limit.set(limit() + PAGE), "Show {hidden.min(PAGE)} more · {hidden} not shown" } } }
-            p { class: "footnote", "The job record keeps the latest 500 jobs per agent and starts with the jobs this version records; older work is in the logs. Jobs started by a message and by an event are listed together; records from before jobs existed are shown as they were written." }
+            JobHistory { key: "{id}", id: id.clone(), reachable: current.reachable, jobs: current.jobs.clone(), now }
         }
+    }
+}
+
+/// The job record of one agent: totals, outcome filter and the jobs, newest first. Keyed by the agent so a filter does not outlive it.
+#[component]
+pub fn JobHistory(id: String, reachable: bool, jobs: Vec<JobView>, now: i64) -> Element {
+    let mut outcome = use_signal(String::new);
+    let mut limit = use_signal(|| PAGE);
+    let filter = outcome.read().clone();
+    let counts = outcome_counts(&jobs);
+    let filter_active = counts.iter().any(|(name, _)| *name == filter);
+    let matching: Vec<JobView> = jobs.iter().filter(|job| !filter_active || outcome_of(job) == filter).cloned().collect();
+    let hidden = matching.len().saturating_sub(limit());
+    let shown: Vec<JobView> = matching.iter().take(limit()).cloned().collect();
+    let matching_count = matching.len();
+    let (input, output, cost) = totals(&jobs);
+    let durations: Vec<f64> = jobs.iter().filter_map(|job| job.seconds).collect();
+    let average = if durations.is_empty() { None } else { Some(durations.iter().sum::<f64>() / durations.len() as f64) };
+    let since = jobs.last().and_then(|job| job.ended_at.clone());
+    let since_text = ago(since.as_deref(), now);
+    rsx! {
+        if !reachable { div { class: "notice", role: "status", "{id} did not answer: its jobs are not shown." } }
+        div { class: "summary six", "aria-label": "Jobs of {id}",
+            div { span { class: "metric-label", "JOBS RECORDED" }, strong { "{jobs.len()}" }, small { "oldest {since_text}" } }
+            div { span { class: "metric-label", "AVERAGE DURATION" }, strong { "{age(average)}" }, small { "per job" } }
+            div { span { class: "metric-label", "INPUT TOKENS" }, strong { "{compact(input)}" }, small { "in the recorded jobs" } }
+            div { span { class: "metric-label", "OUTPUT TOKENS" }, strong { "{compact(output)}" }, small { "in the recorded jobs" } }
+            div { span { class: "metric-label", "COST" }, strong { "{money(cost)}" }, small { "in the recorded jobs" } }
+            div { span { class: "metric-label", "MATCHING" }, strong { "{matching_count}" }, small { if filter_active { "outcome: {filter}" } else { "all outcomes" } } }
+        }
+        div { class: "chips pickers",
+            for (name , n) in counts.iter() {
+                OutcomeChip { key: "{name}", name: name.clone(), n: *n, active: filter_active && *name == filter, pick: move |picked: String| { limit.set(PAGE); if *outcome.read() == picked { outcome.set(String::new()) } else { outcome.set(picked) } } }
+            }
+        }
+        div { class: "machine-table history", table {
+            caption { "Newest first · click a job for its details · only what the agent's job record holds, not the job input" }
+            thead { tr { th { "Ended" }, th { "About" }, th { "Outcome" }, th { "Duration" }, th { "Tokens in / out" }, th { "Cost" } } }
+            tbody {
+                if shown.is_empty() { tr { td { colspan: "6", class: "empty", "No jobs recorded for this agent yet." } } }
+                for job in shown { JobRows { key: "{job.job}{job.ended_at:?}", job, now } }
+            }
+        } }
+        if hidden > 0 { p { class: "more", button { class: "tab", onclick: move |_| limit.set(limit() + PAGE), "Show {hidden.min(PAGE)} more · {hidden} not shown" } } }
+        p { class: "footnote", "The job record keeps the latest 500 jobs per agent and starts with the jobs this version records; older work is in the logs. Jobs started by a message and by an event are listed together; records from before jobs existed are shown as they were written." }
     }
 }
 
@@ -229,30 +236,40 @@ pub fn UsagePanel(usage: Option<UsageView>, now: i64) -> Element {
     let Some(view) = usage else {
         return rsx! { section { id: "usage", class: "section", div { class: "section-heading", h2 { span { "03 /" }, "Model usage and cost" } }, p { class: "empty", "Not available: the metrics source is not configured on this dashboard or did not answer." } } };
     };
-    let day = sum(&view.rows, |row| &row.day);
-    let week = sum(&view.rows, |row| &row.week);
-    let month = sum(&view.rows, |row| &row.month);
     let sampled = ago(view.observed_at.as_deref(), now);
     rsx! {
         section { id: "usage", class: "section",
             div { class: "section-heading", h2 { span { "03 /" }, "Model usage and cost" }, span { class: "section-note", "PROMETHEUS · PER AGENT, PROVIDER AND MODEL · SAMPLE {sampled}" } }
-            div { class: "summary six", "aria-label": "Usage totals",
-                div { span { class: "metric-label", "COST, 24 H" }, strong { "{money(day.cost_usd)}" }, small { "{tokens_text(&day)}" } }
-                div { span { class: "metric-label", "COST, 7 D" }, strong { "{money(week.cost_usd)}" }, small { "{tokens_text(&week)}" } }
-                div { span { class: "metric-label", "COST, 30 D" }, strong { "{money(month.cost_usd)}" }, small { "{tokens_text(&month)}" } }
-                div { span { class: "metric-label", "CACHE READS, 7 D" }, strong { "{compact(week.cache_read)}" }, small { "{compact(week.cache_write)} written" } }
-                div { span { class: "metric-label", "AGENTS WITH SPEND" }, strong { "{view.rows.iter().map(|row| row.agent.as_str()).collect::<std::collections::BTreeSet<_>>().len()}" }, small { "in the last 30 days" } }
-                div { span { class: "metric-label", "MODELS" }, strong { "{view.rows.iter().map(|row| (row.provider.as_str(), row.model.as_str())).collect::<std::collections::BTreeSet<_>>().len()}" }, small { "in use" } }
-            }
-            div { class: "machine-table", table {
-                caption { "Increase of the agents' usage counters · most expensive over 30 days first · counters restart with an agent, increases account for that" }
-                thead { tr { th { "Agent" }, th { "Provider / model" }, th { "24 hours" }, th { "7 days" }, th { "30 days" } } }
-                tbody {
-                    if view.rows.is_empty() { tr { td { colspan: "5", class: "empty", "No usage recorded yet." } } }
-                    for row in view.rows.clone() { UsageLine { key: "{row.agent}{row.provider}{row.model}", row } }
-                }
-            } }
+            UsageDetail { rows: view.rows }
         }
+    }
+}
+
+/// The totals and the table of usage rows; the whole fleet's or one agent's.
+#[component]
+pub fn UsageDetail(rows: Vec<UsageRow>) -> Element {
+    let day = sum(&rows, |row| &row.day);
+    let week = sum(&rows, |row| &row.week);
+    let month = sum(&rows, |row| &row.month);
+    let agents = rows.iter().map(|row| row.agent.as_str()).collect::<std::collections::BTreeSet<_>>().len();
+    let models = rows.iter().map(|row| (row.provider.as_str(), row.model.as_str())).collect::<std::collections::BTreeSet<_>>().len();
+    rsx! {
+        div { class: "summary six", "aria-label": "Usage totals",
+            div { span { class: "metric-label", "COST, 24 H" }, strong { "{money(day.cost_usd)}" }, small { "{tokens_text(&day)}" } }
+            div { span { class: "metric-label", "COST, 7 D" }, strong { "{money(week.cost_usd)}" }, small { "{tokens_text(&week)}" } }
+            div { span { class: "metric-label", "COST, 30 D" }, strong { "{money(month.cost_usd)}" }, small { "{tokens_text(&month)}" } }
+            div { span { class: "metric-label", "CACHE READS, 7 D" }, strong { "{compact(week.cache_read)}" }, small { "{compact(week.cache_write)} written" } }
+            div { span { class: "metric-label", "AGENTS WITH SPEND" }, strong { "{agents}" }, small { "in the last 30 days" } }
+            div { span { class: "metric-label", "MODELS" }, strong { "{models}" }, small { "in use" } }
+        }
+        div { class: "machine-table", table {
+            caption { "Increase of the agents' usage counters · most expensive over 30 days first · counters restart with an agent, increases account for that" }
+            thead { tr { th { "Agent" }, th { "Provider / model" }, th { "24 hours" }, th { "7 days" }, th { "30 days" } } }
+            tbody {
+                if rows.is_empty() { tr { td { colspan: "5", class: "empty", "No usage recorded yet." } } }
+                for row in rows.clone() { UsageLine { key: "{row.agent}{row.provider}{row.model}", row } }
+            }
+        } }
     }
 }
 

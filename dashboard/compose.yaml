@@ -1,16 +1,19 @@
 name: agent-cluster-services
 services:
   fleet:
-    build: .
-    image: agent-cluster-fleet:0.1.0-rust-dioxus
+    # the server depends on crates/somework-client of this repository: build from the repository root (see README, "Build")
+    build:
+      context: ..
+      dockerfile: dashboard/Dockerfile
+    image: agent-cluster-fleet:0.2.0-operations
     restart: unless-stopped
     user: '1000:1000'
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     cpus: 1
-    mem_limit: 256m
-    pids_limit: 64
+    mem_limit: 384m
+    pids_limit: 128
     ports: ['${FLEET_BIND:?address of the services VM}:9444:8443']
     volumes:
       - /etc/agent-cluster-fleet:/run/secrets:ro
@@ -24,6 +27,18 @@ services:
       GRAFANA_URL: ${GRAFANA_URL:-}                             # optional: https address of Grafana; with a `logs` selector per agents-health.json entry it makes the log links
       SOMEWORK_URL: ${SOMEWORK_URL:?the domain's TLS address}
       METRICS_URL: ${METRICS_URL:-}                             # optional: the read-only Grafana endpoint (https) that reaches the central Prometheus, for the model usage and cost section; needs metrics-token and metrics-ca.pem in the secrets directory
+      # Operations (ADR 0004). DATABASE_URL_FILE switches it on; left empty, the console is off and the rest of the dashboard works as before.
+      # Files live in the secrets directory (/etc/agent-cluster-fleet on the host, /run/secrets here); see .env.example and README, "Operations".
+      DATABASE_URL_FILE: ${DATABASE_URL_FILE:-}                 # /run/secrets/database-url: postgres://operations:<password>@<VM104 address>:5432/operations?sslmode=verify-full
+      DATABASE_CA_FILE: ${DATABASE_CA_FILE:-/run/secrets/postgres-ca.pem}   # the CA that signed the Postgres server certificate
+      OIDC_ISSUER: ${OIDC_ISSUER:-}                             # https://login.microsoftonline.com/<tenant id>/v2.0
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}                       # application (client) id of the Entra app registration
+      OIDC_CLIENT_SECRET_FILE: ${OIDC_CLIENT_SECRET_FILE:-/run/secrets/oidc-client-secret}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}                 # https://<the dashboard's address>/fleet/auth/callback, exactly as registered in Entra
+      OPERATIONS_FIRST_ADMIN: ${OPERATIONS_FIRST_ADMIN:-}       # email of the first administrator; only used while the allow list is empty
+      OPERATIONS_SESSION_KEY_FILE: ${OPERATIONS_SESSION_KEY_FILE:-/run/secrets/operations-session-key}   # at least 32 random characters; without it sessions end at every restart
+      OPERATIONS_KEY_FILE: ${OPERATIONS_KEY_FILE:-/run/secrets/operations-key.json}   # key of service:operations (fleet-server --operations-keygen), made on this host
+      OPERATIONS_DOMAIN_ID: ${OPERATIONS_DOMAIN_ID:-}           # the domain's id, when the key file names none
     tmpfs: ['/tmp:size=16m,mode=1777']
     healthcheck:
       test: ['CMD', '/app/fleet-server', '--healthcheck']

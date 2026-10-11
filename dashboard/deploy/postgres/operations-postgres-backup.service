@@ -1,0 +1,9 @@
+[Unit]
+Description=Nightly dump of the Operations database
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=BACKUP_DIR=/srv/agent-cluster-postgres/backups
+ExecStart=/opt/agent-cluster-postgres/backup.sh

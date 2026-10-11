@@ -3,6 +3,9 @@ name = "fleet-server"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 fleet-shared.workspace = true
 serde.workspace = true
@@ -19,6 +22,9 @@ sha2 = "0.10"
 base64 = "0.22"
 ring = "0.17"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
-
-[dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "chrono", "json"] }
+somework-client = { path = "../../crates/somework-client" }
+ed25519-dalek = "3.0.0"
+fancy-regex = "0.14"
 tower = { version = "0.5", features = ["util"] }
+

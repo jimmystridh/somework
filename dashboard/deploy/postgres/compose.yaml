@@ -1,0 +1,66 @@
+# Postgres of Operations (ADR 0004) on VM104, next to Grafana. Files only: nothing here is started by the repository's tooling.
+#
+#   cd /opt/agent-cluster-postgres && docker compose --env-file .env up -d
+#
+# Secrets (directory /etc/agent-cluster-postgres, root-owned, files 0400 except the TLS key):
+#   server.crt, server.key   TLS certificate and key of the server; the key is owned by uid 999 (postgres) and mode 0600, or Postgres refuses it.
+#                            The certificate must name the address or host name Operations connects to (sslmode=verify-full).
+#   postgres-admin-password  password of the superuser `postgres` (used by backups and restores through `docker exec` only; no network client has it)
+#   operations-db-password   password of the role `operations` that owns the database; Operations' DATABASE_URL carries it
+# The listener is published on the private address only (POSTGRES_BIND) and pg_hba.conf accepts nothing but TLS with SCRAM from the private
+# network. Firewall the host so that only the services VM reaches 5432.
+name: agent-cluster-postgres
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17.11-bookworm@sha256:3645570cccdfa447589da9f57dd740faa29b30938e861289a5574b6ca6b03826}
+    container_name: operations-postgres
+    restart: unless-stopped
+    ports: ['${POSTGRES_BIND:?private address of VM104}:5432:5432']
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - listen_addresses=*
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/server.crt
+      - -c
+      - ssl_key_file=/run/secrets/server.key
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-admin-password
+    volumes:
+      - operations-pgdata:/var/lib/postgresql/data
+      - /etc/agent-cluster-postgres:/run/secrets:ro
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    tmpfs: ['/run/postgresql:size=4m,mode=1777', '/tmp:size=64m,mode=1777']
+    cap_drop: [ALL]
+    # what the image's entrypoint needs to take over the data directory and drop to the postgres user
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ['no-new-privileges:true']
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 200
+    shm_size: 128m
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready --username=postgres --dbname=operations']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+
+volumes:
+  operations-pgdata:

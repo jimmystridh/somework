@@ -6,7 +6,10 @@
 //! put it on the page. The agent builds the document without secrets in the first place; this is the second line.
 
 use crate::somework::{count, identifier};
-use fleet_shared::somework::{AgentSetup, ApprovalPattern, RepositoryAccess};
+use fleet_shared::{
+    operations::{EffectiveMcp, EffectiveSetup, RejectedSetup, ReportedSetup, RoleDefaults},
+    somework::{AgentSetup, ApprovalPattern, RepositoryAccess},
+};
 use serde_json::Value;
 
 const MAX_PROMPT_CHARS: usize = 16_000;
@@ -55,6 +58,94 @@ fn capability_list(value: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `provider/modelId` of a `{provider, modelId}` object.
+fn model_name(value: Option<&Value>) -> Option<String> {
+    Some(format!("{}/{}", identifier(value?.get("provider"))?, identifier(value?.get("modelId"))?))
+}
+
+fn approval_patterns(value: Option<&Value>) -> Vec<ApprovalPattern> {
+    value
+        .and_then(Value::as_array)
+        .map(|list| list.iter().take(MAX_LIST).filter_map(|item| Some(ApprovalPattern { pattern: text(item.get("pattern"), 300)?, reason: text(item.get("reason"), 200).unwrap_or_default() })).collect())
+        .unwrap_or_default()
+}
+
+fn effective_setup(effective: &Value) -> EffectiveSetup {
+    let instructions = effective.get("instructions");
+    EffectiveSetup {
+        instructions: text(instructions.and_then(|i| i.get("text")), MAX_PROMPT_CHARS),
+        instructions_sha256: identifier(instructions.and_then(|i| i.get("sha256"))).map(|hash| hash.chars().take(12).collect()),
+        instructions_characters: count(instructions.and_then(|i| i.get("characters"))).unwrap_or(0),
+        model: model_name(effective.get("model")).unwrap_or_default(),
+        approval_patterns: approval_patterns(effective.get("approvalPatterns")),
+        repository_skills: identifiers(effective.get("repositorySkills")),
+        library_skills: effective
+            .get("librarySkills")
+            .and_then(Value::as_array)
+            .map(|list| list.iter().take(MAX_LIST).filter_map(|item| Some(format!("{}@{}", identifier(item.get("name"))?, count(item.get("version"))?))).collect())
+            .unwrap_or_default(),
+        mcp: effective
+            .get("mcp")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .take(MAX_LIST)
+                    .filter_map(|item| {
+                        let word = |name: &str, allowed: &[&str]| item.get(name).and_then(Value::as_str).filter(|value| allowed.contains(value)).map(str::to_string);
+                        Some(EffectiveMcp {
+                            name: identifier(item.get("name"))?,
+                            transport: word("transport", &["stdio", "http"])?,
+                            approval: word("approval", &["ask", "never", "writes"])?,
+                            error: text(item.get("error"), 300),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// What the agent reports of the documents it applied (`setup` of the profile, `SetupReport` of `packages/agent-kit/src/setup/contract.ts`).
+/// `None` when the profile has no `setup` at all: an agent that cannot take a setup document yet. Every part may be missing (the manager
+/// serves a subset), and nothing but the named fields is read.
+pub fn reported_setup(profile: &Value) -> Option<ReportedSetup> {
+    let setup = profile.get("setup").filter(|value| value.is_object())?;
+    let applied = |name: &str| setup.get(name).filter(|value| value.is_object());
+    let rejected = setup.get("rejected").filter(|value| value.is_object()).and_then(|rejected| {
+        let kind = match rejected.get("kind").and_then(Value::as_str)? {
+            "override" => "override",
+            "limits" => "limits",
+            _ => return None,
+        };
+        Some(RejectedSetup { kind: kind.into(), revision: count(rejected.get("revision"))?, reason: text(rejected.get("reason"), 300).unwrap_or_default(), at: date(rejected.get("at")) })
+    });
+    Some(ReportedSetup {
+        override_revision: applied("override").and_then(|o| count(o.get("revision"))),
+        override_applied_at: applied("override").and_then(|o| date(o.get("appliedAt"))),
+        limits_revision: applied("limits").and_then(|l| count(l.get("revision"))),
+        limits_applied_at: applied("limits").and_then(|l| date(l.get("appliedAt"))),
+        rejected,
+        effective: applied("effective").map(effective_setup),
+    })
+}
+
+/// The role's built-in setup, to show what an override changes: `setup.defaults` (its approval patterns, repository skills, model and allowed
+/// models) and the role's own prompt, which an override only appends to. `None` for an agent that reports no defaults.
+pub fn role_defaults(profile: &Value) -> Option<RoleDefaults> {
+    let defaults = profile.get("setup").and_then(|setup| setup.get("defaults")).filter(|value| value.is_object())?;
+    let prompt = profile.get("systemPrompt");
+    Some(RoleDefaults {
+        role: identifier(profile.get("role")).unwrap_or_default(),
+        prompt: text(prompt.and_then(|p| p.get("text")), MAX_PROMPT_CHARS),
+        prompt_sha256: identifier(prompt.and_then(|p| p.get("sha256"))).map(|hash| hash.chars().take(12).collect()).unwrap_or_default(),
+        prompt_characters: count(prompt.and_then(|p| p.get("characters"))).unwrap_or(0),
+        model: model_name(defaults.get("model")).unwrap_or_default(),
+        allowed_models: defaults.get("allowedModels").and_then(Value::as_array).map(|list| list.iter().take(MAX_LIST).filter_map(|item| model_name(Some(item))).collect()).unwrap_or_default(),
+        approval_patterns: approval_patterns(defaults.get("approvalPatterns")),
+        repository_skills: identifiers(defaults.get("repositorySkills")),
+    })
 }
 
 pub fn setup(profile: &Value) -> Option<AgentSetup> {
@@ -133,6 +224,7 @@ pub fn setup(profile: &Value) -> Option<AgentSetup> {
         events_notify_to: identifier(events.and_then(|e| e.get("notifyTo"))),
         observe_enabled: flag(observe.and_then(|o| o.get("enabled"))),
         observe_scope: identifier(observe.and_then(|o| o.get("scope"))),
+        reported: reported_setup(profile),
     })
 }
 
@@ -226,6 +318,76 @@ mod tests {
         assert_eq!(setup.repository.token_expires, None);
         assert_eq!(setup.repository.github_identity, None);
         assert_eq!(setup.repository.credential, "none");
+    }
+
+    #[test]
+    fn the_reported_setup_is_read_by_name() {
+        let mut value = profile();
+        assert!(reported_setup(&value).is_none(), "an agent without `setup` cannot take a document");
+        value["setup"] = json!({
+            "override": {"revision": 7, "hash": "abc", "appliedAt": "2026-10-10T10:00:00.000Z", "secret": "PRIVATE"},
+            "limits": {"revision": 2, "appliedAt": "2026-10-10T09:00:00.000Z"},
+            "rejected": {"kind": "override", "revision": 8, "reason": "the MCP entry docs needs a command\u{7}", "at": "2026-10-10T10:05:00.000Z", "document": "PRIVATE"}
+        });
+        let reported = reported_setup(&value).unwrap();
+        assert_eq!((reported.override_revision, reported.limits_revision), (Some(7), Some(2)));
+        assert_eq!(reported.override_applied_at.as_deref(), Some("2026-10-10T10:00:00.000Z"));
+        let rejected = reported.rejected.clone().unwrap();
+        assert_eq!((rejected.kind.as_str(), rejected.revision, rejected.reason.as_str()), ("override", 8, "the MCP entry docs needs a command"));
+        assert!(reported.effective.is_none(), "a report without `effective` (the manager's subset) is still a report");
+        assert!(!format!("{reported:?}").contains("PRIVATE"));
+        value["setup"] = json!({"override": null, "limits": null});
+        let reported = reported_setup(&value).unwrap();
+        assert_eq!((reported.override_revision, reported.limits_revision, reported.rejected), (None, None, None));
+        value["setup"] = json!({"rejected": {"kind": "somethingelse", "revision": 1, "reason": "x"}});
+        assert!(reported_setup(&value).unwrap().rejected.is_none());
+        value["setup"] = json!({"rejected": {"kind": "limits", "revision": 3, "reason": "x".repeat(900)}});
+        assert_eq!(reported_setup(&value).unwrap().rejected.unwrap().reason.len(), 300, "the agent's words are cut");
+    }
+
+    #[test]
+    fn what_is_in_effect_is_read_without_urls_commands_or_unknown_fields() {
+        let mut value = profile();
+        value["setup"] = json!({"override": null, "limits": null, "effective": {
+            "instructions": {"sha256": "0123456789abcdef0123", "characters": 11, "text": "Be brief.\nOk"},
+            "model": {"provider": "anthropic", "modelId": "claude"},
+            "approvalPatterns": [{"pattern": "rm -rf", "reason": "dangerous"}],
+            "repositorySkills": ["review"],
+            "librarySkills": [{"name": "triage", "version": 3}, {"name": "<b>", "version": 1}],
+            "mcp": [
+                {"name": "docs", "transport": "stdio", "approval": "ask", "command": "PRIVATE-COMMAND", "url": "https://PRIVATE"},
+                {"name": "gh", "transport": "http", "approval": "writes", "error": "secret GITHUB_TOKEN is missing"},
+                {"name": "odd", "transport": "carrier-pigeon", "approval": "ask"}
+            ]
+        }});
+        let effective = reported_setup(&value).unwrap().effective.unwrap();
+        assert_eq!((effective.instructions.as_deref(), effective.instructions_sha256.as_deref(), effective.instructions_characters), (Some("Be brief.\nOk"), Some("0123456789ab"), 11));
+        assert_eq!((effective.model.as_str(), effective.library_skills.clone(), effective.repository_skills.clone()), ("anthropic/claude", vec!["triage@3".to_string()], vec!["review".to_string()]));
+        assert_eq!(effective.mcp.iter().map(|m| (m.name.as_str(), m.transport.as_str(), m.approval.as_str(), m.error.as_deref())).collect::<Vec<_>>(), vec![("docs", "stdio", "ask", None), ("gh", "http", "writes", Some("secret GITHUB_TOKEN is missing"))]);
+        assert!(!format!("{effective:?}").contains("PRIVATE"));
+    }
+
+    #[test]
+    fn role_defaults_come_from_setup_defaults_and_the_roles_own_prompt() {
+        let mut value = profile();
+        assert!(role_defaults(&value).is_none(), "no `setup.defaults`, no defaults to show");
+        value["setup"] = json!({"override": {"revision": 3, "appliedAt": "2026-10-10T10:00:00.000Z"}, "defaults": {
+            "approvalPatterns": [{"pattern": "\\bgit push\\b", "reason": "pushing needs approval"}],
+            "repositorySkills": ["triage"],
+            "model": {"provider": "anthropic", "modelId": "claude"},
+            "allowedModels": [{"provider": "anthropic", "modelId": "claude"}, {"provider": "openai-codex", "modelId": "gpt-5.5"}],
+            "apiKey": "PRIVATE"
+        }});
+        let defaults = role_defaults(&value).unwrap();
+        assert_eq!((defaults.role.as_str(), defaults.model.as_str(), defaults.prompt_sha256.as_str()), ("developer", "anthropic/claude", "abcdef012345"));
+        assert_eq!(defaults.prompt.as_deref(), Some("You are the developer.\nNever push to main."));
+        assert_eq!(defaults.allowed_models, vec!["anthropic/claude", "openai-codex/gpt-5.5"]);
+        assert_eq!((defaults.approval_patterns[0].pattern.as_str(), defaults.repository_skills.clone()), ("\\bgit push\\b", vec!["triage".to_string()]));
+        assert!(!format!("{defaults:?}").contains("PRIVATE"));
+        let mut manager = json!({"role": "manager", "setup": {"override": null, "limits": null, "defaults": {}}});
+        assert!(role_defaults(&manager).is_some(), "a subset profile still gives what it has");
+        manager.as_object_mut().unwrap().remove("role");
+        assert_eq!(role_defaults(&manager).unwrap().role, "");
     }
 
     #[test]

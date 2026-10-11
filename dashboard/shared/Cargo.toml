@@ -3,6 +3,9 @@ name = "fleet-shared"
 version.workspace = true
 edition.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 chrono.workspace = true

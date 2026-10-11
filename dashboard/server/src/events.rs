@@ -491,7 +491,7 @@ pub async fn read_agents(http: &reqwest::Client, targets: &[AgentTarget]) -> Vec
     out
 }
 
-async fn fetch_json(http: &reqwest::Client, url: &str) -> Option<Value> {
+pub async fn fetch_json(http: &reqwest::Client, url: &str) -> Option<Value> {
     match http.get(url).send().await {
         Ok(response) if response.status().is_success() => response.json::<Value>().await.ok(),
         _ => None,
@@ -499,7 +499,7 @@ async fn fetch_json(http: &reqwest::Client, url: &str) -> Option<Value> {
 }
 
 /// The profile and the history live next to the status document on the same health port: `…/status` -> `…/profile`.
-fn profile_url(status_url: &str) -> Option<String> {
+pub fn profile_url(status_url: &str) -> Option<String> {
     sibling_url(status_url, "profile")
 }
 

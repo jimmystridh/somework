@@ -8,7 +8,7 @@ use fleet_shared::somework::{
     Work,
 };
 
-fn dash(value: Option<String>) -> String {
+pub fn dash(value: Option<String>) -> String {
     value.filter(|text| !text.is_empty()).unwrap_or_else(|| "—".into())
 }
 
@@ -74,7 +74,7 @@ fn SwAgents(agents: Vec<SwAgent>, now: i64) -> Element {
 }
 
 #[component]
-fn SwAgentRow(agent: SwAgent, now: i64) -> Element {
+pub fn SwAgentRow(agent: SwAgent, now: i64) -> Element {
     let provider = agent.role == "provider";
     let liveness = agent.liveness_at(now);
     let state = if provider { liveness.label().to_string() } else { "requester".to_string() };
@@ -157,13 +157,13 @@ fn WorkPanel(work: Work, now: i64) -> Element {
 }
 
 #[component]
-fn WaitingRow(job: LiveJob, now: i64) -> Element {
+pub fn WaitingRow(job: LiveJob, now: i64) -> Element {
     let detail = format!("{} · {} · waiting {}", job.agent, dash(job.waiting_for.clone()), ago(job.since.as_deref(), now));
     rsx! { div { class: "attention-row", Status { value: "waiting".to_string() }, span { "{job.label}" }, small { "{detail}" } } }
 }
 
 #[component]
-fn ActiveRow(job: LiveJob, now: i64) -> Element {
+pub fn ActiveRow(job: LiveJob, now: i64) -> Element {
     let capability = dash(job.capability.clone());
     let requested = dash(job.requested_by.clone());
     let waiting_for = job.waiting_for.clone().unwrap_or_default();
@@ -180,7 +180,7 @@ fn ActiveRow(job: LiveJob, now: i64) -> Element {
 }
 
 #[component]
-fn FinishedRow(job: LiveJob, now: i64) -> Element {
+pub fn FinishedRow(job: LiveJob, now: i64) -> Element {
     let result = job.result.clone().unwrap_or_else(|| "completed".into());
     let summary = job.summary.clone().unwrap_or_default();
     let took = job.seconds.map(|seconds| age(Some(seconds))).unwrap_or_else(|| "—".into());
@@ -197,7 +197,7 @@ fn FinishedRow(job: LiveJob, now: i64) -> Element {
 }
 
 #[component]
-fn Throughput(buckets: Vec<HourBucket>) -> Element {
+pub fn Throughput(buckets: Vec<HourBucket>) -> Element {
     let max = buckets.iter().map(|b| b.started.max(b.completed + b.failed)).max().unwrap_or(0).max(1) as f64;
     let view_box = "0 0 432 96".to_string();
     // x, started height, completed height, failed height
@@ -365,8 +365,7 @@ fn EventsPanel(events: Events, now: i64) -> Element {
         EventAlerts { alerts: events.alerts.clone() }
         RulesTable { rules: events.rules.clone(), skipped_detail, now }
         HubPanel { hub: events.hub.clone() }
-        AgentsEvents { agents: events.agents.clone(), configured: events.agents_configured, grafana: events.grafana_url.clone() }
-        AgentSetups { agents: events.agents.clone(), now, grafana: events.grafana_url.clone() }
+        p { class: "footnote", "Handlers, event token pools and the setup of each agent are on the agent's own page under Agents." }
     }
 }
 
@@ -382,7 +381,7 @@ fn EventAlerts(alerts: Vec<EventAlert>) -> Element {
 }
 
 #[component]
-fn AlertRow(alert: EventAlert) -> Element {
+pub fn AlertRow(alert: EventAlert) -> Element {
     let detail = format!("{} · {}", alert.subject, alert.text);
     rsx! { div { class: "attention-row", Status { value: alert.severity.clone() }, span { "{alert.kind}" }, small { "{detail}" } } }
 }
@@ -514,38 +513,6 @@ fn SourceRow(source: fleet_shared::somework::HubSource) -> Element {
     }
 }
 
-#[component]
-fn AgentsEvents(agents: Vec<AgentEvents>, configured: u64, grafana: Option<String>) -> Element {
-    if configured == 0 {
-        return rsx! { div { class: "platform-card", h4 { "Agent handlers and token pools", small { "not configured" } }, p { "No agent status endpoints are configured on this dashboard (agents-health.json)." } } };
-    }
-    rsx! {
-        div { class: "machine-table", table {
-            caption { "Handlers and event token pools · from each agent's status endpoint · handler code and error text are never shown" }
-            thead { tr { th { "Agent" }, th { "Events pool, today" }, th { "Handlers" } } }
-            tbody {
-                if agents.is_empty() { tr { td { colspan: "3", class: "empty", "No agent answered." } } }
-                for agent in agents { AgentEventsRow { key: "{agent.id}", agent, grafana: grafana.clone() } }
-            }
-        } }
-    }
-}
-
-/// How each agent is set up, from its own `/profile`: prompt, tools, budgets, repository access, chat and events. Read-only.
-#[component]
-fn AgentSetups(agents: Vec<AgentEvents>, now: i64, grafana: Option<String>) -> Element {
-    let with_setup: Vec<AgentEvents> = agents.into_iter().filter(|agent| agent.setup.is_some()).collect();
-    if with_setup.is_empty() {
-        return rsx! {};
-    }
-    rsx! {
-        h3 { class: "sub", "Agent setup" }
-        div { class: "setup-list",
-            for agent in with_setup { AgentSetupCard { key: "{agent.id}", agent, now, grafana: grafana.clone() } }
-        }
-    }
-}
-
 fn changed_recently(setup: &AgentSetup, now: i64) -> bool {
     setup.changed_at.as_deref().and_then(fleet_shared::timestamp_ms).is_some_and(|at| now >= at && now - at < 24 * 3_600_000)
 }
@@ -600,8 +567,9 @@ fn budget_text(setup: &AgentSetup) -> String {
     )
 }
 
+/// How one agent is set up, from its own `/profile`: prompt, tools, budgets, repository access, chat and events. Read-only.
 #[component]
-fn AgentSetupCard(agent: AgentEvents, now: i64, grafana: Option<String>) -> Element {
+pub fn AgentSetupCard(agent: AgentEvents, now: i64, grafana: Option<String>, open: bool) -> Element {
     let Some(setup) = agent.setup.clone() else { return rsx! {} };
     let logs = grafana.as_deref().zip(agent.logs.as_deref()).map(|(base, selector)| logs_link(base, selector));
     let changed = changed_recently(&setup, now);
@@ -625,7 +593,7 @@ fn AgentSetupCard(agent: AgentEvents, now: i64, grafana: Option<String>) -> Elem
     let observe = if setup.observe_enabled { format!("on · {} scope", setup.observe_scope.clone().unwrap_or_else(|| "own".into())) } else { "off".to_string() };
     let prompt_note = format!("{} characters · sha256 {}", setup.prompt_characters, setup.prompt_sha256);
     rsx! {
-        details { class: "platform-card setup",
+        details { class: "platform-card setup", open,
             summary {
                 span { class: "machine-name", "{agent.id}" }
                 span { class: "chip read", "{setup.role}" }
@@ -663,7 +631,7 @@ fn AgentSetupCard(agent: AgentEvents, now: i64, grafana: Option<String>) -> Elem
 }
 
 #[component]
-fn AgentEventsRow(agent: AgentEvents, grafana: Option<String>) -> Element {
+pub fn AgentEventsRow(agent: AgentEvents, grafana: Option<String>) -> Element {
     let logs = grafana.as_deref().zip(agent.logs.as_deref()).map(|(base, selector)| logs_link(base, selector));
     let pool = agent.pools.clone();
     let handlers: Vec<(String, String, String)> = agent

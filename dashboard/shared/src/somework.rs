@@ -421,6 +421,8 @@ pub struct AgentSetup {
     pub events_notify_to: Option<String>,
     pub observe_enabled: bool,
     pub observe_scope: Option<String>,
+    /// The setup documents the agent reports as applied (Operations, ADR 0004); `None` for an agent that does not report any.
+    pub reported: Option<crate::operations::ReportedSetup>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

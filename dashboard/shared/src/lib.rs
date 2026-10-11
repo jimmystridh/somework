@@ -1,5 +1,6 @@
 use chrono::DateTime;
 
+pub mod operations;
 pub mod somework;
 use serde::{Deserialize, Serialize};
 
