@@ -9,7 +9,7 @@ const chatOf = (conversationId: string | undefined): number | undefined => {
 };
 
 /** The words for attachments, which a chat cannot carry: they stay in the domain, where any principal can fetch them. */
-const attachmentsLine = (artifacts: unknown[] | undefined): string => {
+export const attachmentsLine = (artifacts: unknown[] | undefined): string => {
 	if (!artifacts || artifacts.length === 0) return "";
 	const names = artifacts.map((ref: any) => `${ref?.filename ?? "file"} (${ref?.artifactId ?? "?"})`);
 	return `\n\n${artifacts.length} attachment(s) are kept in the domain, not sent here: ${names.join("; ")}`;
@@ -44,22 +44,5 @@ export class TelegramSender implements Sender {
 	/** A line into a conversation that is not an answer: an approval question. */
 	say(conversationId: string, text: string): Promise<void> {
 		return this.send({ recipients: [], conversationId, text, key: "" });
-	}
-}
-
-/** Sends into Telegram conversations through the bot and everything else through the domain. */
-export class RoutedSender implements Sender {
-	readonly #domain: Sender;
-	readonly #telegram: Sender;
-	readonly #store: Pick<TelegramStore, "owns">;
-
-	constructor(domain: Sender, telegram: Sender, store: Pick<TelegramStore, "owns">) {
-		this.#domain = domain;
-		this.#telegram = telegram;
-		this.#store = store;
-	}
-
-	send(message: OutgoingMessage): Promise<void> {
-		return (this.#store.owns(message.conversationId) ? this.#telegram : this.#domain).send(message);
 	}
 }

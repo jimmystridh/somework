@@ -20,6 +20,8 @@ export interface ApprovalChannel {
 	/** True for an approver the channel can reach (its principal ids). */
 	reaches(approver: Party): boolean;
 	say(conversationId: string, text: string): Promise<void>;
+	/** What commands start with on this channel, as the question shows them (default `/`). */
+	commandPrefix?: string;
 }
 
 export interface ApprovalRequest {
@@ -43,10 +45,11 @@ export class Approvals {
 	readonly #log: Log;
 	readonly #timeoutMs: number;
 	readonly #approvers: readonly string[];
-	readonly #channel: ApprovalChannel | undefined;
+	readonly #channels: readonly ApprovalChannel[];
 
-	constructor(options: { client: Pick<SomeWorkClient, "post">; log: Log; timeoutMinutes: number; approvers: readonly string[]; channel?: ApprovalChannel }) {
-		this.#channel = options.channel;
+	/** `channel`: the chat channels of the agent; a question is asked on the one that carries the conversation. */
+	constructor(options: { client: Pick<SomeWorkClient, "post">; log: Log; timeoutMinutes: number; approvers: readonly string[]; channel?: ApprovalChannel | readonly ApprovalChannel[] }) {
+		this.#channels = options.channel === undefined ? [] : Array.isArray(options.channel) ? options.channel : [options.channel as ApprovalChannel];
 		this.#client = options.client;
 		this.#log = options.log;
 		this.#timeoutMs = options.timeoutMinutes * 60_000;
@@ -66,8 +69,9 @@ export class Approvals {
 
 	async ask(request: ApprovalRequest): Promise<ApprovalDecision> {
 		const id = randomBytes(6).toString("hex");
-		const local = request.conversationId !== undefined && this.#channel?.owns(request.conversationId) === true;
-		const onChannel = local && this.#channel!.reaches(request.approver);
+		const channel = request.conversationId === undefined ? undefined : this.#channels.find((candidate) => candidate.owns(request.conversationId));
+		const local = channel !== undefined;
+		const onChannel = channel !== undefined && channel.reaches(request.approver);
 		const decided = new Promise<ApprovalDecision>((resolve) => {
 			const done = (decision: ApprovalDecision): void => {
 				clearTimeout(timer);
@@ -82,8 +86,9 @@ export class Approvals {
 			this.#pending.set(id, { id, senderId: request.approver.id, conversationId: local && !onChannel ? undefined : request.conversationId, resolve: done });
 		});
 		try {
-			if (onChannel) {
-				await this.#channel!.say(request.conversationId!, `Approval needed (${request.agent}): ${request.tool}: ${request.summary}\nAnswer /approve ${id} or /deny ${id}. Without an answer in ${Math.round(this.#timeoutMs / 60_000)} minutes it is denied.`);
+			if (channel && onChannel) {
+				const prefix = channel.commandPrefix ?? "/";
+				await channel.say(request.conversationId!, `Approval needed (${request.agent}): ${request.tool}: ${request.summary}\nAnswer ${prefix}approve ${id} or ${prefix}deny ${id}. Without an answer in ${Math.round(this.#timeoutMs / 60_000)} minutes it is denied.`);
 				return await decided;
 			}
 			await this.#client.post(

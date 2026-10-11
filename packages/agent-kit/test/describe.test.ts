@@ -150,6 +150,13 @@ test("the Telegram channel is described by whether it runs and how many people m
 	assert.notEqual(on.hash, describeAgent(input()).hash, "switching it on is a change of the setup");
 });
 
+test("the Slack app is described by whether it runs, how many people may write to it and how many channels it answers in, never by who or which", () => {
+	assert.equal(describeAgent(input()).slack, undefined);
+	const on = describeAgent(input({ slack: { enabled: true, allowedUsers: 2, channels: 1 } }));
+	assert.deepEqual(on.slack, { enabled: true, allowedUsers: 2, channels: 1 });
+	assert.notEqual(on.hash, describeAgent(input()).hash, "switching it on is a change of the setup");
+});
+
 test("the setup an operator gave the agent is served under setup, outside the hash, and /profile can serve a description that is built per request", async () => {
 	const setup = {
 		override: { revision: 3, hash: "a".repeat(64), appliedAt: "2026-10-10T12:00:00Z" },

@@ -36,6 +36,8 @@ export interface AgentDescription {
 	timers?: { enabled: boolean };
 	/** The agent's own Telegram bot: whether it runs and how many people may write to it (never who). */
 	telegram?: { enabled: boolean; allowedUsers: number };
+	/** The agent's own Slack app: whether it runs, how many people may write to it and in how many channels it answers mentions (never who or which). */
+	slack?: { enabled: boolean; allowedUsers: number; channels: number };
 	/** What an operator's setup override and the fleet limits changed, with the role's defaults beside it (ADR 0004). Not part of `hash`. */
 	setup?: SetupReport;
 	/** Of everything above; changes when the setup changes. */
@@ -57,6 +59,7 @@ export interface DescribeInput {
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
 	telegram?: { enabled: boolean; allowedUsers: number };
+	slack?: { enabled: boolean; allowedUsers: number; channels: number };
 	setup?: SetupReport;
 	/** False leaves out the prompt text (its hash and length stay). */
 	includePrompt: boolean;
@@ -104,6 +107,7 @@ export function describeAgent(input: DescribeInput): AgentDescription {
 		observe: input.observe,
 		...(input.timers ? { timers: input.timers } : {}),
 		...(input.telegram ? { telegram: input.telegram } : {}),
+		...(input.slack ? { slack: input.slack } : {}),
 	};
 	return { ...body, ...(input.setup ? { setup: input.setup } : {}), hash: sha256(JSON.stringify({ ...body, systemPrompt: { ...body.systemPrompt, text: undefined }, version: undefined })) };
 }

@@ -1,5 +1,6 @@
 export * from "./approvals.ts";
 export * from "./artifacts.ts";
+export * from "./channels.ts";
 export * from "./engine.ts";
 export * from "./jobs.ts";
 export * from "./message.ts";

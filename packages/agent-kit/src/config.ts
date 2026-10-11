@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { allowlist, parseModelList, type ModelRef } from "./providers/allowlist.ts";
 import { parseSkillList } from "./skills.ts";
 import { validateTable, type ShardTable } from "./shards.ts";
+import { slackSettingsFrom, type SlackSettings } from "./slack/config.ts";
 import { telegramSettingsFrom, type TelegramSettings } from "./telegram/config.ts";
 
 export interface Config {
@@ -37,6 +38,8 @@ export interface Config {
 	skills: { allow?: string[]; overlayDir?: string };
 	/** The agent's own Telegram bot (`TELEGRAM_BOT_TOKEN_FILE` or `TELEGRAM_BOT_TOKEN`, with `TELEGRAM_ALLOWED_USER_IDS`); off without a token. */
 	telegram: TelegramSettings;
+	/** The agent's own Slack app in Socket Mode (`SLACK_BOT_TOKEN_FILE` and `SLACK_APP_TOKEN_FILE`, or the tokens themselves, with `SLACK_ALLOWED_USER_IDS`); off unless both tokens are set. */
+	slack: SlackSettings;
 }
 
 const required = (env: NodeJS.ProcessEnv, name: string): string => {
@@ -92,5 +95,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		approvalPatterns: (env.APPROVAL_PATTERNS ?? "").split("\n").filter(Boolean),
 		skills: { allow: env.SKILLS_ALLOW ? parseSkillList(env.SKILLS_ALLOW) : undefined, overlayDir: env.SKILLS_OVERLAY_DIR || undefined },
 		telegram: telegramSettingsFrom(env),
+		slack: slackSettingsFrom(env),
 	};
 }

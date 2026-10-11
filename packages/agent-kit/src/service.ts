@@ -51,7 +51,9 @@ import { overlayFromDirectory, skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
 import { llmUsageCounters } from "./usage-metrics.ts";
 import { createTimers } from "./timers/index.ts";
-import { resolveTelegram, RoutedSender, TelegramChannel, telegramApi, telegramApprovals, TelegramSender, TelegramStore, type TelegramStart } from "./telegram/index.ts";
+import { resolveSlack, SlackChannel, slackApi, slackApprovals, SlackSender, slackSocketUrl, SlackStore, type SlackStart } from "./slack/index.ts";
+import { resolveTelegram, TelegramChannel, telegramApi, telegramApprovals, TelegramSender, TelegramStore, type TelegramStart } from "./telegram/index.ts";
+import { combinedLocal, RoutedSender } from "./threads/channels.ts";
 
 const read = (path: string): string => readFileSync(path, "utf8").trim();
 
@@ -197,7 +199,17 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				const telegramSender = new TelegramSender({ api, store, agentId: identity.agentId, maxBytes: 8192, log });
 				return { start: telegramStart, store, api, sender: telegramSender };
 			})() : undefined;
-			const sender: Sender = telegram ? new RoutedSender(domainSender, telegram.sender, telegram.store) : domainSender;
+			// the agent's own Slack app (Socket Mode), when it has both tokens and a list of people who may write to it
+			const slackStart: SlackStart = threadSettings.enabled ? resolveSlack(config.slack) : { enabled: false };
+			if (!slackStart.enabled && slackStart.reason) log("warn", "slack_disabled", { reason: slackStart.reason });
+			const slack = slackStart.enabled ? (() => {
+				const store = new SlackStore(join(config.state.dir, "slack"), identity.agentId);
+				const api = slackApi({ botToken: slackStart.botToken, appToken: slackStart.appToken });
+				const slackSender = new SlackSender({ api, store, agentId: identity.agentId, maxBytes: 8192, log });
+				return { start: slackStart, store, api, sender: slackSender, openConnection: slackSocketUrl(slackStart.appToken) };
+			})() : undefined;
+			const chatChannels = [telegram, slack].filter((channel) => channel !== undefined);
+			const sender: Sender = chatChannels.length > 0 ? new RoutedSender(domainSender, chatChannels) : domainSender;
 			const stateBase = (): Promise<string> =>
 				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
 			const threadState = async (): Promise<string> => {
@@ -298,7 +310,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			};
 			const jobHandler = createHandler({ ...baseDeps, ledger, source: "job" });
 			const root = config.sandbox.workspaceRoot.replace(/\/$/, "");
-			const approvals = new Approvals({ client, log, timeoutMinutes: threadSettings.approvalMinutes, approvers: threadSettings.approvers, ...(telegram ? { channel: telegramApprovals(telegram.store, telegram.sender) } : {}) });
+			const approvals = new Approvals({ client, log, timeoutMinutes: threadSettings.approvalMinutes, approvers: threadSettings.approvers, channel: [...(telegram ? [telegramApprovals(telegram.store, telegram.sender)] : []), ...(slack ? [slackApprovals(slack.store, slack.sender)] : [])] });
 			const slug = topicSlug(identity.agentId);
 			const stop = new AbortController();
 			const reporter = createJobReporter({
@@ -351,7 +363,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				tools: conversationTools,
 				instructions: [hooks.chat?.instructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}.`, KIT_THREAD_RULES].join("\n\n"),
 				state: threadState,
-				...(telegram ? { local: telegram.store } : {}),
+				...(chatChannels.length > 0 ? { local: combinedLocal(chatChannels.map((channel) => channel.store)) } : {}),
 				workspace: threadWorkspace,
 				ledger,
 				setupKey: () => setup.conversationSuffix(),
@@ -390,6 +402,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
 					timers: { enabled: Boolean(timers) },
 					telegram: { enabled: Boolean(telegram), allowedUsers: telegram?.start.allowed.size ?? 0 },
+					slack: { enabled: Boolean(slack), allowedUsers: slack?.start.allowedUsers.size ?? 0, channels: slack?.start.allowedChannels.size ?? 0 },
 					setup: setup.report({ model: runtime.model }),
 					includePrompt: env.PROFILE_PROMPT !== "0",
 				}),
@@ -454,6 +467,25 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					});
 					void channel.run(stop.signal).catch((error) => log("error", "telegram_stopped", { error: String(error).slice(0, 160) }));
 				}
+				if (slack) {
+					const channel = new SlackChannel({
+						api: slack.api,
+						openConnection: slack.openConnection,
+						store: slack.store,
+						allowedUsers: slack.start.allowedUsers,
+						allowedChannels: slack.start.allowedChannels,
+						agentId: identity.agentId,
+						accept: (message) => engine.acceptLocal(message),
+						about: () => `I am ${identity.agentId}, the ${profile.id} agent of this platform. I offer: ${profile.capabilities.map((capability) => `${capability.id}@${capability.version}`).join(", ")}.`,
+						status: threadState,
+						jobs,
+						approvals,
+						messagesPerHour: config.slack.messagesPerHour,
+						log,
+						metrics,
+					});
+					void channel.run(stop.signal).catch((error) => log("error", "slack_stopped", { error: String(error).slice(0, 160) }));
+				}
 				log("info", "threads_recovered", { messages: recovered, jobs: resumed.length });
 				// the domain's inbox is the safety net under the wakes: what came while the agent was down, or whose wake was lost, is taken in here
 				const sweep = (): void => void engine.sweep().then((taken) => (taken > 0 ? log("info", "inbox_swept", { messages: taken }) : undefined)).catch((error) => log("warn", "inbox_sweep_failed", { error: String(error).slice(0, 160) }));
@@ -478,7 +510,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			}
 			const runtimeLife = keepRuntimeAlive({ client, meta: { role: profile.id, ...(env.AGENT_VERSION ? { version: env.AGENT_VERSION } : {}) }, signal: stop.signal, log });
 			await runtimeLife.registered;
-			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, threads: threadSettings.enabled, events: eventsConfig.enabled, telegram: Boolean(telegram) });
+			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, threads: threadSettings.enabled, events: eventsConfig.enabled, telegram: Boolean(telegram), slack: Boolean(slack) });
 			await new Promise<void>((resolve) => stop.signal.addEventListener("abort", () => resolve(), { once: true }));
 			// running jobs are left as they are (they are written to disk and taken up again at the next start); give them a moment to stop cleanly
 			await Promise.race([jobs.idle(), new Promise<void>((resolve) => setTimeout(resolve, 20_000))]);

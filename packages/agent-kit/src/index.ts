@@ -14,6 +14,7 @@ export * from "./ledger.ts";
 export * from "./log.ts";
 export * from "./metrics.ts";
 export * from "./observe/index.ts";
+export * from "./slack/index.ts";
 export * from "./telegram/index.ts";
 export * from "./timers/index.ts";
 export * from "./threads/index.ts";
