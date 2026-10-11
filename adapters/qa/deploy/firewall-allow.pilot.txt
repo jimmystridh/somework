@@ -34,3 +34,6 @@ crates.io
 static.crates.io
 index.crates.io
 # docs, language package feeds
+# the agent's own Telegram bot (Bot API; Telegram publishes its ranges at core.telegram.org/resources/cidr.txt)
+api.telegram.org
+149.154.160.0/20

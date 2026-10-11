@@ -31,3 +31,6 @@ index.crates.io
 172.66.0.0/16
 162.159.140.0/22
 objects.githubusercontent.com
+# the agent's own Telegram bot (Bot API; Telegram publishes its ranges at core.telegram.org/resources/cidr.txt)
+api.telegram.org
+149.154.160.0/20
