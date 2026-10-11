@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import type { DomainApi, RuleSummary } from "./domain.ts";
 import { call, type CallOptions, type CallResult } from "./http.ts";
-import { PolicyError } from "./policy.ts";
+import { PolicyError, type ApprovalGrants } from "./policy.ts";
 import { clip, defang } from "./redact.ts";
 import type { HostControls } from "./host.ts";
 import type { ManagerState, SaveState } from "./state.ts";
@@ -21,7 +21,9 @@ export type ControlAction =
 	| { action: "pause_rule" | "resume_rule"; rule: string }
 	| { action: "pause_source" | "resume_source"; source: string }
 	| { action: "kill_handler" | "unkill_handler"; agent: string; handler: string; reason?: string }
-	| { action: "raise_budget"; agent: string; pool: BudgetPool; tokens: number; reason?: string };
+	| { action: "raise_budget"; agent: string; pool: BudgetPool; tokens: number; reason?: string }
+	/** Made by the approval gate only (`parseAction` never returns it): the owner lets one exact tool call of the model go ahead. */
+	| { action: "allow_call"; key: string; summary: string };
 
 export const BUDGET_POOLS = ["tasks", "events", "chat"] as const;
 export type BudgetPool = (typeof BUDGET_POOLS)[number];
@@ -78,6 +80,7 @@ export const describeAction = (a: ControlAction): string => {
 		case "kill_handler": return `switch off ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
 		case "raise_budget": return `give ${a.agent} ${a.tokens} more ${a.pool} tokens for today${a.reason ? ` (${a.reason})` : ""}`;
 		case "unkill_handler": return `switch on ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
+		case "allow_call": return `let one tool call go ahead: ${a.summary}`;
 	}
 };
 
@@ -155,6 +158,8 @@ export interface ControlsDeps {
 	host?: HostControls;
 	/** For tests: how long to wait for the hub to answer after it was started. */
 	hubWaitMs?: number;
+	/** Where the owner's permission for one tool call is kept, and for how long it lasts. */
+	grants?: { store: ApprovalGrants; ttlMs: number };
 }
 
 /** Everything the owner can look at and switch off: rules in the domain, event sources in the hub, handlers in the agents. Creating a rule is deliberately not here. */
@@ -271,6 +276,13 @@ export class Controls {
 		if (reason) labels.budgetReason = reason;
 		await this.#deps.domain.sendMessage({ to: agent, text: `budget control: raise ${pool} by ${tokens} tokens for today`, labels });
 		return `Asked ${agent} to add ${tokens} tokens to its ${pool} pool for today. It confirms by message and the raise ends tomorrow; the pools are in somework_handlers.`;
+	}
+
+	allowCall(key: string): string {
+		const grants = this.#deps.grants;
+		if (!grants) throw new PolicyError(503, "not_configured", "tool call approvals are not configured");
+		grants.store.allow(key, grants.ttlMs);
+		return `Allowed: the model may repeat that exact call once within ${Math.round(grants.ttlMs / 60_000)} minutes.`;
 	}
 
 	// ---- everything at once ----------------------------------------------------------------------------------------
@@ -406,6 +418,7 @@ export class Controls {
 			case "kill_handler": return this.setHandler(action.agent, action.handler, true, action.reason);
 			case "unkill_handler": return this.setHandler(action.agent, action.handler, false);
 			case "raise_budget": return this.raiseBudget(action.agent, action.pool, action.tokens, action.reason);
+			case "allow_call": return this.allowCall(action.key);
 		}
 	}
 

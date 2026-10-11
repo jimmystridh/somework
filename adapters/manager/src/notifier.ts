@@ -20,14 +20,22 @@ export class Notifications implements Notifier {
 	}
 }
 
-/** Messages other agents send to the Manager are forwarded; the domain's own status messages (type `task.*`) are not shown. */
+/** Takes the messages that carry a setup document before they can become chat (ADR 0004). */
+export interface SetupMessages {
+	claims(message: InboundMessage): boolean;
+	handle(message: InboundMessage): Promise<void>;
+}
+
+/** Messages other agents send to the Manager are forwarded; the domain's own status messages (type `task.*`) are not shown, and neither are setup documents. */
 export class InboxReader {
 	readonly #domain: DomainApi;
 	readonly #notifications: Notifications;
+	readonly #setup: SetupMessages | undefined;
 
-	constructor(domain: DomainApi, notifications: Notifications) {
+	constructor(domain: DomainApi, notifications: Notifications, setup?: SetupMessages) {
 		this.#domain = domain;
 		this.#notifications = notifications;
+		this.#setup = setup;
 	}
 
 	/** Forwards what is new and marks everything read. */
@@ -36,7 +44,8 @@ export class InboxReader {
 		const handled: string[] = [];
 		try {
 			for (const message of messages) {
-				if (!message.type.startsWith("task.") && message.from !== this.#domain.selfId) await this.#notifications.emitMessage(message);
+				if (this.#setup?.claims(message) && message.from !== this.#domain.selfId) await this.#setup.handle(message);
+				else if (!message.type.startsWith("task.") && message.from !== this.#domain.selfId) await this.#notifications.emitMessage(message);
 				handled.push(message.messageId);
 			}
 		} finally {

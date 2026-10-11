@@ -1,7 +1,7 @@
 # SomeWork Manager
 
 The Manager is the agent you talk to from Telegram. It is the old `pi-demo` Telegram bridge grown up: the same private pairing, the
-same Pi (coding-agent 0.87.1) container as its brain, plus its own SomeWork identity `agent/manager` and a small **gateway** through
+same Pi (coding-agent 1.1.0; the pilot ran 0.87.1, see `deploy/README.md`, "Upgrading Pi") container as its brain, plus its own SomeWork identity `agent/manager` and a small **gateway** through
 which Pi can find and talk to the other agents. It works with them the way a colleague would: it asks in a message and the agent decides
 what to do with it. There are no tasks to submit, follow or cancel (ADR 0003).
 
@@ -71,6 +71,39 @@ questions and switches that wait for you.
   `/kill <agent> <handler|all> [reason]` `/unkill <agent> <handler|all>`. The owner's commands run at once; the model's
   `somework_control` only creates a request the owner confirms with a button. Creating or deleting rules is not possible from here.
 
+## Setup from Operations (ADR 0004)
+The Manager is not a kit agent: it runs the stock Pi CLI. It takes the same setup documents as the kit's agents (`packages/agent-kit/src/setup/contract.ts` is the
+wire contract; the Manager reads that one file) and applies them to Pi. A setup override reaches the Manager only from the service principal `operations`:
+
+* **Intake** (`src/setup/intake.ts`). A message that carries the label `setup.kind` is taken by the inbox reader before it can become chat: it is never a
+  conversation, never shown to the owner and never visible to the model (`somework_inbox` leaves such messages out). The sender is checked with `isOperations` and must belong to the Manager's own domain;
+  anyone else's is ignored and logged (`setup_ignored`) without an answer. For Operations the artifact is downloaded (at most 2 MiB), its SHA-256 is compared with
+  `setup.sha256`, it is parsed with `parseOverride` / `parseLimits`, a revision that is not newer than the applied one is acknowledged and ignored, a new one is
+  applied, and a `chat.notice` goes back to the sender with `setup.ack` (the revision), `setup.status` (`applied` or `rejected`, the reason in the text) and
+  `setup.kind`, idempotency key `setup-ack:<agent>:<kind>:<revision>:<status>`. A rejected document leaves the earlier setup in place and is reported in `setup.rejected`.
+* **Kept** in `<config dir>/setup/` (`override.json`, `limits.json`, `status.json`, mode 0600, no secret in them) and put to work again at every start; a saved
+  setup that cannot be applied any more (a secret removed from the host) is reported rejected and Pi starts without it.
+* **Status.** `GET /profile` on the Manager's own endpoint (`MANAGER_HEALTH_PORT`, default 7080; `src/health.ts`) returns the fields of the kit's description that
+  apply to the Manager (role, agent id, model, built-in prompt hash and size, approval patterns, skills, MCP servers, Pi version, `hash`) and `setup` as the kit reports
+  it (`{ override: {revision, hash, appliedAt} | null, limits: {revision, appliedAt} | null, rejected? }`). No secrets and no operator text, only sizes. `GET /live` answers 200.
+
+What a document changes, and when it takes effect:
+
+| Part of the document | Where it goes | Takes effect |
+| --- | --- | --- |
+| `instructions` | a second `--append-system-prompt` after the built-in prompt (the built-in one, `src/prompt.ts`, stays read-only) | next Pi start |
+| `model` | `--model provider/id`; a reset puts back the model Pi ran with before the first override | next Pi start |
+| `mcp` | `~/.pi/agent/mcp.json` (`mcpServers` replaced as a whole, other keys kept); secrets only as `${NAME}` references that Pi expands, the names passed to the container as `-e NAME` from the Manager's environment; a document naming a secret this host lacks, referring to a variable it does not list, or using a `!command` value is rejected; local servers are downloaded over https, checked against the SHA-256, unpacked safely (no paths outside the folder, no links) into `~/.pi/agent/mcp-servers/<sha256>/` and run through `${LOCAL}` | next Pi start (Pi reads `mcp.json` at session start) |
+| `skills.library`, `skills.overlays` | skill folders `~/.pi/agent/skills/library/<name>/SKILL.md`; an overlay is a skill `overlay-<name>` that says it belongs to `<name>` (the Manager has no repository skill to change) | next Pi start |
+| `skills.repository` | nothing: the Manager has no repository skills | - |
+| `approvalPatterns`, MCP `approval` | the Manager's own policy (`ApprovalRules` in `src/policy.ts`), enforced by a `tool_call` gate in the Pi extension: a bash command that matches a pattern, or an MCP call of a server set to `ask` (or `writes` for a tool that is not read-only), is blocked until the owner confirms the exact call in Telegram (one use, ten minutes) | at once for the next call |
+| fleet limits | recorded and reported; the Manager has no per-run caps of its own, so nothing reads them yet | - |
+
+Pi 1.1.0 takes none of this through RPC (`/reload` is an interactive command, not an RPC one, and the addendum is an argument), so a new setup means a new Pi process:
+the Manager starts it again as soon as no run is going (`src/pi-process.ts`), never during a run; messages that arrive in those few seconds wait for the new process, and the
+session file carries the conversation over. If Pi does not come up with the new setup (a model that does not exist), it is started without the operator parts and the
+document is reported as rejected. MCP tools use Pi's default exposure (`codemode`): the model reaches them through its `codemode` and `tool_search` tools.
+
 ## Learning about messages
 `MANAGER_FEED=wake` (default) uses the SDK's wake source: NATS for messages when the domain offers it, an HTTP safety net, no long
 polls. `MANAGER_FEED=polling` skips NATS and uses short HTTP lookups. The feed only decides *when* to look; `InboxReader` decides what
@@ -80,7 +113,8 @@ is new (it marks everything read and forwards what other agents wrote), so chang
 `src/` bridge (Telegram commands, Pi turns), `service` (all decisions), `gateway` (HTTP front for Pi), `notifier` (inbox, feeds),
 `domain` (REST adapter), `chat` (the owner's conversations and agents' approval questions), `policy`, `event-intake` (alerts, job-finished lines,
 digest), `controls` (rules, hub, handlers), `rate`, `http`, `redact`, `rpc`, `telemetry`, `state`, `config`, `main`. `extension/` the Pi tools.
-`deploy/` systemd unit, compose override, env example, rollout. `test/` 89 tests, including an end-to-end run against a real domain
+`src/setup/` (the contract's re-export, intake, applier, store, `mcp.json`, downloads and archives, skills, profile), `pi-process` (the restartable Pi child),
+`health` (`/profile`), `prompt`, `pi-version`. `deploy/` systemd unit, compose override, env example, rollout, `verify-pi-1.1.0.sh`. `test/` 140 tests, including an end-to-end run against a real domain
 from `sdk/typescript/test/harness.ts`; Telegram and Pi are faked, no model or network calls.
 
 ```bash

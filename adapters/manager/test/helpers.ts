@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { SomeWorkError } from "@somework/sdk";
-import type { DomainApi, FeedEvent, InboundMessage, RuleSummary, Subscription } from "../src/domain.ts";
+import type { DomainApi, FeedEvent, InboundMessage, OutgoingMessage, RuleSummary, Subscription } from "../src/domain.ts";
 import type { PiRpc } from "../src/rpc.ts";
 
 export const code = "a".repeat(32);
@@ -57,6 +57,7 @@ export interface FakeCapability {
 /** A domain that remembers what was asked of it, so tests can assert what reached it. */
 export class FakeDomain implements DomainApi {
 	selfId = "agent/manager";
+	domainId = "development";
 	capabilities: Record<string, FakeCapability> = { "code.review@2": { description: "reviews a branch" } };
 	sentMessages: any[] = [];
 	unread: InboundMessage[] = [];
@@ -82,9 +83,18 @@ export class FakeDomain implements DomainApi {
 		return { id, version, ...found };
 	}
 
-	async sendMessage(message: any) {
+	artifacts: Record<string, Buffer> = {};
+
+	async sendMessage(message: OutgoingMessage) {
 		this.sentMessages.push(message);
 		return { messageId: "msg_1" };
+	}
+
+	async downloadArtifact(ref: { artifactId: string }, maxBytes: number) {
+		const bytes = this.artifacts[ref.artifactId];
+		if (!bytes) throw new SomeWorkError(404, "not_found", "no such artifact");
+		if (bytes.length > maxBytes) throw new SomeWorkError(413, "validation_failed", `the artifact is larger than ${maxBytes} bytes`);
+		return bytes;
 	}
 
 	async unreadMessages() {

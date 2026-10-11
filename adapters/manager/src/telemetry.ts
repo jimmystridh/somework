@@ -1,5 +1,6 @@
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { PI_VERSION } from "./pi-version.ts";
 import type { PiRpc } from "./rpc.ts";
 
 const ACTIVITY_EVENTS = new Set(["agent_start", "agent_settled", "message_end", "tool_execution_start", "tool_execution_end"]);
@@ -14,7 +15,7 @@ export function telemetryRecord(id: string, state: any, stats: any, lastActivity
 		provider: state.model?.provider ?? null,
 		thinking: state.thinkingLevel ?? null,
 		sessionId: state.sessionId ?? null,
-		version: "0.87.1",
+		version: PI_VERSION,
 		lastActivityAt: lastActivityAt ?? null,
 		messages: finite(stats?.totalMessages),
 		tokens: finite(stats?.tokens?.total),

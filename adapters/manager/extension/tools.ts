@@ -137,3 +137,25 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 		},
 	});
 }
+
+export interface GateHost {
+	on(event: "tool_call", handler: (event: { toolName: string; input: Record<string, unknown> }) => Promise<{ block: true; reason: string } | undefined>): void;
+	getAllTools(): { name: string; annotations?: { readOnlyHint?: boolean } }[];
+}
+
+/**
+ * Asks the gateway before a bash command or an MCP tool call runs; the gateway applies the approval rules Operations set and, for a call
+ * they cover, asks the owner. An unreachable gateway blocks the call (Pi blocks a tool whose handler fails).
+ */
+export function registerApprovalGate(pi: GateHost, env: Env, fetchApi: typeof fetch = fetch): void {
+	pi.on("tool_call", async (event) => {
+		const isMcp = event.toolName.startsWith("mcp__");
+		if (event.toolName !== "bash" && !isMcp) return undefined;
+		const body = isMcp
+			? { kind: "mcp", tool: event.toolName, input: JSON.stringify(event.input ?? {}), readOnly: pi.getAllTools().find((tool) => tool.name === event.toolName)?.annotations?.readOnlyHint === true }
+			: { kind: "bash", command: String(event.input?.command ?? "") };
+		const answer = JSON.parse(await callGateway(env, fetchApi, "POST", "/v1/approval/check", body));
+		if (answer.allowed === true) return undefined;
+		return { block: true, reason: String(answer.note ?? answer.error?.message ?? "The Manager did not allow this call.") };
+	});
+}

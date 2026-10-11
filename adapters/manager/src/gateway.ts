@@ -79,6 +79,7 @@ export function createGateway(options: GatewayOptions): Server {
 		if (method === "GET" && path === "/v1/control/sources") return service.sources();
 		if (method === "GET" && path === "/v1/control/handlers") return service.handlers(url.searchParams.get("agent") ?? "");
 		if (method === "POST" && path === "/v1/control/request") return service.controlRequest(await readJson(request));
+		if (method === "POST" && path === "/v1/approval/check") return service.checkCall(await readJson(request));
 		throw new PolicyError(404, "not_found", "no such route");
 	}
 

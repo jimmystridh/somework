@@ -16,6 +16,10 @@ export interface Config {
 	telemetryPath: string;
 	events: EventIntakeConfig & { pollMs: number };
 	controls: ControlsConfig;
+	/** What Operations may change (ADR 0004): where the Manager keeps its setup and where Pi finds the result. */
+	setup: { dir: string; piAgentDir: string; piAgentDirInContainer: string; os: string };
+	/** The Manager's own HTTP endpoint for Operations (`/profile`); port 0 switches it off. */
+	health: { bind: string; port: number };
 	/** Path of the JSON file that names the stacks and the Windows machines /suspend and /unsuspend stop and start (MANAGER_HOST_CONTROL). */
 	hostControl?: string;
 }
@@ -52,6 +56,8 @@ export function parseAgentHealth(raw: string | undefined): Record<string, string
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	const configDir = env.MANAGER_CONFIG_DIR ?? join(homedir(), ".config", "agent-cluster-telegram");
 	const port = number(env, "MANAGER_GATEWAY_PORT", 7079);
+	const healthPort = env.MANAGER_HEALTH_PORT === undefined || env.MANAGER_HEALTH_PORT === "" ? 7080 : Number(env.MANAGER_HEALTH_PORT);
+	if (!Number.isInteger(healthPort) || healthPort < 0 || healthPort > 65_535) throw new Error("MANAGER_HEALTH_PORT must be a port number, or 0 to switch the endpoint off");
 	return {
 		somework: { url: need(env, "MANAGER_SOMEWORK_URL"), keyFile: need(env, "MANAGER_KEY_FILE"), caFile: env.MANAGER_CA_FILE },
 		configDir,
@@ -81,6 +87,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			timeZone: env.MANAGER_QUIET_TZ ?? defaultEventIntake.timeZone,
 			...(env.MANAGER_QUIET_HOURS ? { quietHours: env.MANAGER_QUIET_HOURS } : {}),
 		},
+		setup: {
+			dir: env.MANAGER_SETUP_DIR ?? join(configDir, "setup"),
+			piAgentDir: env.MANAGER_PI_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+			piAgentDirInContainer: env.MANAGER_PI_AGENT_DIR_IN_CONTAINER ?? "~/.pi/agent",
+			os: env.MANAGER_PI_OS ?? "linux",
+		},
+		health: { bind: env.MANAGER_HEALTH_BIND ?? "0.0.0.0", port: healthPort },
 		...(env.MANAGER_HOST_CONTROL ? { hostControl: env.MANAGER_HOST_CONTROL } : {}),
 		controls: {
 			hubUrl: env.MANAGER_HUB_URL,

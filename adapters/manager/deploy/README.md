@@ -53,9 +53,10 @@ Optional hub and handler controls, in `manager.env`: `MANAGER_HUB_URL` (the hub'
 ```bash
 mkdir -p ~/somework-manager
 # from the repository root on the workstation: the workspace skeleton (root manifest, the one lockfile, .npmrc, the other workspaces'
-# manifests: `npm ci` checks the lockfile against all of them) plus the two packages the Manager runs
+# manifests: `npm ci` checks the lockfile against all of them) plus the two packages the Manager runs, and the one file of the kit it reads
+# (the wire contract of setup documents, `src/setup/contract.ts`; it imports nothing but node:crypto)
 rsync -aR --exclude node_modules package.json package-lock.json .npmrc sdk/typescript adapters/manager \
-  packages/agent-kit/package.json adapters/pi/package.json  agent-host:somework-manager/
+  packages/agent-kit/package.json packages/agent-kit/src/setup/contract.ts adapters/pi/package.json  agent-host:somework-manager/
 # on VM102: the distro Node there is built without TypeScript support (`process.features.typescript` is false), so install the
 # official tarball next to the code and use it for npm and for the unit:
 #   curl -fsSLO https://nodejs.org/dist/v22.22.1/node-v22.22.1-linux-x64.tar.xz   # verify against SHASUMS256.txt, then
@@ -91,6 +92,45 @@ Check, in this order:
    `/ask qa verify ABC-123`): the result arrives in the same conversation when the job ends, and a job started by an event or another agent
    produces the one-line "finished" message. A step that needs approval produces a question with `/chatapprove <id>` and `/chatdeny <id>`.
 4. `docker inspect pi-demo` must show no SomeWork key mounted; `ls ~/.pi/agent` must not contain `manager.key.json` or the gateway token.
+
+## 4. Setup from Operations (ADR 0004)
+Operations (the fleet console) sends the Manager its setup the way it sends it to every agent: a signed `chat.notice` from the service
+principal `operations` with the document as an artifact. The Manager's key needs one more permission, `artifact.read` (to download the document),
+next to `message.read` (it receives the message) and `message.send` (it answers with the acknowledgement; check that the domain lets it address the
+service principal `operations`). Add it with the same `PATCH` as in section 1, which replaces the whole set:
+`{"permissions": {"actions": ["catalog.read","message.send","message.read","artifact.read","ops.read","rules.control"], "classificationMax": "internal"}}`.
+Check, once Operations sends its first document:
+1. `journalctl --user -u pi-manager.service | grep setup_` shows `setup_applied {"kind":"override","revision":N}` (or `setup_rejected` with the
+   reason, or `setup_ignored` for a sender other than `operations`).
+2. `curl -s http://127.0.0.1:7080/profile` shows `setup.override.revision` equal to N. Operations polls this URL (`MANAGER_HEALTH_PORT`, default 7080,
+   bound to `MANAGER_HEALTH_BIND`, default all interfaces; nothing secret is in it). It needs the same kind of firewall rule as the agents' health ports:
+   `sudo ufw allow from <Operations host> to any port 7080 proto tcp comment 'Manager profile: Operations only'`.
+3. `ls ~/.pi/agent/mcp.json ~/.pi/agent/skills/library` shows what the document put there.
+
+The documents are kept in `~/.config/agent-cluster-telegram/setup/` (`override.json`, `limits.json`, `status.json`, mode 0600, no secret in any of
+them) and are put to work again at every start. MCP secrets are environment variables of the Manager's process: add the variables an operator may
+name to `manager.env` (a document that names one that is missing is rejected, and says which). They reach Pi's container by name
+(`docker compose run -e NAME`); the values are never written to `mcp.json`, which holds `${NAME}` references that Pi expands. Because Pi expands them
+in its own process, the model's shell in the container can read them too: give an MCP server a token that is scoped to what the Manager may do.
+
+## Upgrading Pi to 1.1.0 (before the Manager can take MCP servers)
+The Manager's setup needs Pi 1.1.0 (the first release with an MCP client; the pilot ran 0.87.1). The Pi version of the `pi-demo` container is not pinned
+in this repository: it comes from the image built from `~/agent-cluster-pi` on VM102 (`compose.pi.yaml`, outside the repository). Pin it there to
+`@earendil-works/pi-coding-agent@1.1.0` (the Dockerfile's install line or the compose build argument it uses) and rebuild; the repository records the
+expected release in `src/pi-version.ts`.
+
+Test the upgrade before cutting over, without touching `pi-demo` or `~/.pi/agent` (the script uses a scratch agent folder):
+```bash
+# on VM102, with the new Pi installed next to the old one (for example npm i --prefix ~/pi-1.1.0 @earendil-works/pi-coding-agent@1.1.0)
+PI=~/pi-1.1.0/node_modules/.bin/pi ~/somework-manager/adapters/manager/deploy/verify-pi-1.1.0.sh
+```
+It checks `pi --version` is 1.1.0 and that `pi mcp list` connects to a harmless stdio MCP server from an `mcp.json` and lists its tool. Then:
+```bash
+docker compose -f ~/agent-cluster-pi/compose.pi.yaml build pi          # with the pin changed
+systemctl --user restart pi-manager.service                            # the unit starts the container from the new image
+```
+`/status` in Telegram shows the model; the Pi session (`state.sessionPath`) carries over. Roll back by pinning 0.87.1 again; the setup files stay
+valid but MCP servers and the `mcp.json` are then ignored by the old Pi.
 
 ## Rollback
 ```bash
