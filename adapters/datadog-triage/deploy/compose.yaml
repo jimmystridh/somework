@@ -85,6 +85,9 @@ services:
       CHAT_TOKEN_CAP: ${CHAT_TOKEN_CAP:-40000}               # tokens of one answer to a question
       CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-150000}  # tokens of one instruction
       CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-10}
+      # The agent's own Telegram bot (packages/agent-kit/README.md, "Telegram"). Off while no token file is mounted or TELEGRAM_ALLOWED_USER_IDS is empty.
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram-bot-token
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
       HEALTH_PORT: "8081"
     volumes:
       - ${DATADOG_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
@@ -93,6 +96,7 @@ services:
       - ./secrets/pi:/run/secrets/pi                         # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./secrets/datadog-keys.json:/run/secrets/datadog-keys.json:ro   # 0600, uid 10001; {"apiKey": "...", "appKey": "..."}
+      - ${TELEGRAM_TOKEN_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro   # telegram: ./secrets/telegram-bot-token (the BotFather token, readable by the container user); /dev/null = no bot
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
     ports: ["${HEALTH_BIND:-127.0.0.1}:8084:8081"]      # health, handlers and token pools (8081 developer, 8082 reviewer, 8083 Aikido fixer, on the same host)

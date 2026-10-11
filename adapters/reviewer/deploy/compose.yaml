@@ -91,6 +91,9 @@ services:
       REVIEW_REPOSITORIES: ${REVIEW_REPOSITORIES:-}              # events: comma separated owner/name the pull request handler reviews; empty = every repository the events come from
       REVIEW_CAP_PER_DAY: ${REVIEW_CAP_PER_DAY:-100}             # events: reviews the handler starts per day (a flood guard)
       REVIEWER_RESEED_HANDLER: ${REVIEWER_RESEED_HANDLER:-}      # 1 = save the handler with the current settings as a new version at start
+      # The agent's own Telegram bot (packages/agent-kit/README.md, "Telegram"). Off while no token file is mounted or TELEGRAM_ALLOWED_USER_IDS is empty.
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram-bot-token
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
       HEALTH_PORT: "8081"
     volumes:
       - ${REVIEWER_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
@@ -102,6 +105,7 @@ services:
       - ${GRAFANA_TOKEN_HOST:-/dev/null}:/run/secrets/grafana-token:ro      # observe: ./secrets/grafana-token (the Viewer service account's token); /dev/null while observe is off
       - ${GRAFANA_CA_HOST:-/dev/null}:/run/somework/grafana-ca.pem:ro      # observe: ./config/grafana-ca.pem
       - ./skills-overlay:/run/skills-overlay:ro             # <skill>.md overlays (only used with SKILLS_OVERLAY_DIR)
+      - ${TELEGRAM_TOKEN_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro   # telegram: ./secrets/telegram-bot-token (the BotFather token, readable by the container user); /dev/null = no bot
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
     ports: ["${HEALTH_BIND:-127.0.0.1}:8082:8081"]      # health, handlers and token pools (8081 belongs to the developer agent on the same host)
