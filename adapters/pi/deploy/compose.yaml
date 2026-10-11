@@ -88,6 +88,11 @@ services:
       # The agent's own Telegram bot (packages/agent-kit/README.md, "Telegram"). Off while no token file is mounted or TELEGRAM_ALLOWED_USER_IDS is empty.
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram-bot-token
       TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      # The agent's own Slack app in Socket Mode (packages/agent-kit/README.md, "Slack"). Off while either token file is empty or SLACK_ALLOWED_USER_IDS is empty.
+      SLACK_BOT_TOKEN_FILE: /run/secrets/slack-bot-token
+      SLACK_APP_TOKEN_FILE: /run/secrets/slack-app-token
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS:-}
       HEALTH_PORT: "8081"
     volumes:
       - ${AGENT_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
@@ -100,6 +105,8 @@ services:
       - ${GRAFANA_TOKEN_HOST:-/dev/null}:/run/secrets/grafana-token:ro      # observe: ./secrets/grafana-token (the Viewer service account's token); /dev/null while observe is off
       - ${GRAFANA_CA_HOST:-/dev/null}:/run/somework/grafana-ca.pem:ro      # observe: ./config/grafana-ca.pem
       - ${TELEGRAM_TOKEN_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro   # telegram: ./secrets/telegram-bot-token (the BotFather token, readable by the container user); /dev/null = no bot
+      - ${SLACK_BOT_TOKEN_HOST:-/dev/null}:/run/secrets/slack-bot-token:ro   # slack: ./secrets/slack-bot-token (the xoxb- bot token, readable by the container user); /dev/null = no Slack app
+      - ${SLACK_APP_TOKEN_HOST:-/dev/null}:/run/secrets/slack-app-token:ro   # slack: ./secrets/slack-app-token (the xapp- app-level token with connections:write); /dev/null = no Slack app
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
     ports: ["${HEALTH_BIND:-127.0.0.1}:8081:8081"]      # health, handlers and token pools; HEALTH_BIND is the VM address the dashboard reads (restrict it in DOCKER-USER)
