@@ -34,6 +34,7 @@ ops admin --config /etc/somework/somework.toml register-card --card /cards/aikid
 | `secrets/pi/auth.json` | the model login (below), uid 10001; the directory must be writable because an OAuth refresh rewrites the file |
 | `secrets/git-token` | the code-host token (below) |
 | `secrets/aikido-client.json` | the Aikido client pair (below), mode 0440 |
+| `bin/aikido`, `bin/aikido-wrapper`, `bin/aikido.version`, `secrets/aikido-sandbox-client.json` | only for the optional `aikido` command in the sandbox (section 4a) |
 | `.env` | from `.env.example` |
 
 **The model login is this role's own.** Do the device-code login for this agent separately and never copy another agent's `auth.json` (an OAuth refresh token is rewritten on use, so two services holding the same one invalidate each other). The owner approves the code at the provider's device page.
@@ -51,7 +52,7 @@ cd .. && rm -r login                                      # no copy stays on the
 ```json
 { "clientId": "AIK_CLIENT_...", "clientSecret": "..." }
 ```
-Mode 0440, owned by uid 10001 (`install -o 10001 -g 10001 -m 0440`). The harness reads it; the sandbox never mounts it. The access token is kept in memory only. Keep a copy of the pair in the password manager. A secret that was ever pasted into a chat or a repository is burnt: create a new client.
+Mode 0440, owned by uid 10001 (`install -o 10001 -g 10001 -m 0440`). The harness reads it; the sandbox never mounts it (the optional `aikido` command of section 4a uses a second, separate client file). The access token is kept in memory only. Keep a copy of the pair in the password manager. A secret that was ever pasted into a chat or a repository is burnt: create a new client.
 
 ## 4. Build and start
 ```bash
@@ -69,7 +70,68 @@ curl -s http://127.0.0.1:8083/status                           # handlers: [{nam
 ```
 The image is built from the npm workspace's one lockfile with only its own, the agent kit's and the SDK's manifests; the build fails if the service cannot import every module it runs or the handler template does not render and parse. When building on the host, sync `package.json package-lock.json .npmrc sdk packages adapters/aikido-fixer` (without `node_modules`) to the build directory first.
 
-The egress proxy admits `EGRESS_ALLOW` (default: the code host, its content hosts and the npm, yarn and NuGet registries). Add the registries the repository's code needs, nothing broader. The model API and Aikido are reached by the harness over `outside`, never by the sandbox.
+The egress proxy admits `EGRESS_ALLOW` (default: the code host, its content hosts and the npm, yarn and NuGet registries). Add the registries the repository's code needs, nothing broader. The model API and Aikido are reached by the harness over `outside`; the sandbox reaches Aikido only when section 4a is switched on.
+
+## 4a. The `aikido` command in the sandbox (optional, off by default)
+The model's shell can run the Aikido CLI (`aikido issues`, `aikido issue <id>`, `aikido issue-counts`, `aikido repos`, `aikido issue-ignore <id>`, ...), which the two harness tools (`aikido_issue`, `aikido_lookup`: one issue by id, read only) cannot do. **Writes are allowed without an approval step: that was the owner's decision.**
+
+**What this changes, plainly.**
+* **The model's shell can read an Aikido client secret.** The wrapper reads it from a mounted file and puts it in the environment of the CLI it starts, but the wrapper runs as the same user as the model's commands, so `cat /run/secrets/aikido-client.json` or `/proc/<pid>/environ` work too. No wrapper, file mode or mount can prevent that. So can anything else that runs in the sandbox: a dependency's install script, the repository's tests, a build step (the sandbox runs the repository's code, README "Decisions and limits").
+* **Whoever controls what the model reads controls what it may do with that client.** Aikido issue text, package names and pull request feedback are untrusted input, and a prompt injection can now ask the model to ignore or unignore issues, or call `aikido api post|put|delete`, with nobody to approve. The blast radius is what the client may do in Aikido: give it the least scopes (issues, read and write; nothing for users, teams, clouds or reports unless wanted).
+* **The client is its own.** It is not the harness's `secrets/aikido-client.json` (read-only, never mounted in the sandbox). Revoking or rotating one does not touch the other, and a leak of the sandbox's file does not give anyone the harness's.
+* **Network.** The sandbox stays on the internal network with no route out. Its commands already carry `HTTPS_PROXY` (the egress proxy), and `AIKIDO_EGRESS_HOSTS` adds exactly the Aikido hosts to the proxy's allow-list: `app.aikido.dev` (the API for `eu`, and the token endpoint for every region) and, for the other regions, `app.us.aikido.dev` or `app.me.aikido.dev`. The allow-list is per stack, not per process: every process in the sandbox can reach those hosts, not only the CLI. No wildcard, nothing else changes.
+* **No output redaction.** The kit redacts logs and the service's own commands, but has no redactor for what the model's `bash` tool prints, so a secret the model prints is in its transcript (the state volume's `pi.sqlite`). The wrapper never prints it.
+* **Reading the audit trail.** `aikido activity-log` in a shell with the credentials shows what that client did.
+
+**The binary is built for the sandbox's glibc, by hand.** The published release asset (`aikido-cli-linux-amd64.tar.gz` of v0.1.2) is linked against glibc 2.38/2.39 and does **not** run in `somework-pi-sandbox`, which is Debian 12 (glibc 2.36). A binary runs where the glibc is at least the one it was linked against, so build it on the sandbox's own base (Debian 12) in a container; nothing is added to any image, and CI is not involved.
+```bash
+build=$(mktemp -d) && mkdir -p "$build/src" && cd "$build"
+gh repo clone Spiris-Innovation-Tech-Dev/aikido-tools-rs repo       # any machine with Docker and access to the repository
+git -C repo archive v0.1.2 | tar -x -C src
+docker run --rm -v "$PWD/src:/src" -w /src rust:1-bookworm cargo build --release -p aikido-cli
+sha256sum src/target/release/aikido                                 # record it
+# the binary may only need glibc up to what the sandbox has (2.36 or lower):
+objdump -T src/target/release/aikido | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -n 1
+```
+Place the files on the agent host (the stack directory, `./` below), then check the binary starts inside the sandbox's own image:
+```bash
+install -d -m 0755 bin
+sudo install -o root -g root -m 0755 "$build/src/target/release/aikido" bin/aikido
+sudo install -o root -g root -m 0755 <repo>/adapters/aikido-fixer/sandbox/aikido-wrapper.cjs bin/aikido-wrapper
+printf 'aikido-tools-rs v0.1.2 built %s in rust:1-bookworm, sha256 %s\n' "$(date -u +%F)" "$(sha256sum bin/aikido | cut -d' ' -f1)" | tee bin/aikido.version
+docker run --rm --entrypoint /opt/aikido/aikido -v "$PWD/bin/aikido:/opt/aikido/aikido:ro" somework-pi-sandbox:<SANDBOX_VERSION> --help | head -n 3
+```
+CI rolls only `compose.yaml`, so the two files in `bin/` are not updated by a deployment: after a change of `sandbox/aikido-wrapper.cjs` in the repository, copy it again (compare with `sha256sum`).
+
+**The client.** In the Aikido workspace create a client for the sandbox, with the least scopes (above), and write its file (`region` is `eu`, `us` or `me`, and must match the hosts below; `workspace` is only needed if the CLI is to select a configured alias and is normally left out):
+```json
+{ "clientId": "AIK_CLIENT_...", "clientSecret": "...", "region": "eu" }
+```
+```bash
+sudo install -o 10001 -g 10010 -m 0440 aikido-sandbox-client.json secrets/aikido-sandbox-client.json && shred -u aikido-sandbox-client.json
+```
+Group 10010 is the group the sandbox already shares with the harness for its token, so the sandbox user can read it.
+
+**Switch it on** (after the deployment that brought these compose variables, or with the repository's `compose.yaml` copied by hand), in `.env`:
+```
+AIKIDO_SANDBOX_CLI=1
+AIKIDO_CLI_HOST=./bin/aikido
+AIKIDO_CLI_WRAPPER_HOST=./bin/aikido-wrapper
+AIKIDO_SANDBOX_CLIENT_HOST=./secrets/aikido-sandbox-client.json
+AIKIDO_EGRESS_HOSTS=app.aikido.dev
+```
+For region `us` the last line is `AIKIDO_EGRESS_HOSTS=app.aikido.dev,app.us.aikido.dev` and for `me` it is `AIKIDO_EGRESS_HOSTS=app.aikido.dev,app.me.aikido.dev`. If the host's `.env` sets `EGRESS_ALLOW` itself, leave it: the Aikido hosts are added to whatever list is in force. Then `docker compose up -d` when no fix is running (it recreates the sandbox, the egress proxy and the agent). `AIKIDO_SANDBOX_CLI=1` is what tells the model the command exists (the prompt and the conversation instructions); without the mounts the wrapper says plainly that the CLI is not installed.
+
+**Check it.**
+```bash
+docker compose exec sandbox aikido issue-counts          # the numbers of the workspace; "no Aikido credentials are mounted" or "not installed" says which file is missing
+docker compose exec sandbox sh -c 'env | grep -c "^AIKIDO"; echo $HTTPS_PROXY'   # 0 AIKIDO variables in a plain shell; the proxy address is set
+docker compose logs egress --tail 20                     # no egress_denied for app.aikido.dev
+docker compose exec sandbox curl -sS -m 5 -o /dev/null -w '%{http_code}\n' https://example.com   # 403 or a proxy error: still not reachable
+```
+Then in a conversation (as an instructor) ask the agent to list the open high issues and to explain what it ran.
+
+**Switch it off, or roll it back.** Remove the five lines (or set `AIKIDO_SANDBOX_CLI=0` and drop the mounts), `docker compose up -d`, and **revoke the sandbox's Aikido client in Aikido** (`rm` of the file does not make a copied secret safe); `bin/` can stay. Rotate the client whenever you suspect the sandbox's files were read by something that should not have.
 
 ## 5. Smoke test
 1. **Without credentials.** `PI_PROVIDER=faux` with `PI_FAUX_PLAN='["final:NO_FIX: smoke test"]'`, then ask the agent in a message to fix an issue (a real Aikido issue id, or `AIKIDO_ALLOW_BASE_OVERRIDE=1` with `AIKIDO_API_BASE` and `AIKIDO_OAUTH_URL` pointing at a stand-in):
@@ -95,7 +157,7 @@ Remove the rule (delete `rules/aikido-fixer.yaml`; the pipeline's `apply` delete
 
 ## Limits
 * The harness holds the credentials, so only audited code runs in the harness; repository code runs only in the sandbox.
-* The sandbox is a container, not a virtual machine: a fix may run install scripts and tests of the repository as a non-root user with no credentials and a narrow proxy, which is the same boundary as the developer role.
+* The sandbox is a container, not a virtual machine: a fix may run install scripts and tests of the repository as a non-root user with no credentials and a narrow proxy, which is the same boundary as the developer role. **With the optional `aikido` command (section 4a) that is no longer true of Aikido: the sandbox holds one Aikido client, and so does every dependency script that runs there.**
 * `agent/aikido-<issue>-<sha8>`, `-2` ... `-5` are the only branch names an issue can use for one base commit; a sixth different attempt fails `branch_exhausted`. Delete stale branches on the remote when a person has dealt with them.
 * The model's own counters in the sandbox can be reset by the model's tools; the host-side ledger cannot, which is why both exist.
 * Aikido's webhook payload is not known precisely yet; until the `aikido` mapping is refined from a real delivery, events without a numeric issue id are only recorded.
