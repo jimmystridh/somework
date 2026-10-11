@@ -5,7 +5,9 @@
 # - The harness holds the credentials: its OWN SomeWork key, its OWN model login, a code-host token that may push agent/* branches and open
 #   pull requests on ONE repository, and the Aikido client file. It reaches the domain, the model API, the code host and Aikido over
 #   `outside`. The git token is handed to a git command only while it runs (and only for GIT_TOKEN_HOSTS), never to the model's tools; the
-#   Aikido credentials never leave the harness (the model reads Aikido through a tool that runs there).
+#   harness's Aikido client never leaves the harness (the model reads Aikido through a tool that runs there). The one deliberate exception is
+#   the opt-in `aikido` command in the sandbox (off by default, see the sandbox service): then the model's shell can read a SECOND Aikido
+#   client, its own, from a mounted file, and reaches Aikido through the egress proxy only.
 # - The sandbox and egress images are the developer role's (`somework-pi-sandbox`, `somework-pi-egress`); only the harness image is this role's.
 # - The persistent mirror of the repository lives in the sandbox's workspace volume (`/workspace/.mirrors`), so every fix starts from a
 #   clone that is a few seconds old instead of a full download.
@@ -68,6 +70,7 @@ services:
       AIKIDO_REPOSITORY_URL: ${AIKIDO_REPOSITORY_URL:?clone URL of the one repository this agent fixes}
       AIKIDO_REGION: ${AIKIDO_REGION:-eu}                   # eu | us | me
       AIKIDO_CLIENT_FILE: /run/secrets/aikido-client.json
+      AIKIDO_SANDBOX_CLI: ${AIKIDO_SANDBOX_CLI:-0}           # 1 = tell the model the sandbox has the `aikido` command (mount it first, see the sandbox service)
       AIKIDO_MIN_SEVERITY: ${AIKIDO_MIN_SEVERITY:-high}     # low | medium | high | critical
       AIKIDO_FIX_TYPES: ${AIKIDO_FIX_TYPES:-open_source,sast,iac}
       AIKIDO_MAX_FILES: ${AIKIDO_MAX_FILES:-40}
@@ -159,6 +162,10 @@ services:
       NO_PROXY: sandbox,localhost,127.0.0.1
     volumes:
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      # The `aikido` command in the sandbox (README: "The aikido command in the sandbox"). All three are /dev/null, which keeps it off, until set in .env together with AIKIDO_SANDBOX_CLI=1 and AIKIDO_EGRESS_HOSTS.
+      - ${AIKIDO_CLI_HOST:-/dev/null}:/opt/aikido/aikido:ro                         # the CLI binary, built for this image's glibc and placed by hand: ./bin/aikido
+      - ${AIKIDO_CLI_WRAPPER_HOST:-/dev/null}:/usr/local/bin/aikido:ro             # sandbox/aikido-wrapper.cjs of this repository, placed by hand (mode 0755): reads the client file, starts the binary
+      - ${AIKIDO_SANDBOX_CLIENT_HOST:-/dev/null}:/run/secrets/aikido-client.json:ro   # the model's shell can read this: its own Aikido client, never the harness's; ./secrets/aikido-sandbox-client.json (0440, group 10010)
       - workspace:/workspace
     tmpfs: ["/tmp:size=512m,nosuid"]
     mem_limit: ${SANDBOX_MEMORY:-3g}
@@ -177,7 +184,8 @@ services:
     user: "10003:10003"
     networks: [sandbox-net, outside]
     environment:
-      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,*.npmjs.org,registry.yarnpkg.com,api.nuget.org,*.nuget.org,pypi.org,files.pythonhosted.org,crates.io,static.crates.io,index.crates.io,repo.maven.apache.org,rubygems.org,proxy.golang.org,sum.golang.org,osv.dev,api.osv.dev,nvd.nist.gov,services.nvd.nist.gov,www.cve.org,learn.microsoft.com,developer.mozilla.org,stackoverflow.com}
+      # AIKIDO_EGRESS_HOSTS (empty = none) is added to whatever list is in force, so the sandbox's `aikido` command can reach Aikido: app.aikido.dev (the API of eu and the token endpoint of every region), plus app.us.aikido.dev or app.me.aikido.dev for those regions
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,*.npmjs.org,registry.yarnpkg.com,api.nuget.org,*.nuget.org,pypi.org,files.pythonhosted.org,crates.io,static.crates.io,index.crates.io,repo.maven.apache.org,rubygems.org,proxy.golang.org,sum.golang.org,osv.dev,api.osv.dev,nvd.nist.gov,services.nvd.nist.gov,www.cve.org,learn.microsoft.com,developer.mozilla.org,stackoverflow.com}${AIKIDO_EGRESS_HOSTS:+,${AIKIDO_EGRESS_HOSTS}}
       EGRESS_PORTS: "443,80"
     mem_limit: 128m
     pids_limit: 64

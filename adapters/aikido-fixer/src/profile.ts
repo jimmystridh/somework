@@ -5,8 +5,8 @@ import { SYSTEM_PROMPT } from "./prompt.ts";
 /** A RegExp whose `test` asks a predicate: `approvalPolicy` only calls `test`, so a pattern can be a function of the command. */
 class CommandPattern extends RegExp {
 	readonly #matches: (command: string) => boolean;
-	constructor(matches: (command: string) => boolean) {
-		super("(?:)");
+	constructor(matches: (command: string) => boolean, source = "(?:)") {
+		super(source);
 		this.#matches = matches;
 	}
 	override test(command: string): boolean {
@@ -42,22 +42,31 @@ export function changesGit(command: string): boolean {
 	return false;
 }
 
+const PLAIN_AIKIDO_COMMAND = /^\s*aikido(?:\s[^;&|`$<>\\\n]*)?$/;
+
+/** A command that is nothing but one `aikido` invocation: no pipe, list, substitution, redirection or second line. Its arguments are data, whatever words they contain. */
+export const isPlainAikidoCommand = (command: string): boolean => PLAIN_AIKIDO_COMMAND.test(command);
+
+const exceptPlainAikido = ([pattern, reason]: [RegExp, string]): [RegExp, string] => [new CommandPattern((command) => !isPlainAikidoCommand(command) && pattern.test(command), pattern.source), reason];
+
 /**
  * The developer role's approval patterns plus everything that would change the branch or history behind the service's back. Nobody answers
- * for this agent, so a command that matches is refused (see `AutoDenyRuntime`), which is the intent.
+ * for this agent, so a command that matches is refused (see `AutoDenyRuntime`), which is the intent. The one exception is the sandbox's `aikido`
+ * command (reads and writes alike: the owner decided it needs no approval): a command that is only that invocation is never held up, however its
+ * arguments read. Anything around it (a pipe, a list, a substitution) is judged by the same patterns as any other command.
  */
-export const FIXER_APPROVAL_PATTERNS: [RegExp, string][] = [
+export const FIXER_APPROVAL_PATTERNS: [RegExp, string][] = ([
 	...DEFAULT_APPROVAL_PATTERNS,
 	[new CommandPattern(changesGit), "change the branch, the history or the git configuration (the service commits and pushes)"],
 	[/\b(gh|hub)\s+(?!(pr|issue|release)\s+(view|list|diff|checks|status)\b)(pr|repo|api|auth|issue|release|secret)\b/, "use the code host's command line (the service opens the pull request)"],
-];
+] as [RegExp, string][]).map(exceptPlainAikido);
 
 /** The event handler tools would let a prompt-injected run rewrite the gate that starts fix tasks: they need an approval, which is always refused here. */
 const HANDLER_WRITES = "change the agent's event handlers";
 
 /**
  * The Aikido fixer: fixes one reported issue in a fresh clone and opens a pull request (a draft when GIT_PR_DRAFT=1). The model gets the coding tools and one
- * read-only Aikido tool; bash goes through the patterns above. Events are on: the shipped handler turns Aikido events into `code.fix`
+ * read-only Aikido tool (and the sandbox's `aikido` command, when the deployment mounts it); bash goes through the patterns above. Events are on: the shipped handler turns Aikido events into `code.fix`
  * tasks for this same agent. The contract is `card.json`.
  */
 export const profile: AgentProfile = validateProfile({

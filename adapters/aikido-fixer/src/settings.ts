@@ -37,6 +37,8 @@ export interface FixerSettings {
 	apiMinIntervalMs: number;
 	apiBase?: string;
 	oauthUrl?: string;
+	/** The sandbox has the `aikido` command (`AIKIDO_SANDBOX_CLI=1`): the model is told so, and how to use it. Mounting it is the deployment's job (deploy/README.md). */
+	sandboxCli: boolean;
 	/** A JSON file of earlier attempts to seed the account the chat gives of what the agent did (`AIKIDO_LEDGER_IMPORT`). Imported once, harmlessly again. */
 	ledgerImport?: string;
 }
@@ -124,6 +126,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): FixerSetting
 		ciWatchMinutes: integer(env, "AIKIDO_CI_WATCH_MINUTES", 10),
 		followUpCapPerDay: integer(env, "AIKIDO_FOLLOWUP_CAP_PER_DAY", 10),
 		apiMinIntervalMs: integer(env, "AIKIDO_API_MIN_INTERVAL_MS", 1500),
+		sandboxCli: env.AIKIDO_SANDBOX_CLI === "1",
 		...(env.AIKIDO_LEDGER_IMPORT ? { ledgerImport: env.AIKIDO_LEDGER_IMPORT } : {}),
 		...(override && env.AIKIDO_API_BASE ? { apiBase: env.AIKIDO_API_BASE } : {}),
 		...(override && env.AIKIDO_OAUTH_URL ? { oauthUrl: env.AIKIDO_OAUTH_URL } : {}),

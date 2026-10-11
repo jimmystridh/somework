@@ -172,8 +172,8 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 
 		instruction(_input, { taskId }) {
 			const state = stateOf(taskId);
-			if (state.followUp) return buildFollowUpInstruction(state.followUp.input.pullRequest, state.summary, state.followUp.pullRequest.feedback, boundary(), state.input.hint);
-			return buildInstruction(state.input, state.summary, boundary());
+			if (state.followUp) return buildFollowUpInstruction(state.followUp.input.pullRequest, state.summary, state.followUp.pullRequest.feedback, boundary(), state.input.hint, settings.sandboxCli);
+			return buildInstruction(state.input, state.summary, boundary(), settings.sandboxCli);
 		},
 
 		branchName({ taskId, baseSha }) {

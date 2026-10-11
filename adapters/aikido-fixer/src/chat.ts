@@ -5,6 +5,7 @@ import { mirrorFreshness, type JobPlan, type JobTool, type Log, type ThreadRoleH
 import type { AikidoClient } from "./aikido/client.ts";
 import { createAikidoLookupTools } from "./aikido/tool.ts";
 import { AttemptLedger } from "./attempts.ts";
+import { CLI_CHAT_GUIDANCE } from "./prompt.ts";
 import { normaliseRepositoryUrl, type FixerSettings } from "./settings.ts";
 
 export const FIXER_CHAT_INSTRUCTIONS = `You are the Aikido fixer of this platform. Aikido reports security issues; you read one, change the repository the smallest safe amount, and open a pull request that a person must review. You offer two jobs, started with tools: fix_issue (an Aikido issue by its number: code.fix) and follow_up_pull_request (for a pull request you opened: the review comments, comments and failing checks since your newest commit: code.fix.followup). A job runs in the background and its result is posted to the conversation when it is done; do not wait for it. The state summary and the tools fixer_status and agent_status tell you what you did recently and what your limits are; aikido_lookup reads one Aikido issue by its id. You never merge, never touch protected paths, and you stop at the daily and per-issue limits.`;
@@ -120,7 +121,7 @@ export function fixerChat(options: FixerChatOptions): ThreadRoleHooks {
 		},
 	};
 	return {
-		instructions: FIXER_CHAT_INSTRUCTIONS,
+		instructions: options.settings.sandboxCli ? `${FIXER_CHAT_INSTRUCTIONS}\n\n${CLI_CHAT_GUIDANCE}` : FIXER_CHAT_INSTRUCTIONS,
 		context: () => factsText(ledger, options.mirrorDir, repository, now()),
 		extension,
 		toolNames: ["fixer_status", ...lookup.toolNames],
