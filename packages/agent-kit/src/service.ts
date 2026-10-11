@@ -46,6 +46,7 @@ import { scriptedModels } from "./providers/faux.ts";
 import { allowlist, isAllowed, type ModelRef } from "./providers/allowlist.ts";
 import { registerProviders } from "./providers/index.ts";
 import { RemoteExecutionEnv } from "./sandbox/remote-env.ts";
+import { keepRuntimeAlive } from "./runtime-lifecycle.ts";
 import { overlayFromDirectory, skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
 import { llmUsageCounters } from "./usage-metrics.ts";
@@ -475,11 +476,14 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					if (!stop.signal.aborted) log("error", "message_wakes_stopped", { error: String(error).slice(0, 160) });
 				});
 			}
+			const runtimeLife = keepRuntimeAlive({ client, meta: { role: profile.id, ...(env.AGENT_VERSION ? { version: env.AGENT_VERSION } : {}) }, signal: stop.signal, log });
+			await runtimeLife.registered;
 			log("info", "service_started", { role: profile.id, agentId: identity.agentId, provider: model.provider, concurrency: config.concurrency, skills: skillAllow.length, threads: threadSettings.enabled, events: eventsConfig.enabled, telegram: Boolean(telegram) });
 			await new Promise<void>((resolve) => stop.signal.addEventListener("abort", () => resolve(), { once: true }));
 			// running jobs are left as they are (they are written to disk and taken up again at the next start); give them a moment to stop cleanly
 			await Promise.race([jobs.idle(), new Promise<void>((resolve) => setTimeout(resolve, 20_000))]);
 			health.close();
+			await runtimeLife.ended();
 			await runtime.close();
 			await mcpHub.close();
 			log("info", "service_stopped");
