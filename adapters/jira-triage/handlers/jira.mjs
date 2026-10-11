@@ -70,7 +70,8 @@ export default async function handle({ event, now }) {
 		trigger = { kind: "updated", changed };
 	} else if (topic === "jira.comment.created") {
 		const comment = plain(data.comment);
-		if (typeof comment.body === "string" && BOT_COMMENT.test(comment.body)) return drop("a comment the triage bot wrote itself");
+		const body = typeof comment.body === "string" ? comment.body : plain(comment.body).text;
+		if (typeof body === "string" && BOT_COMMENT.test(body)) return drop("a comment the triage bot wrote itself");
 		if (!watched) return drop("this agent did not triage this ticket");
 		trigger = { kind: "comment", ...(typeof comment.id === "string" || typeof comment.id === "number" ? { commentId: String(comment.id).slice(0, 20) } : {}), ...(typeof comment.author === "string" && AUTHOR.test(comment.author) ? { author: comment.author } : {}) };
 	} else {

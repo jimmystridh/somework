@@ -13,8 +13,11 @@
     "comment": {
       "id": "20001",
       "author": "j.doe",
-      "body": "Version 2025.11, company Acme AB. Steps: 1. open the invoice 2. save it",
-      "excerpt": true
+      "body": {
+        "excerpt": true,
+        "text": "Version 2025.11, company Acme AB. Steps: 1. open the invoice 2. save it",
+        "truncated": false
+      }
     },
     "actor": "j.doe",
     "repository": {

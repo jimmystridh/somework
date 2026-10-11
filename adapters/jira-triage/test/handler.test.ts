@@ -107,6 +107,16 @@ describe("the shipped event handler", () => {
 		assert.deepEqual(reply.task.input.trigger, { kind: "comment", commentId: "9", author: "dana", eventKey: reply.task.input.trigger.eventKey });
 	});
 
+	it("reads a comment body the way the hub publishes it, as an excerpt object", async () => {
+		const { decide } = await world();
+		await decide("jira.issue.created", { issue: issue() });
+		const own = await decide("jira.comment.created", { issue: issue(), comment: { id: "7", author: "triage-bot", body: { excerpt: true, text: "{anchor:tb-sad-1-ask-1}\nHi [~dana]", truncated: false } } });
+		assert.equal(own.action, "drop");
+		assert.match(own.reason, /wrote itself/);
+		const reply = await decide("jira.comment.created", { issue: issue(), comment: { id: "9", author: "dana", body: { excerpt: true, text: "Version 2025.11", truncated: false } } });
+		assert.equal(reply.action, "submit");
+	});
+
 	it("copies the author and the comment id only when they look like what they are", async () => {
 		const { decide } = await world();
 		await decide("jira.issue.created", { issue: issue() });
