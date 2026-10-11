@@ -12,7 +12,7 @@ set -u
 AGENTS_HOST=${AGENTS_HOST:-admin-cloud-agents}
 WINDOWS_HOSTS=${WINDOWS_HOSTS:-"admin-cloud-windows-2 admin-cloud-windows-3"}
 STACKS_FIRST=${STACKS_FIRST:-events-hub}
-STACKS=${STACKS:-"pi-agent reviewer aikido-fixer datadog-triage"}
+STACKS=${STACKS:-"pi-agent reviewer aikido-fixer datadog-triage jira-triage"}
 here=$(cd "$(dirname "$0")" && pwd)
 
 if [ "${1:-}" = "--resume" ]; then

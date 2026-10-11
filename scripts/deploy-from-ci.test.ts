@@ -9,12 +9,16 @@ const SCRIPT = join(import.meta.dirname, "..", "deploy", "agents", "deploy-from-
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 /** A pilot directory with a fake roll-agent.sh, and fake `docker` and `flock` that record what they were asked to do. */
-function rig(options: { failRoll?: string; busy?: boolean } = {}) {
+function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "deploy-"));
 	const bin = join(root, "bin");
 	const pilot = join(root, "pilot");
 	mkdirSync(bin);
 	mkdirSync(join(pilot, "bin"), { recursive: true });
+	if (options.jiraStack) {
+		mkdirSync(join(pilot, "jira-triage"));
+		writeFileSync(join(pilot, "jira-triage", "compose.yaml"), "name: somework-jira-triage\n");
+	}
 	const write = (path: string, text: string) => {
 		writeFileSync(path, text);
 		chmodSync(path, 0o755);
@@ -23,7 +27,7 @@ function rig(options: { failRoll?: string; busy?: boolean } = {}) {
 	write(join(bin, "flock"), options.busy ? "#!/bin/sh\nexit 1\n" : "#!/bin/sh\nexit 0\n");
 	write(join(pilot, "bin", "roll-agent.sh"), `#!/bin/sh\necho "roll $(basename "$1") $2 $3 $4 $(cat "$5")" >> "${root}/calls.log"\n[ "$(basename "$1")" != "${options.failRoll ?? "-"}" ]\n`);
 	const repository = join(root, "repository");
-	for (const dir of ["adapters/pi", "adapters/reviewer", "adapters/aikido-fixer", "adapters/datadog-triage", "packages/events-hub"]) {
+	for (const dir of ["adapters/pi", "adapters/reviewer", "adapters/aikido-fixer", "adapters/datadog-triage", "adapters/jira-triage", "packages/events-hub"]) {
 		mkdirSync(join(repository, dir, "deploy"), { recursive: true });
 		writeFileSync(join(repository, dir, "deploy", "compose.yaml"), `# ${dir.split("/")[1]}\n`);
 	}
@@ -51,6 +55,27 @@ describe("deploy-from-ci.sh", () => {
 		);
 		assert.match(calls.find((call) => call.startsWith("roll reviewer")) ?? "", /http:\/\/10\.10\.10\.11:8082\/ready/);
 		assert.match(calls.find((call) => call.startsWith("roll events-hub")) ?? "", /http:\/\/10\.10\.10\.11:8090\/healthz/);
+	});
+
+	it("skips the Jira triage stack until it exists on the host: no image is built for it and nothing is rolled", () => {
+		const r = rig();
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 0, out.stderr);
+		assert.match(out.stdout, /jira-triage: no stack on this host yet, skipped/);
+		assert.ok(!r.calls().some((call) => call.includes("jira-triage")), r.calls().join("\n"));
+	});
+
+	it("builds and rolls the Jira triage stack, with its own health port, once the host has it", () => {
+		const r = rig({ jiraStack: true });
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 0, out.stderr);
+		const calls = r.calls();
+		assert.ok(calls.some((call) => call.startsWith("docker build") && call.includes("-f adapters/jira-triage/Dockerfile --target agent -t somework-jira-triage:ci-0123456")));
+		assert.deepEqual(
+			calls.filter((call) => call.startsWith("roll")).map((call) => call.replace(/ http\S* /, " ")),
+			["roll events-hub HUB_VERSION ci-0123456 # events-hub", "roll datadog-triage DATADOG_VERSION ci-0123456 # datadog-triage", "roll reviewer REVIEWER_VERSION,SANDBOX_VERSION ci-0123456 # reviewer", "roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION ci-0123456 # aikido-fixer", "roll jira-triage TRIAGE_VERSION,SANDBOX_VERSION ci-0123456 # jira-triage", "roll pi-agent PI_VERSION ci-0123456 # pi"],
+		);
+		assert.match(calls.find((call) => call.startsWith("roll jira-triage")) ?? "", /http:\/\/10\.10\.10\.11:8085\/ready/);
 	});
 
 	it("deploys nothing while the fleet is suspended", () => {
