@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AgentProfile } from "./profile.ts";
+import type { SetupReport } from "./setup/contract.ts";
 
 /** What a service tells about itself on `/profile`: how it is set up, never what it holds. No keys, tokens, file paths or environment values. */
 export interface AgentDescription {
@@ -35,6 +36,8 @@ export interface AgentDescription {
 	timers?: { enabled: boolean };
 	/** The agent's own Telegram bot: whether it runs and how many people may write to it (never who). */
 	telegram?: { enabled: boolean; allowedUsers: number };
+	/** What an operator's setup override and the fleet limits changed, with the role's defaults beside it (ADR 0004). Not part of `hash`. */
+	setup?: SetupReport;
 	/** Of everything above; changes when the setup changes. */
 	hash: string;
 }
@@ -54,6 +57,7 @@ export interface DescribeInput {
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
 	telegram?: { enabled: boolean; allowedUsers: number };
+	setup?: SetupReport;
 	/** False leaves out the prompt text (its hash and length stay). */
 	includePrompt: boolean;
 }
@@ -66,7 +70,7 @@ export const isoDateOrUndefined = (value: string | undefined): string | undefine
 export function describeAgent(input: DescribeInput): AgentDescription {
 	const { profile } = input;
 	const prompt = profile.systemPrompt ?? "";
-	const body: Omit<AgentDescription, "hash"> = {
+	const body: Omit<AgentDescription, "hash" | "setup"> = {
 		schema: 1,
 		role: profile.id,
 		agentId: input.agentId,
@@ -101,7 +105,7 @@ export function describeAgent(input: DescribeInput): AgentDescription {
 		...(input.timers ? { timers: input.timers } : {}),
 		...(input.telegram ? { telegram: input.telegram } : {}),
 	};
-	return { ...body, hash: sha256(JSON.stringify({ ...body, systemPrompt: { ...body.systemPrompt, text: undefined }, version: undefined })) };
+	return { ...body, ...(input.setup ? { setup: input.setup } : {}), hash: sha256(JSON.stringify({ ...body, systemPrompt: { ...body.systemPrompt, text: undefined }, version: undefined })) };
 }
 
 /**

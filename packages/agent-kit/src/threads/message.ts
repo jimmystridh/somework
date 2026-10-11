@@ -16,6 +16,8 @@ export interface InboundMessage {
 	messageId: string;
 	type: string;
 	sender: Party;
+	/** The domain the sender belongs to, when the record names one. */
+	senderDomain?: string;
 	/** Who the message was addressed to (everyone in a group conversation, unless the sender named some). */
 	recipients: Party[];
 	conversationId?: string;
@@ -35,6 +37,7 @@ export function asMessage(body: any): InboundMessage | undefined {
 		messageId: record.messageId,
 		type: record.type,
 		sender: { kind: String(record.sender.kind ?? "agent"), id: record.sender.id },
+		...(typeof record.sender.domainId === "string" ? { senderDomain: record.sender.domainId } : {}),
 		recipients: (Array.isArray(record.recipients) ? record.recipients : []).map(party).filter((entry: Party | undefined): entry is Party => entry !== undefined),
 		conversationId: typeof record.conversationId === "string" ? record.conversationId : undefined,
 		createdAt: typeof record.createdAt === "string" ? record.createdAt : undefined,

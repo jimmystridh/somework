@@ -193,12 +193,21 @@ export function renderKnowledge(knowledge: LoadedKnowledge, limits: Partial<Skil
 }
 
 export const SKILLS_SECTION_KEY = "repository-knowledge";
+const MAX_CACHED_SECTIONS = 200;
 
 /**
  * A Pi Durable extension that renders the section before every request from the conversation's own workspace. Results are
  * cached briefly per workspace so a long run does not read the same files on every model turn.
  */
-export function skillsExtension(options: SkillsOptions & { log?: Log; cacheMs?: number; now?: () => number }): Extension<any> {
+export function skillsExtension(options: Omit<SkillsOptions, "allow"> & {
+	/** A function is read on every request: an operator's setup can change the list while the agent runs. */
+	allow: readonly string[] | (() => readonly string[]);
+	/** Part of the cache key: a different value (a new override) starts the cache over. */
+	version?: () => string;
+	log?: Log;
+	cacheMs?: number;
+	now?: () => number;
+}): Extension<any> {
 	const cache = new Map<string, { at: number; text: string | undefined }>();
 	const ttl = options.cacheMs ?? 30_000;
 	const now = options.now ?? Date.now;
@@ -209,17 +218,32 @@ export function skillsExtension(options: SkillsOptions & { log?: Log; cacheMs?: 
 				key: SKILLS_SECTION_KEY,
 				tag: true,
 				async render(input) {
-					if (options.allow.length === 0 || !input.env) return undefined;
+					const allow = typeof options.allow === "function" ? options.allow() : options.allow;
+					if (allow.length === 0 || !input.env) return undefined;
 					const workspace = input.env.cwd;
-					const hit = cache.get(workspace);
+					const cacheKey = `${workspace}\u0000${options.version?.() ?? ""}\u0000${allow.join(",")}`;
+					const hit = cache.get(cacheKey);
 					if (hit && now() - hit.at < ttl) return hit.text;
-					const text = renderKnowledge(await loadKnowledge(input.env, workspace, options, options.log), options.limits);
-					cache.set(workspace, { at: now(), text });
+					const text = renderKnowledge(await loadKnowledge(input.env, workspace, { ...options, allow }, options.log), options.limits);
+					cache.set(cacheKey, { at: now(), text });
+					if (cache.size > MAX_CACHED_SECTIONS) cache.delete(cache.keys().next().value!);
 					return text;
 				},
 			},
 		],
 	});
+}
+
+/** Reads `<dir>/<name>.md` overlays of the deployment: the fallback for a skill the setup override has no overlay for. */
+export function overlayFromDirectory(dir: string | undefined): (name: string) => string | undefined {
+	return (name) => {
+		if (!dir) return undefined;
+		try {
+			return readFileSync(join(dir, `${name}.md`), "utf8");
+		} catch {
+			return undefined;
+		}
+	};
 }
 
 /** `SKILLS_ALLOW` is a comma or space separated list; an invalid name is an error at startup, not a silently hidden skill. */

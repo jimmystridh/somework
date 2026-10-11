@@ -20,12 +20,23 @@ export interface ApprovalPolicy {
 	needsApproval(tool: string, args: Record<string, unknown>): string | undefined;
 }
 
+/** What an operator's setup (ADR 0004) adds to a new conversation. Read when a conversation is created: a running one keeps what it started with. */
+export interface OperatorSetup {
+	/** Appended to the standing orders of a new conversation. */
+	instructions(): string | undefined;
+	/** The tools a new conversation is offered on top of its own list; each must be registered by an extension. */
+	tools(): readonly string[];
+	/** Every tool the setup can ever bring: calls to them are never blocked as "not available". */
+	toolNames: readonly string[];
+}
+
 export interface PiRuntimeOptions {
 	storagePath: string;
 	models: Models;
 	model: { provider: string; modelId: string };
 	env: (cwd: string | undefined) => ExecutionEnv;
 	policy?: ApprovalPolicy;
+	operator?: OperatorSetup;
 	extensions?: Extension<any>[];
 	/** Standing orders for every new conversation (the role's system prompt). */
 	instructions?: string;
@@ -112,6 +123,18 @@ export class PiDurableRuntime implements AgentRuntime {
 		this.#log("info", "runtime_started", { storage: this.#options.storagePath });
 	}
 
+	/** The model a new conversation starts on unless its request names one. */
+	get model(): { provider: string; modelId: string } {
+		return this.#modelChoice;
+	}
+
+	/** Changes the model new conversations start on (`undefined`: back to the configured one). Throws with the reason when the provider does not offer it. */
+	setModel(model: { provider: string; modelId: string } | undefined): void {
+		const wanted = model ?? this.#options.model;
+		if (!this.#options.models.getModel(wanted.provider, wanted.modelId)) throw new Error(`the model ${wanted.provider}/${wanted.modelId} is not offered by its provider`);
+		this.#modelChoice = wanted;
+	}
+
 	/** The names of every tool this runtime has registered (the coding tools and its extensions' tools), for checks at startup. */
 	knownTools(): string[] {
 		return [...this.#registered.keys()];
@@ -152,8 +175,8 @@ export class PiDurableRuntime implements AgentRuntime {
 			if (found) return found as unknown as Conversation;
 		}
 		const rootId = this.#rootId;
-		const instructions = request.instructions ?? this.#options.instructions;
-		const tools = request.tools ? this.#toolsFor(request.tools) : this.#offeredTools;
+		const instructions = [request.instructions ?? this.#options.instructions, this.#options.operator?.instructions()].filter(Boolean).join("\n\n") || undefined;
+		const tools = this.#conversationToolRegistrations(request);
 		return (await harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
@@ -166,13 +189,21 @@ export class PiDurableRuntime implements AgentRuntime {
 		)) as unknown as Conversation;
 	}
 
+	/** The tools of a new conversation: the request's own list or the runtime's, plus what the operator's setup brings (when the list restricts at all). */
+	#conversationToolRegistrations(request: AgentRequest): ToolRegistration[] | undefined {
+		const base = request.tools ? this.#toolsFor(request.tools) : this.#offeredTools;
+		if (!base) return undefined;
+		const extra = (this.#options.operator?.tools() ?? []).filter((name) => this.#registered.has(name) && !base.some((tool) => tool.name === name));
+		return [...base, ...extra.map((name) => this.#registered.get(name)!)];
+	}
+
 	async execute(request: AgentRequest, hooks: RunHooks): Promise<AgentOutcome> {
 		const harness = this.#harness;
 		if (!harness) throw new Error("the runtime is not started");
 		const conversation = await this.#conversation(request);
 		const conversationId = conversation.id as unknown as number;
 		this.#active.set(conversationId, { hooks, requestId: request.requestId, conversation, ...(request.context !== undefined ? { context: request.context } : {}) });
-		if (request.tools) this.#conversationTools.set(conversationId, new Set(request.tools));
+		if (request.tools) this.#conversationTools.set(conversationId, new Set([...request.tools, ...(this.#options.operator?.tools() ?? [])]));
 		const baseline = await this.#usageOf(conversation);
 		const reported = { totals: await this.#usageByModel(conversation) };
 		const started = Date.now();
@@ -312,7 +343,8 @@ export class PiDurableRuntime implements AgentRuntime {
 				hook(ToolTask, {
 					beforeTool: async (call, api, context) => {
 						const own = this.#conversationTools.get(api.conversationId as unknown as number);
-						if (own ? !own.has(call.name) : this.#options.allowedTools && !this.#options.allowedTools.includes(call.name)) return { block: `the tool ${call.name} is not available to this agent` };
+						const fromSetup = this.#options.operator?.toolNames.includes(call.name) === true;
+						if (own ? !own.has(call.name) : this.#options.allowedTools && !this.#options.allowedTools.includes(call.name) && !fromSetup) return { block: `the tool ${call.name} is not available to this agent` };
 						const summary = policy?.needsApproval(call.name, call.arguments as Record<string, unknown>);
 						if (!summary) return undefined;
 						const memo = `approval:${call.id}`;

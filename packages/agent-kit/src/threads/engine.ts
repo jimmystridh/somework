@@ -8,6 +8,7 @@ import type { Approvals } from "./approvals.ts";
 import type { JobManager } from "./jobs.ts";
 import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, repliesTo, type HistoryLine, type InboundMessage, type Sender } from "./message.ts";
 import type { ThreadSettings } from "./settings.ts";
+import { SETUP_LABELS } from "../setup/contract.ts";
 import type { DurableInbox, InboxItem } from "./store.ts";
 import { describeJob, threadKey, type RunContext } from "./tools.ts";
 
@@ -28,7 +29,9 @@ export interface ThreadEngineDeps {
 	/** The working directory of a conversation run (a scratch directory of its own). */
 	workspace: (threadKey: string) => Promise<string>;
 	ledger: Pick<DailyLedger, "chatRemaining" | "chatState" | "record">;
-	/** Looks at a message before the engine does; true means it was dealt with (control messages of the event handlers, budget raises). */
+	/** The suffix every conversation key of a new run gets while an operator's setup shapes the conversation; empty when none does (see `Setup.conversationSuffix`). */
+	setupKey?: () => string;
+	/** Looks at a message before the engine does; true means it was dealt with (control messages of the event handlers, budget raises, setup documents). */
 	intercept?: (message: InboundMessage) => Promise<boolean>;
 	/** Conversations that live outside the domain (a chat channel of the agent): their messages and history are read here, not from the domain. */
 	local?: LocalConversations;
@@ -122,9 +125,11 @@ export class ThreadEngine {
 			this.#log("warn", "message_unreadable", { messageId });
 			return;
 		}
-		if (message.sender.id === this.#deps.agentId || message.type !== "chat.message") return void (await this.#markRead([messageId]));
-		if (this.#deps.approvals.offer(message)) return void (await this.#markRead([messageId]));
+		const setupNotice = message.type === "chat.notice" && message.labels?.[SETUP_LABELS.kind] !== undefined;
+		if (message.sender.id === this.#deps.agentId || (message.type !== "chat.message" && !setupNotice)) return void (await this.#markRead([messageId]));
+		if (!setupNotice && this.#deps.approvals.offer(message)) return void (await this.#markRead([messageId]));
 		if (this.#deps.intercept && (await this.#deps.intercept(message).catch(() => false))) return void (await this.#markRead([messageId]));
+		if (setupNotice) return void (await this.#markRead([messageId]));
 		await this.#take(message, true);
 	}
 
@@ -250,7 +255,7 @@ export class ThreadEngine {
 	async #handle(entry: Entry): Promise<void> {
 		const { settings, inbox } = this.#deps;
 		const id = entry.item.id;
-		inbox.start(id);
+		inbox.start(id, this.#deps.setupKey?.() ?? "");
 		const message = entry.message ?? (this.#deps.local?.owns(id) ? this.#deps.local.message(id) : asMessage(await this.#deps.client.get(`/v1/messages/${encodeURIComponent(id)}`)));
 		if (!message) {
 			this.#log("warn", "message_unreadable", { messageId: id });
@@ -285,7 +290,7 @@ export class ThreadEngine {
 		this.#deps.signal.addEventListener("abort", forward, { once: true });
 		try {
 			const outcome = await this.#deps.runtime.execute(
-				{ requestId: `thread:${id}`, agentKey: `thread:${id}`, instruction, workspace: await this.#deps.workspace(threadKey(context)), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context },
+				{ requestId: `thread:${id}`, agentKey: `thread:${id}${inbox.get(id)?.setup ?? ""}`, instruction, workspace: await this.#deps.workspace(threadKey(context)), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context },
 				{
 					signal: stop.signal,
 					onProgress: () => undefined,

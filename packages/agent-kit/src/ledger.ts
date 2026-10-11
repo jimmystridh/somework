@@ -55,7 +55,7 @@ export const isoWeek = (date: string): string => {
  */
 export class DailyLedger {
 	readonly #path: string;
-	readonly #limit: number;
+	#limit: number;
 	readonly #today: () => string;
 	readonly #events: EventPoolOptions | undefined;
 	readonly #chat: ChatPoolOptions | undefined;
@@ -67,6 +67,11 @@ export class DailyLedger {
 		this.#events = events && events.share > 0 ? events : undefined;
 		this.#chat = chat && chat.share > 0 ? chat : undefined;
 		mkdirSync(dirname(path), { recursive: true });
+	}
+
+	/** Fleet limits change the daily limit while the agent runs; what was spent today stays. */
+	setDailyTokenLimit(dailyTokenLimit: number): void {
+		this.#limit = dailyTokenLimit;
 	}
 
 	#read(): LedgerState {

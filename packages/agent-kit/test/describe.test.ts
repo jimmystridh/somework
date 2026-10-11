@@ -149,3 +149,30 @@ test("the Telegram channel is described by whether it runs and how many people m
 	assert.deepEqual(on.telegram, { enabled: true, allowedUsers: 2 });
 	assert.notEqual(on.hash, describeAgent(input()).hash, "switching it on is a change of the setup");
 });
+
+test("the setup an operator gave the agent is served under setup, outside the hash, and /profile can serve a description that is built per request", async () => {
+	const setup = {
+		override: { revision: 3, hash: "a".repeat(64), appliedAt: "2026-10-10T12:00:00Z" },
+		limits: null,
+		defaults: { approvalPatterns: [{ pattern: "\\bgit push\\b", reason: "pushing needs approval" }], repositorySkills: ["review"], model: { provider: "openai-codex", modelId: "gpt-5.5" }, allowedModels: [{ provider: "openai-codex", modelId: "gpt-5.5" }] },
+		effective: { model: { provider: "openai-codex", modelId: "gpt-5.5" }, approvalPatterns: [], repositorySkills: ["review"], librarySkills: [], mcp: [] },
+	};
+	const without = describeAgent(input());
+	const withSetup = describeAgent(input({ setup }));
+	assert.equal(without.setup, undefined);
+	assert.deepEqual(withSetup.setup, setup);
+	assert.equal(withSetup.hash, without.hash);
+
+	let model = "gpt-5.5";
+	const { createHealthServer } = await import("../src/health.ts");
+	const server = createHealthServer({ runtime: { health: () => ({ ready: true }) } as any, metrics: { render: () => "" } as any, profile: () => describeAgent(input({ model: { provider: "openai-codex", modelId: model } })) });
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/profile`;
+	try {
+		assert.equal(((await (await fetch(url)).json()) as any).model.modelId, "gpt-5.5");
+		model = "gpt-5.6";
+		assert.equal(((await (await fetch(url)).json()) as any).model.modelId, "gpt-5.6", "it follows the setup as it changes");
+	} finally {
+		server.close();
+	}
+});

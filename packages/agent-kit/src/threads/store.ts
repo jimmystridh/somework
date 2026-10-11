@@ -58,6 +58,8 @@ export interface InboxItem {
 	attempts: number;
 	/** Set when the message was found waiting after a start (a backlog), not read live. */
 	recovered?: boolean;
+	/** The suffix of the conversation key the first run of this message used (see `Setup.conversationSuffix`), so a run taken up again after a restart finds its conversation. */
+	setup?: string;
 }
 
 const KEEP_DONE = 2000;
@@ -91,9 +93,14 @@ export class DurableInbox {
 		return true;
 	}
 
-	start(id: string): void {
+	get(id: string): InboxItem | undefined {
+		return this.#table.get(id);
+	}
+
+	/** `setup` is remembered from the first start: a later start of the same message keeps it. */
+	start(id: string, setup?: string): void {
 		const item = this.#table.get(id);
-		if (item) this.#table.put({ ...item, status: "running", attempts: item.attempts + 1 });
+		if (item) this.#table.put({ ...item, status: "running", attempts: item.attempts + 1, ...(item.setup === undefined && setup !== undefined ? { setup } : {}) });
 	}
 
 	/** Puts a message back as not handled: the run for it was interrupted (shutdown) and the next start takes it up again. */

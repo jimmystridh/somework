@@ -36,11 +36,17 @@ import { jsonLogger } from "./log.ts";
 import { Metrics } from "./metrics.ts";
 import { PiDurableRuntime } from "./pi-runtime.ts";
 import { approvalPolicy } from "./policy.ts";
+import { McpHub } from "./mcp/hub.ts";
+import { createMcpTools, MCP_CALL_TOOL, MCP_TOOL_NAMES } from "./mcp/tools.ts";
+import { libraryExtension, SKILL_LIBRARY_TOOL } from "./setup/library.ts";
+import { createSetupIntercept } from "./setup/intake.ts";
+import { Setup } from "./setup/setup.ts";
 import { validateProfile, type AgentProfile, type RoleHooks, type ServiceContext } from "./profile.ts";
 import { scriptedModels } from "./providers/faux.ts";
+import { allowlist, isAllowed, type ModelRef } from "./providers/allowlist.ts";
 import { registerProviders } from "./providers/index.ts";
 import { RemoteExecutionEnv } from "./sandbox/remote-env.ts";
-import { skillsExtension } from "./skills.ts";
+import { overlayFromDirectory, skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
 import { llmUsageCounters } from "./usage-metrics.ts";
 import { createTimers } from "./timers/index.ts";
@@ -117,6 +123,30 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
+			const skillAllow = config.skills.allow ?? profile.skills.allow;
+			const setupModels = allowlist(model, config.allowedModels);
+			const modelRefusal = (wanted: ModelRef): string | undefined => {
+				if (!isAllowed(setupModels, wanted)) return `the model ${wanted.provider}/${wanted.modelId} is not one of this agent's allowed models (${setupModels.map((ref) => `${ref.provider}/${ref.modelId}`).join(", ")})`;
+				return models.getModel(wanted.provider, wanted.modelId) ? undefined : `the model ${wanted.provider}/${wanted.modelId} is not offered by its provider`;
+			};
+			let ledgerRef: DailyLedger | undefined;
+			let runtimeRef: PiDurableRuntime | undefined;
+			const mcpHub = new McpHub({ root: join(config.state.dir, "mcp"), env, log });
+			// what an operator set is loaded before anything that reads it is built: the limits go into config.limits, the model into the runtime below
+			const setup = new Setup({
+				agentId: identity.agentId,
+				dir: join(config.state.dir, "setup"),
+				defaults: { approvalPatterns: profile.approvalPatterns.map(([pattern, reason]) => ({ pattern: pattern.source, reason })), repositorySkills: skillAllow, model, allowedModels: setupModels },
+				hub: mcpHub,
+				checkModel: modelRefusal,
+				setModel: (wanted) => runtimeRef?.setModel(wanted),
+				applyLimits: (limits) => {
+					Object.assign(config.limits, { maxTokensCap: limits.maxTokensCap, maxMinutesCap: limits.maxMinutesCap, dailyTokenLimit: limits.dailyTokenLimit, budgetRaiseCeiling: limits.budgetRaiseCeiling });
+					ledgerRef?.setDailyTokenLimit(limits.dailyTokenLimit);
+				},
+				log,
+			});
+			await setup.restore();
 			const eventsConfig = resolveEvents(profile.events, env);
 			const ledger = new DailyLedger(
 				join(config.state.dir, "ledger.json"),
@@ -125,11 +155,11 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				eventsConfig.enabled ? { share: eventsConfig.tokenShare, weeklyTokens: eventsConfig.weeklyTokens, throttleAt: eventsConfig.throttleAt } : undefined,
 				{ share: threadSettings.share, throttleAt: threadSettings.throttleAt },
 			);
+			ledgerRef = ledger;
 			const journal = new JobJournal(join(config.state.dir, "jobs.json"));
 			let jobsRef: JobManager | undefined;
 			let engineRef: ThreadEngine | undefined;
 			// the event component needs the runtime for woken runs and the runtime needs the component's tools: the runtime is looked up late
-			let runtimeRef: PiDurableRuntime | undefined;
 			const events = eventsConfig.enabled
 				? createEventsComponent({
 						config: eventsConfig,
@@ -153,7 +183,6 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 						metrics,
 					})
 				: undefined;
-			const skillAllow = config.skills.allow ?? profile.skills.allow;
 			const observe = createObserve({ profile: profile.observe, env, log, metrics, agentId: identity.agentId });
 			// the thread layer's pieces are made after the runtime and the tools need them: they are looked up late
 			const resources = new ResourceRegistry();
@@ -202,6 +231,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				},
 				hooks.chat?.jobTools ?? [],
 			);
+			const fileOverlay = overlayFromDirectory(config.skills.overlayDir ?? profile.skills.overlayDir);
 			const extensions = [
 				...(hooks.extensions ?? []),
 				...(events ? [events.extension] : []),
@@ -210,18 +240,24 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				...(observe ? [observe.extension] : []),
 				...(timers ? [timers.extension] : []),
 				...(hooks.chat?.extension ? [hooks.chat.extension] : []),
-				...(skillAllow.length > 0 ? [skillsExtension({ allow: skillAllow, overlayDir: config.skills.overlayDir ?? profile.skills.overlayDir, log })] : []),
+				skillsExtension({ allow: () => setup.repositorySkills(skillAllow), version: () => setup.version(), readOverlay: (name) => setup.overlay(name) ?? fileOverlay(name), log }),
+				libraryExtension(() => setup.librarySkills()).extension,
+				createMcpTools(mcpHub).extension,
 			];
 			// the thread tools are registered with the runtime but offered only to conversations: jobs get the role's own tools, with the coding tools spelled out when it lists none
 			const normalTools = [...(profile.allowedTools ?? ["read", "write", "edit", "bash"]), ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])];
 			const llmUsage = llmUsageCounters(metrics, { agent: identity.agentId, role: profile.id });
-			llmUsage.start(model);
+			llmUsage.start(setup.model() ?? model);
 			const runtime = new PiDurableRuntime({
 				storagePath: join(config.state.dir, "pi.sqlite"),
 				models,
 				model,
 				env: envFor,
-				policy: approvalPolicy(config.approvalPatterns, profile.approvalPatterns, profile.toolApprovals),
+				policy: approvalPolicy(config.approvalPatterns, profile.approvalPatterns, profile.toolApprovals, {
+					patterns: () => setup.approvalPatterns(),
+					tool: (tool, args) => (tool === MCP_CALL_TOOL ? mcpHub.approvalSummary(String(args.server), String(args.tool), args.arguments) : undefined),
+				}),
+				operator: { instructions: () => setup.instructionsAddendum(), tools: () => setup.operatorTools(), toolNames: [SKILL_LIBRARY_TOOL, ...MCP_TOOL_NAMES] },
 				instructions: profile.systemPrompt,
 				allowedTools: normalTools,
 				extensions,
@@ -230,6 +266,8 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				onUsage: llmUsage.record,
 			});
 			runtimeRef = runtime;
+			const restoredModel = setup.model();
+			if (restoredModel) runtime.setModel(restoredModel);
 			await runtime.start();
 
 			const session: GitSession = {
@@ -315,6 +353,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				...(telegram ? { local: telegram.store } : {}),
 				workspace: threadWorkspace,
 				ledger,
+				setupKey: () => setup.conversationSuffix(),
 				intercept: async (message) => {
 					for (const intercept of intercepts) if (await intercept(message).catch(() => false)) return true;
 					return false;
@@ -326,12 +365,12 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			engineRef = engine;
 
 
-			const description = withChangeMarker(
+			const describe = () => withChangeMarker(
 				describeAgent({
 					profile,
 					agentId: identity.agentId,
 					version: env.AGENT_VERSION,
-					model: config.model,
+					model: runtime.model,
 					allowedModels: config.allowedModels,
 					limits: config.limits,
 					concurrency: config.concurrency,
@@ -350,6 +389,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
 					timers: { enabled: Boolean(timers) },
 					telegram: { enabled: Boolean(telegram), allowedUsers: telegram?.start.allowed.size ?? 0 },
+					setup: setup.report({ model: runtime.model }),
 					includePrompt: env.PROFILE_PROMPT !== "0",
 				}),
 				join(config.state.dir, "profile-hash.json"),
@@ -357,7 +397,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const health = createHealthServer({
 				runtime,
 				metrics,
-				profile: () => description,
+				profile: describe,
 				history: (limit) => journal.recent(limit),
 				status: () => ({ ...(events ? events.status() : { handlers: [], tokenPools: ledger.usage() }), chat: { mode: threadSettings.enabled ? "threads" : "off", approvers: threadSettings.approvers, jobs: jobs.active().length, conversations: engine.active, queued: engine.queued }, ...(observe ? { observe: observe.status() } : {}) }),
 				checks: { ...(hooks.envFactory ? {} : { sandbox: async () => (await fetch(`${config.sandbox.url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok }), ...hooks.readinessChecks },
@@ -371,13 +411,14 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const budgetIntercept = createBudgetIntercept({
 				ledger,
 				controllers: config.limits.budgetControllers ?? eventsConfig.controllers,
-				ceiling: config.limits.budgetRaiseCeiling,
+				ceiling: () => config.limits.budgetRaiseCeiling,
 				reply: async (message, text) => {
 					await client.post("/v1/messages", { type: "chat.notice", recipients: [{ kind: message.sender.kind, id: message.sender.id }], ...(message.conversationId ? { conversationId: message.conversationId } : {}), replyTo: message.messageId, causationId: message.messageId, triggerMode: "never", content: { mediaType: "text/plain", data: text } }, { idempotencyKey: `budget:${message.messageId}` });
 				},
 				log,
 			});
 			// the kill switch for event handlers and budget raises are looked at before a message becomes a conversation
+			intercepts.push(createSetupIntercept({ agentId: identity.agentId, domainId: identity.audience.replace(/^somework:/, ""), client, setup, log }));
 			intercepts.push(async (message) => (await budgetIntercept(message)) || (events ? await events.intercept(message) : false));
 			if (events) void events.run(stop.signal).catch((error) => log("error", "events_stopped", { error: error instanceof Error ? error.message : String(error) }));
 			if (threadSettings.enabled) {
@@ -440,6 +481,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			await Promise.race([jobs.idle(), new Promise<void>((resolve) => setTimeout(resolve, 20_000))]);
 			health.close();
 			await runtime.close();
+			await mcpHub.close();
 			log("info", "service_stopped");
 			// Everything durable is committed. A tool call still in flight (an open connection to the sandbox) must not keep the process
 			// alive: exiting closes it, the sandbox kills that command's process tree, and the run resumes from its checkpoint on restart.

@@ -25,7 +25,7 @@ interface Sent {
 	text: string;
 }
 
-function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSettings>; answer?: (request: AgentRequest, text: string) => Promise<string> | string; dir?: string; now?: () => number } = {}) {
+function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSettings>; answer?: (request: AgentRequest, text: string) => Promise<string> | string; dir?: string; now?: () => number; intercept?: (message: InboundMessage) => Promise<boolean>; setupKey?: () => string } = {}) {
 	const dir = options.dir ?? mkdtempSync(join(tmpdir(), "threads-"));
 	const messages = new Map<string, any>();
 	const sent: Sent[] = [];
@@ -88,8 +88,10 @@ function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSetting
 		signal: stop.signal,
 		boundary: () => "B",
 		...(options.now ? { now: options.now } : {}),
+		...(options.intercept ? { intercept: options.intercept } : {}),
+		...(options.setupKey ? { setupKey: options.setupKey } : {}),
 	});
-	const put = (id: string, extra: Partial<{ sender: any; recipients: any[]; conversationId: string; text: string; createdAt: string; type: string }> = {}): void => {
+	const put = (id: string, extra: Partial<{ sender: any; recipients: any[]; conversationId: string; text: string; createdAt: string; type: string; labels: Record<string, string> }> = {}): void => {
 		messages.set(id, {
 			messageId: id,
 			type: extra.type ?? "chat.message",
@@ -98,6 +100,7 @@ function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSetting
 			conversationId: extra.conversationId ?? `conv_${id}`,
 			createdAt: extra.createdAt ?? new Date().toISOString(),
 			content: { mediaType: "text/plain", data: extra.text ?? `hello from ${id}` },
+			...(extra.labels ? { labels: extra.labels } : {}),
 		});
 	};
 	return { engine, put, sent, requests, inbox, jobs, notes, dir, stop, read };
@@ -319,5 +322,66 @@ describe("threads", () => {
 		assert.ok(w.read.has("old1") && w.read.has("old2"));
 		const restarted = new DurableInbox(join(w.dir, "inbox.json"));
 		assert.equal(restarted.fresh, false, "the next start is a real one: whatever came while it was down is a backlog");
+	});
+});
+
+describe("setup notices and the conversation key", () => {
+	const setupLabels = { "setup.kind": "override", "setup.revision": "2", "setup.sha256": "x" };
+
+	it("hands a setup notice to the intercept and never makes a conversation of it", async () => {
+		const seen: string[] = [];
+		const w = world({ intercept: async (message) => (message.labels?.["setup.kind"] !== undefined ? (seen.push(`${message.sender.kind}:${message.sender.id}`), true) : false) });
+		w.put("setup", { type: "chat.notice", sender: { kind: "service", id: "operations" }, labels: setupLabels });
+		await w.engine.accept("setup");
+		await w.engine.idle();
+		assert.deepEqual(seen, ["service:operations"]);
+		assert.equal(w.requests.length, 0);
+		assert.deepEqual(w.sent, []);
+		assert.ok(w.read.has("setup"), "it is marked read");
+		assert.equal(w.inbox.has("setup"), false, "it never enters the inbox of conversations");
+	});
+
+	it("does not make a conversation of a setup notice even when nothing intercepts it, and still ignores other notices", async () => {
+		const w = world();
+		w.put("setup", { type: "chat.notice", sender: { kind: "service", id: "operations" }, labels: setupLabels });
+		w.put("plain", { type: "chat.notice" });
+		await w.engine.accept("setup");
+		await w.engine.accept("plain");
+		await w.engine.idle();
+		assert.equal(w.requests.length, 0);
+		assert.ok(w.read.has("setup") && w.read.has("plain"));
+	});
+
+	it("never offers the plain notices of other agents to the setup intercept", async () => {
+		let asked = 0;
+		const w = world({ intercept: async () => (asked += 1, false) });
+		w.put("plain", { type: "chat.notice" });
+		await w.engine.accept("plain");
+		assert.equal(asked, 0);
+	});
+
+	it("keeps the conversation key as it was when no setup shapes the conversation, and adds the suffix when one does", async () => {
+		let suffix = "";
+		const w = world({ setupKey: () => suffix });
+		w.put("m1");
+		await w.engine.accept("m1");
+		await w.engine.idle();
+		suffix = "#setup-abc123";
+		w.put("m2");
+		await w.engine.accept("m2");
+		await w.engine.idle();
+		assert.deepEqual(w.requests.map((request) => [request.requestId, request.agentKey]), [["thread:m1", "thread:m1"], ["thread:m2", "thread:m2#setup-abc123"]]);
+	});
+
+	it("takes a run up again after a restart under the key its first run used, whatever the setup is by then", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "threads-"));
+		const interrupted = new DurableInbox(join(dir, "inbox.json"));
+		interrupted.add({ id: "m1", conversationId: "conv_m1", sender: { kind: "human", id: "user/jimmy" } });
+		interrupted.start("m1", "#setup-one");
+		const w = world({ dir, setupKey: () => "#setup-two" });
+		w.put("m1");
+		w.engine.start();
+		await w.engine.idle();
+		assert.equal(w.requests[0]!.agentKey, "thread:m1#setup-one");
 	});
 });

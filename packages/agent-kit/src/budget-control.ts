@@ -14,8 +14,8 @@ export interface BudgetControlOptions {
 	ledger: DailyLedger;
 	/** Senders allowed to raise the budget (the manager, which asks its owner first). Anyone else is logged and ignored. */
 	controllers: readonly string[];
-	/** The most tokens one pool can be raised by in one day, over all raises. */
-	ceiling: number;
+	/** The most tokens one pool can be raised by in one day, over all raises. A function is read on every request (fleet limits can change it). */
+	ceiling: number | (() => number);
 	/** Tells the sender what happened; a failure to send is only logged. */
 	reply: (message: InboundMessage, text: string) => Promise<void>;
 	log: Log;
@@ -43,7 +43,7 @@ export function createBudgetIntercept(options: BudgetControlOptions): (message: 
 			return true;
 		}
 		try {
-			const result = options.ledger.raise(pool, tokens, options.ceiling);
+			const result = options.ledger.raise(pool, tokens, typeof options.ceiling === "function" ? options.ceiling() : options.ceiling);
 			options.log("info", "budget_raised", { from: message.sender.id, pool, tokens, raisedToday: result.raisedToday, limit: result.limit, reason: message.labels?.[BUDGET_REASON_LABEL]?.slice(0, 200) });
 			await say(`Budget raised: the ${pool} pool gets ${tokens} more tokens today (${result.raisedToday} raised today, limit now ${result.limit}). It goes back to normal tomorrow.`);
 		} catch (error) {
