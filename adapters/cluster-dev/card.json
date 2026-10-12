@@ -1,0 +1,130 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/cluster-dev",
+  "domainId": "development",
+  "displayName": "Cluster development agent",
+  "description": "Does the work a developer does in this cluster: reads logs and metrics, finds causes, changes the Manager's and the other agents' code, runs the tests, pushes to the organisation repository, deploys through the CI and verifies afterwards. It decides and acts on its own for everything except destructive actions (removing or overwriting data, secrets, the hypervisor, firewalls, force pushes and history rewrites, piping a download into a shell), which it asks the owner about first; code, not the model, decides which those are. Talk to it in a message; the capability below is for a larger change that should arrive as a pull request.",
+  "owner": {
+    "team": "platform"
+  },
+  "interfaces": [
+    {
+      "protocol": "mcp"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "code.cluster",
+      "version": "1",
+      "name": "Cluster code change",
+      "description": "Give an instruction and the cluster's repository (url + ref). The agent works in its own checkout in a sandbox, runs the tests, then the service pushes branch cluster/<taskId> to the organisation repository and opens a pull request; it does not merge or deploy in this job. A budget (maxTokens, maxMinutes) is required: a job without one is rejected. Only the one repository the agent is configured for is accepted. The agent may ask the requester for approval before a destructive command (the task shows input_required; answer with {approved: true|false, reason?}).",
+      "tags": [
+        "contract:idempotent",
+        "coding",
+        "operations"
+      ],
+      "sideEffects": "write",
+      "timeoutSeconds": 3600,
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "repository",
+          "instruction",
+          "budget"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "agentKey": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "stable key that selects the conversation; default: repository + the task's conversation"
+          },
+          "repository": {
+            "type": "object",
+            "required": [
+              "url",
+              "ref"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "url": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "ref": {
+                "type": "string",
+                "maxLength": 200,
+                "description": "base branch"
+              }
+            }
+          },
+          "instruction": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "budget": {
+            "type": "object",
+            "required": [
+              "maxTokens",
+              "maxMinutes"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "maxTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "maxMinutes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "status",
+          "summary",
+          "branch"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "completed",
+              "no_changes"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prUrl": {
+            "type": "string"
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "totalTokens": {
+                "type": "integer"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

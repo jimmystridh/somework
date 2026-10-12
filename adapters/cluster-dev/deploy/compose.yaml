@@ -1,0 +1,180 @@
+# The cluster development agent on its OWN virtual machine, alone: it holds an ssh key for every host, so nothing else may share its
+# machine, its docker socket or its secret files. The harness and a sandbox, isolated from each other, in their own compose project.
+# - `sandbox-net` is internal: nothing on it has a route out except the egress proxy. The sandbox is where the model's own commands run
+#   (edits, tests, git in a copy of the checkout). It has no secret and no way into the cluster; everything that reaches a host, the CI or
+#   the repository's remote goes through the harness's tools.
+# - The harness holds the credentials: its OWN SomeWork key, its OWN model login, one ssh key per host, the CI token, a read-only Grafana
+#   token, a git token for the organisation repository only, the Telegram bot token. It reaches the domain, the model API, the code host,
+#   Grafana, the CI, the agents' health ports and the hosts' ssh ports over `outside`: restrict `outside` on the VM to
+#   `firewall-allow.example.txt`'s destinations.
+# - The sandbox image is the developer role's `somework-pi-sandbox` (a role-agnostic daemon); only the harness image is this role's.
+name: somework-cluster-dev
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  privileged: false
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+networks:
+  sandbox-net:
+    internal: true
+  outside: {}
+
+services:
+  agent:
+    <<: *hardened
+    image: somework-cluster-dev:${CLUSTER_DEV_VERSION:?set CLUSTER_DEV_VERSION to the built image tag}
+    user: "10001:10001"
+    group_add: ["10010"]          # reads the shared sandbox token
+    networks: [sandbox-net, outside]
+    environment:
+      SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
+      SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
+      SOMEWORK_CA_FILE: /run/somework/ca.pem
+      SOMEWORK_REQUIRE_TLS: "1"
+      SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
+      AGENT_VERSION: ${CLUSTER_DEV_VERSION}                  # shown on /profile (the image tag this container runs)
+      PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
+      PI_MODEL: ${PI_MODEL:-gpt-5.5}
+      PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
+      PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}
+      PI_AUTH_FILE: /run/secrets/pi/auth.json
+      PI_STATE_DIR: /state
+      PI_CONCURRENCY: "1"                                    # one piece of work at a time: the role refuses to start otherwise (no two deployments at once)
+      SANDBOX_URL: http://sandbox:7070
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_WORKSPACES: /workspace
+      # The repository, the remote that may be pushed to (never origin), and the credential for pushing and opening pull requests (the service
+      # pushes; the sandbox holds no credential). A GitHub App instead of the token file: see packages/agent-kit/README.md.
+      CLUSTER_DEV_REPOSITORY: ${CLUSTER_DEV_REPOSITORY:?https URL of the organisation repository}
+      CLUSTER_DEV_GIT_REMOTE: ${CLUSTER_DEV_GIT_REMOTE:-org}
+      GIT_TOKEN_FILE: /run/secrets/git-token                # fine-grained, this repository only: Contents and Pull requests write, Metadata read
+      GIT_TOKEN_EXPIRES: ${GIT_TOKEN_EXPIRES:-}              # optional note for /profile: the token's expiry date, YYYY-MM-DD
+      GIT_TOKEN_HOSTS: ${GIT_TOKEN_HOSTS:-github.com}       # the only hosts the token may ever be sent to
+      GITHUB_API: ${GITHUB_API:-}                           # only for a GitHub Enterprise API
+      # host_exec: the machines the agent may use, as name=user@address[:port]. Each needs the key ./secrets/ssh/<name> and a line in ./secrets/ssh/known_hosts.
+      CLUSTER_DEV_HOSTS: ${CLUSTER_DEV_HOSTS:-}
+      CLUSTER_DEV_SSH_KEY_DIR: /run/secrets/ssh
+      CLUSTER_DEV_HYPERVISOR_HOSTS: ${CLUSTER_DEV_HYPERVISOR_HOSTS:-pve-host,proxmox}   # names and addresses of the hypervisor: every command on it asks the owner
+      CLUSTER_DEV_OWN_SERVICES: ${CLUSTER_DEV_OWN_SERVICES:-}                           # systemd units the agent may restart without asking (patterns with *)
+      CLUSTER_DEV_SCRIPTS: ${CLUSTER_DEV_SCRIPTS:-}                                     # repository scripts that run on any host (path suffixes); empty = roll-agent.sh and deploy-from-ci.sh
+      CLUSTER_DEV_EXEC_TIMEOUT_SECONDS: ${CLUSTER_DEV_EXEC_TIMEOUT_SECONDS:-120}        # at most 900
+      CLUSTER_DEV_EXEC_MAX_BYTES: ${CLUSTER_DEV_EXEC_MAX_BYTES:-32768}                  # at most 262144
+      # deploy_status: the agents' health ports, as name=http://address:port
+      CLUSTER_DEV_AGENT_URLS: ${CLUSTER_DEV_AGENT_URLS:-}
+      CLUSTER_DEV_AGENTS_CA_FILE: ${CLUSTER_DEV_AGENTS_CA_HOST:+/run/somework/agents-ca.pem}
+      # ci_pipelines and ci_logs: Woodpecker, read only through the token file below. Off while CI_URL is empty.
+      CI_URL: ${CI_URL:-}
+      CI_REPO: ${CI_REPO:-}
+      CI_TOKEN_FILE: /run/secrets/ci-token
+      CI_CA_FILE: ${CI_CA_HOST:+/run/somework/ci-ca.pem}
+      BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-1000000}
+      BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-60}
+      DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-8000000}
+      EVENTS_ENABLED: "0"
+      CHAT_MODE: ${CHAT_MODE:-on}                            # on = every message is read by the model
+      APPROVERS: ${APPROVERS:-}                              # empty = the profile's list: people only (kind:human). Never add agent/manager: an agent must not approve a destructive action
+      CHAT_APPROVAL_MINUTES: ${CHAT_APPROVAL_MINUTES:-30}    # silence for this long is a denial
+      CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.5}             # share of DAILY_TOKEN_LIMIT that conversations may use
+      CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-400000}  # tokens of one conversation run
+      CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-30}
+      # Observe tools over the whole fleet (logs, metrics, alerts): the Viewer token below. OBSERVE_SCOPE=fleet is the role's default.
+      OBSERVE_ENABLED: ${OBSERVE_ENABLED:-1}
+      OBSERVE_SCOPE: ${OBSERVE_SCOPE:-fleet}
+      OBSERVE_MAX_RANGE_HOURS: ${OBSERVE_MAX_RANGE_HOURS:-168}
+      OBSERVE_HOURLY_CALLS: ${OBSERVE_HOURLY_CALLS:-120}
+      OBSERVE_METRIC_FUNCTIONS: ${OBSERVE_METRIC_FUNCTIONS:-1}
+      GRAFANA_URL: ${GRAFANA_URL:-}
+      GRAFANA_TOKEN_FILE: /run/secrets/grafana-token
+      GRAFANA_CA_FILE: /run/somework/grafana-ca.pem
+      # This agent's own Telegram bot: how the owner talks to it and answers its questions. Off while no token file is mounted or TELEGRAM_ALLOWED_USER_IDS is empty.
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram-bot-token
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      HEALTH_PORT: "8081"
+    volumes:
+      - ${CLUSTER_DEV_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
+      - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - ./secrets/git-token:/run/secrets/git-token:ro       # the organisation repository only. Must exist.
+      - ./secrets/ssh:/run/secrets/ssh:ro                   # one private key per host (named like the host, 0600, uid 10001) and known_hosts
+      - ${CI_TOKEN_HOST:-/dev/null}:/run/secrets/ci-token:ro           # ci: ./secrets/ci-token (a Woodpecker token that may read this repository's pipelines)
+      - ${CI_CA_HOST:-/dev/null}:/run/somework/ci-ca.pem:ro            # ci: the private CA of the Woodpecker server, when it has one
+      - ${CLUSTER_DEV_AGENTS_CA_HOST:-/dev/null}:/run/somework/agents-ca.pem:ro   # deploy_status: the private CA of https health ports, when they have one
+      - ${GRAFANA_TOKEN_HOST:-/dev/null}:/run/secrets/grafana-token:ro # observe: ./secrets/grafana-token (the Viewer service account's token)
+      - ${GRAFANA_CA_HOST:-/dev/null}:/run/somework/grafana-ca.pem:ro  # observe: ./config/grafana-ca.pem
+      - ${TELEGRAM_TOKEN_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro   # telegram: ./secrets/telegram-bot-token (the BotFather token); /dev/null = no bot
+      - state:/state
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    ports: ["${HEALTH_BIND:-127.0.0.1}:8081:8081"]      # health, handlers and token pools: this VM runs this agent alone
+    depends_on:
+      sandbox: {condition: service_healthy}
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  sandbox:
+    <<: *hardened
+    image: somework-pi-sandbox:${SANDBOX_VERSION:?set SANDBOX_VERSION to the developer role's sandbox image tag}
+    user: "10002:10002"
+    group_add: ["10010"]
+    networks: [sandbox-net]
+    environment:
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_ROOT: /workspace
+      SANDBOX_PORT: "7070"
+      HTTPS_PROXY: http://egress:8888
+      HTTP_PROXY: http://egress:8888
+      NO_PROXY: sandbox,localhost,127.0.0.1
+    volumes:
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - workspace:/workspace
+    tmpfs: ["/tmp:size=1g,nosuid"]
+    mem_limit: ${SANDBOX_MEMORY:-4g}
+    cpus: ${SANDBOX_CPUS:-2}
+    pids_limit: 512
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7070/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # The sandbox's only way out: the code host and the package registries (clone, npm ci), nothing else.
+  egress:
+    <<: *hardened
+    image: somework-pi-egress:${SANDBOX_VERSION:?set SANDBOX_VERSION}
+    user: "10003:10003"
+    networks: [sandbox-net, outside]
+    environment:
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com,registry.npmjs.org,*.npmjs.org,pypi.org,files.pythonhosted.org,crates.io,static.crates.io,index.crates.io,docs.rs}
+      EGRESS_PORTS: "443,80"
+    mem_limit: 128m
+    pids_limit: 64
+
+  # One-shot: named volumes start root-owned but each service runs as its own uid.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    image: somework-cluster-dev:${CLUSTER_DEV_VERSION:?set CLUSTER_DEV_VERSION}
+    profiles: ["init"]
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 10001:10001 /state && chown 10002:10002 /workspace"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - state:/state
+      - workspace:/workspace
+
+volumes:
+  state:
+  workspace:

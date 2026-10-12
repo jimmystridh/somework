@@ -1,0 +1,39 @@
+# Outbound destinations of the cluster development agent's virtual machine. One per line: a host name, an IPv4 address, a CIDR block or an a.b.c.d-e.f.g.h range.
+# The VM holds an ssh key for every host, so it is the most exposed machine of the cluster: everything outbound that is not listed here is blocked (ufw: README.md, step 5).
+# Replace the placeholders with the installation's own names and addresses; this repository holds none of them.
+
+# the domain (SomeWork) and the central observability stack (logs, metrics)
+domain.example.internal
+grafana.example.internal
+
+# the model provider and its login
+api.openai.com
+auth.openai.com
+chatgpt.com
+
+# the code host: git push and the pull request API (the token is sent to GIT_TOKEN_HOSTS only), and the sandbox's clone and package downloads through the egress proxy
+github.com
+api.github.com
+codeload.github.com
+registry.npmjs.org
+crates.io
+static.crates.io
+index.crates.io
+pypi.org
+files.pythonhosted.org
+
+# Telegram, where the owner talks to the agent and answers its questions
+api.telegram.org
+
+# the CI server (Woodpecker, read only)
+ci.example.internal
+
+# the agents' health ports (deploy_status, TCP 8081-8085) and the hosts' ssh ports (host_exec, TCP 22): one line per machine
+AGENTS_VM_ADDRESS
+SERVICES_VM_ADDRESS
+RUNNER_VM_ADDRESS
+
+# the hypervisor, ssh only (every command on it asks the owner first); remove the line to take the hypervisor away from the agent altogether
+HYPERVISOR_ADDRESS
+
+# GitHub and the model provider rotate addresses faster than names are refreshed: add their published ranges (api.github.com/meta) if the names alone are not enough
