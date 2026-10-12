@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -172,5 +172,30 @@ describe("conversations and jobs end to end (real domain, real sandbox, real ser
 		assert.ok(reply.some((text) => text.includes("demo x")), "the job's result names the job");
 		const status = (await (await fetch(`http://127.0.0.1:${world.healthPort}/status`)).json()) as any;
 		assert.equal(status.chat.jobs, 0, "nothing is left running");
+	});
+
+	it("drains while the file `drain` is in the state directory: no new job, chat still answered, still ready, and normal again once the file is gone", async () => {
+		const world = await boot(["call:start_demo:{\"topic\":\"x\"}", "final:Not now.", "call:start_demo:{\"topic\":\"x\"}", "final:The demo is running."]);
+		const get = async (path: string) => fetch(`http://127.0.0.1:${world.healthPort}${path}`);
+		assert.equal(((await (await get("/status")).json()) as any).draining, false);
+		writeFileSync(join(world.state, "drain"), "");
+		const status = (await (await get("/status")).json()) as any;
+		assert.equal(status.draining, true);
+		const ready = await get("/ready");
+		assert.equal(ready.status, 200, "a draining agent is still ready: a deployment waits for /ready of the new one");
+		assert.equal(((await ready.json()) as any).draining, true);
+		assert.match(await (await get("/metrics")).text(), /^somework_draining\{[^}]*\} 1$/m);
+
+		await world.say("please run the demo for x");
+		await until("the answer to a chat message while draining", async () => (await world.texts()).some((text) => text.includes("Not now.")));
+		await sleep(1500);
+		assert.ok(!(await world.texts()).some((text) => text.includes("demo x")), "no job was started, so none reported a result");
+		assert.equal(((await (await get("/status")).json()) as any).chat.jobs, 0);
+
+		rmSync(join(world.state, "drain"));
+		assert.equal(((await (await get("/status")).json()) as any).draining, false);
+		assert.match(await (await get("/metrics")).text(), /^somework_draining\{[^}]*\} 0$/m);
+		await world.say("now please run the demo for x");
+		await until("the job's result", async () => (await world.texts()).some((text) => text.includes("demo x")));
 	});
 });

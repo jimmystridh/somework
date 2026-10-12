@@ -33,6 +33,8 @@ export interface EventsComponentDeps {
 	agent: { id: string; role: string; capabilities: { id: string; version: string }[] };
 	log: Log;
 	metrics: Metrics;
+	/** True while the agent drains for a deployment (see `Drain`). */
+	draining?: () => boolean;
 }
 
 export interface EventsStatus {
@@ -79,7 +81,7 @@ export function createEventsComponent(deps: EventsComponentDeps): EventsComponen
 		notifyTo: config.notifyTo,
 		log: deps.log,
 	});
-	const processor = new EventProcessor({ config, store, runner, guard, ledger: deps.ledger, inbox, actions, agent: deps.agent, log: deps.log, metrics: deps.metrics });
+	const processor = new EventProcessor({ config, store, runner, guard, ledger: deps.ledger, inbox, actions, agent: deps.agent, log: deps.log, metrics: deps.metrics, ...(deps.draining ? { draining: deps.draining } : {}) });
 	const intake = new EventIntake({ client: deps.client, processor, dir: eventsDir(deps.stateDir), log: deps.log });
 	const tools = createHandlerTools({ store, guard, inbox, runner, config, agent: deps.agent });
 

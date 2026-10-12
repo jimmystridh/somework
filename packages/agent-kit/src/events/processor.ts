@@ -30,6 +30,8 @@ export interface ProcessorDeps {
 	agent: { id: string; role: string; capabilities: { id: string; version: string }[] };
 	log: Log;
 	metrics: Metrics;
+	/** True while the agent drains for a deployment: events that would start work are dropped with the reason `draining`. */
+	draining?: () => boolean;
 	now?: () => number;
 }
 
@@ -70,6 +72,7 @@ export class EventProcessor {
 			this.#d.inbox.add(event, "delivered without wake");
 			return done("recorded");
 		}
+		if (this.#d.draining?.()) return done(this.#dropWhileDraining(event));
 		const age = event.receivedAt ? this.#nowMs() - Date.parse(event.receivedAt) : 0;
 		if (Number.isFinite(age) && age > config.staleAfterHours * HOUR_MS) {
 			this.#d.inbox.add(event, `older than ${config.staleAfterHours} h`);
@@ -77,6 +80,15 @@ export class EventProcessor {
 		}
 		const chain = await this.#chain(event);
 		return done(await this.#execute(chain.decision, chain.event, chain.handler));
+	}
+
+	/** Not handled, but not lost either: the event is kept in the events inbox for the agent to read once the deployment is over. */
+	#dropWhileDraining(event: HandlerEvent): Outcome {
+		const reason = "draining";
+		this.#d.guard.drop("(draining)", { topic: event.topic, key: event.key, reason });
+		this.#d.inbox.add(event, "dropped: the agent was draining for a deployment");
+		this.#d.log("info", "event_dropped", { eventId: event.id, topic: event.topic, handler: "(draining)", reason });
+		return "dropped";
 	}
 
 	#nowMs(): number {

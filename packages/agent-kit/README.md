@@ -223,6 +223,16 @@ The tool exists only while the record is kept (`RUN_TRACE` on); without it the p
 
 Settings: `RUN_TRACE=0` turns it off, `RUN_TRACE_DIR` (default `<state dir>/runs`), `RUN_TRACE_KEEP_DAYS` (30) and `RUN_TRACE_MAX_MB` (1024; the oldest days go first, today is never removed).
 
+## Drain: deploying without waiting for a gap
+
+A file named `drain` in the state directory (`PI_STATE_DIR`) puts the agent in drain mode, so a deployment does not have to wait for a quiet moment in a busy agent: it creates the file, waits until the jobs that run have finished, replaces the agent and removes the file.
+
+* **While the file exists:** no new job starts (the job tools tell the model so and the person can ask again later; `JobManager.start` throws `DrainingError`), and an event that would wake the agent or start a job is dropped with the reason `draining` (it shows in `events.dropped` on `/status` and stays readable in the events inbox, it is not handled). Chat is answered as before, the agent still says it is ready (`/ready` stays 200, so a deployment's readiness wait works), jobs that run or were left unfinished by the last run finish normally, and `agent_status` tells the model that a deployment is under way.
+* **Where it shows:** `draining` is `true` on `/status` and `/ready`, and the metric `somework_draining` is 1.
+* **Only a file.** The health port has no authentication and is open to hosts on the private network, so there is no `POST /drain`. Whoever can write to the state directory can drain the agent.
+* **Never for ever.** The file is read whenever the agent decides something. A file nobody touched for three hours (`DRAIN_MAX_AGE_MS`) is ignored and logged as `drain_expired`, so a deployment that died without removing it cannot keep an agent from working; `touch` it again to continue a longer drain.
+* **Who uses it:** `deploy/windows/deploy-from-ci.ps1` and `deploy/agents/roll-agent.sh` (with `DRAIN_SERVICE=agent`), see `deploy/README.md`.
+
 ## `/profile`: how an agent is set up
 
 Next to `/status` the health port serves `/profile`, a read-only JSON document the service builds from its loaded profile and settings (`describe.ts`): role and agent id, the image tag (`AGENT_VERSION`), the capability card ids, model and allowed models, the system prompt with its SHA-256 and length (`PROFILE_PROMPT=0` leaves the text out), allowed tools, command approval patterns (the deployment's own patterns are only counted) and tools that wait for approval, budgets and caps, concurrency, repository settings (push, pull request, branch prefix, the credential kind `token`, `github-app` or `none`, the bot's GitHub login with an app, token hosts, mirror, `GIT_TOKEN_EXPIRES` when set to a plain date), skills, chat settings (who may ask and instruct), events and observe state. Live handlers and token pools stay on `/status`. `setup` is what an operator changed (see "Setup overrides"). It holds no key, token, file path or environment value. `hash` identifies the setup (the version and the prompt text are not part of it) and `changedAt` is when this hash was first seen, kept in `profile-hash.json` in the state directory, so a dashboard can mark "changed since last seen". The port is private to the cluster; the prompt is company wording, so show it only through the private gateway.

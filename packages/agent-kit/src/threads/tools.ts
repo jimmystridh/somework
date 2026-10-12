@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
+import { DrainingError } from "../drain.ts";
 import { DIRECTORY_SEARCH_LIMIT, type AgentDirectory } from "./directory.ts";
 import type { JobEntry, JobManager, JobSpec, Party } from "./jobs.ts";
 import type { RunRecall } from "../recall.ts";
@@ -108,7 +109,13 @@ export function createThreadTools(host: ThreadToolHost, jobTools: readonly JobTo
 					priority: priorityOf(context.sender),
 					source: "message",
 				};
-				const entry = host.jobs().start(spec, jobId(context.messageId, plan));
+				let entry: JobEntry;
+				try {
+					entry = host.jobs().start(spec, jobId(context.messageId, plan));
+				} catch (error) {
+					if (error instanceof DrainingError) return failure(`not started: ${error.message}. Tell the person it can be asked again once the deployment is done.`);
+					throw error;
+				}
 				if (context.runId) host.notes?.().note(context.runId, "job_started", { jobId: entry.id, label: entry.label, capability: `${plan.capability.id}@${plan.capability.version}` });
 				return text(`Started ${describeJob(entry)}.`);
 			},

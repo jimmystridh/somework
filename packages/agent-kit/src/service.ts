@@ -34,6 +34,7 @@ import { describeAgent, isoDateOrUndefined, withChangeMarker } from "./describe.
 import { createHealthServer } from "./health.ts";
 import { JobJournal } from "./journal.ts";
 import { createBudgetIntercept } from "./budget-control.ts";
+import { Drain, drainFileIn } from "./drain.ts";
 import { DailyLedger } from "./ledger.ts";
 import { jsonLogger } from "./log.ts";
 import { Metrics } from "./metrics.ts";
@@ -103,6 +104,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const metrics = new Metrics();
 			const identity = Identity.fromFile(config.somework.keyFile);
 			metrics.constantLabels({ agent: identity.agentId });
+			const drain = new Drain({ file: drainFileIn(config.state.dir), metrics, log });
 			const client = new SomeWorkClient({ baseUrl: config.somework.url, identity, caFile: config.somework.caFile, requireTls: config.somework.requireTls });
 
 			const gitApp = config.git.app
@@ -194,6 +196,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 						agent: { id: identity.agentId, role: profile.id, capabilities: profile.capabilities },
 						log,
 						metrics,
+						draining: () => drain.active,
 					})
 				: undefined;
 			const observe = createObserve({ profile: profile.observe, env, log, metrics, agentId: identity.agentId });
@@ -221,7 +224,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const chatChannels = [telegram, slack].filter((channel) => channel !== undefined);
 			const sender: Sender = chatChannels.length > 0 ? new RoutedSender(domainSender, chatChannels) : domainSender;
 			const stateBase = (): Promise<string> =>
-				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
+				buildState({ agentId: identity.agentId, role: profile.id, capabilities: profile.capabilities, ledger, journal, health: () => runtimeRef?.health() ?? { ready: false, reason: "starting" }, draining: () => drain.active, events: events ? () => events.status() : undefined, roleContext: hooks.chat?.context });
 			const threadState = async (): Promise<string> => {
 				const active = jobsRef?.active() ?? [];
 				const held = resources.holders() ?? [];
@@ -332,6 +335,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const approvals = new Approvals({ client, log, timeoutMinutes: threadSettings.approvalMinutes, approvers: threadSettings.approvers, channel: [...(telegram ? [telegramApprovals(telegram.store, telegram.sender)] : []), ...(slack ? [slackApprovals(slack.store, slack.sender)] : [])] });
 			const slug = topicSlug(identity.agentId);
 			const stop = new AbortController();
+			drain.watch(stop.signal);
 			const reporter = createJobReporter({
 				sender,
 				agentId: identity.agentId,
@@ -357,6 +361,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				},
 				resourcesFor: hooks.chat?.jobResources,
 				budget: profile.defaultBudget,
+				draining: () => drain.active,
 				signal: stop.signal,
 				log,
 			});
@@ -438,6 +443,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const health = createHealthServer({
 				runtime,
 				metrics,
+				draining: () => drain.active,
 				profile: describe,
 				history: (limit) => journal.recent(limit),
 				...(preflight ? { preflight } : {}),

@@ -15,6 +15,8 @@ export interface StateSources {
 	ledger: Pick<DailyLedger, "usage">;
 	journal?: Pick<JobJournal, "lines">;
 	health?: () => { ready: boolean; reason?: string };
+	/** True while the agent drains for a deployment (see `Drain`). */
+	draining?: () => boolean;
 	/** Extra facts from the events component, if there is one. */
 	events?: () => unknown;
 	/** The role's own facts. */
@@ -32,6 +34,7 @@ export async function buildState(sources: StateSources): Promise<string> {
 		`now: ${(sources.now?.() ?? new Date()).toISOString()}`,
 		`agent: ${sources.agentId} (role ${sources.role}); capabilities: ${sources.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}`,
 		`ready: ${health.ready ? "yes" : `no (${health.reason ?? "unknown"})`}`,
+		...(sources.draining?.() ? ["draining: yes (a deployment is under way: no new jobs start until it is done, the jobs that run finish, and chat still works)"] : []),
 		`token pools today: ${[pool("tasks", usage.tasks), pool("events", usage.events), pool("chat", usage.chat)].filter(Boolean).join("; ")}`,
 		...(events?.handlers?.length ? [`event handlers: ${events.handlers.map((h) => `${h.name} ${h.enabled ? "on" : "off"}${h.runs ? ` (${h.runs} runs, ${h.errors ?? 0} errors)` : ""}`).join(", ")}`] : []),
 		"recent jobs (newest first):",

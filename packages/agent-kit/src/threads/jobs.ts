@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { DrainingError } from "../drain.ts";
 import type { Handler, Job, JobControl, Outcome, StopReason } from "../job-types.ts";
 import type { JobGate } from "../gate.ts";
 import { silent, type Log } from "../log.ts";
@@ -68,6 +69,8 @@ export interface JobManagerDeps {
 	resourcesFor?: (capabilityId: string, input: Record<string, unknown>) => string[] | undefined;
 	/** What a job may use unless it asks for less: the handler clamps it to the role's own limits. */
 	budget: { maxTokens: number; maxMinutes: number };
+	/** True while the agent drains for a deployment: no new job starts (jobs that run, or were left unfinished, carry on). */
+	draining?: () => boolean;
 	/** Aborted at shutdown: running jobs are left as they are and picked up again at the next start. */
 	signal?: AbortSignal;
 	log?: Log;
@@ -134,10 +137,11 @@ export class JobManager {
 		return this.active().filter((entry) => entry.conversationId === conversationId);
 	}
 
-	/** Starts a job. A job with this id that already exists is returned as it is: the same request never starts the same work twice. */
+	/** Starts a job. A job with this id that already exists is returned as it is: the same request never starts the same work twice. Throws `DrainingError` while the agent drains. */
 	start(spec: JobSpec, id = newJobId()): JobEntry {
 		const existing = this.get(id);
 		if (existing) return existing;
+		if (this.#deps.draining?.()) throw new DrainingError();
 		const resources = spec.resources ?? this.#deps.resourcesFor?.(spec.capability.id, spec.input);
 		const entry: JobEntry = { ...spec, ...(resources && resources.length > 0 ? { resources } : {}), id, state: "waiting", createdAt: this.#now() };
 		this.#deps.store.put(entry);

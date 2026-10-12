@@ -11,6 +11,7 @@
     ".": "./src/index.ts",
     "./config": "./src/config.ts",
     "./credentials": "./src/credentials.ts",
+    "./drain": "./src/drain.ts",
     "./egress/proxy": "./src/egress/proxy.ts",
     "./events": "./src/events/index.ts",
     "./gate": "./src/gate.ts",
