@@ -82,13 +82,27 @@ Viewers see everything read-only: the buttons follow the role that `GET /api/ops
 
 ```
 cargo test                                         # server and UI unit tests; the Postgres tests need initdb/postgres/pg_ctl
+scripts/build-ops-image.sh <version>               # from the repository root: the UI bundle if it is missing or stale, then the image
+scripts/build-ops-image.sh <version> --ship HOST   # and then docker save | gzip | ssh HOST docker load
+```
+
+**How the UI gets into the image.** The server image does not build the UI. `dashboard/bundle/` (gitignored) is made on the machine that builds the image, with `dx` (`cargo install dioxus-cli --version 0.7.4 --locked`, the version of the `dioxus` crate in `ui/Cargo.toml`), and the last stage of `Dockerfile` copies it to `/app/public`, where the server serves it under `/fleet/`. An image built without a current bundle serves the old UI, or fails when there is no `bundle/` at all. `scripts/build-ops-image.sh` makes sure it is there: it builds the bundle when `bundle/index.html` is missing or when anything in `ui/src`, `shared/src`, `public/`, the manifests or `Dioxus.toml` is newer than it (`--rebuild-bundle` forces it), and by hand these are the steps it runs, from `dashboard/`:
+
+```
 rm -rf target/dx/fleet-ui/release/web/public   # stale hashed files would be bundled too
 dx bundle --release --platform web --package fleet-ui
 rm -rf bundle && cp -R target/dx/fleet-ui/release/web/public bundle && cp public/style.css bundle/style.css
-docker build -f dashboard/Dockerfile -t agent-cluster-fleet:<version> ..   # from dashboard/: the context is the repository root
 ```
 
-The server depends on `crates/somework-client` by path, so the image is built with the repository root as the build context (`Dockerfile.dockerignore` keeps the context to `Cargo.toml`, `crates/` and `dashboard/`); the Dockerfile compiles the server and copies `bundle/`.
+Then, from the repository root (the context is the repository root, not `dashboard/`):
+
+```
+docker build -f dashboard/Dockerfile -t agent-cluster-fleet:<version> .
+```
+
+The server depends on `crates/somework-client` (and through it `crates/somework-core`) by path, so the image is built with the repository root as the build context (`Dockerfile.dockerignore` keeps the context to `Cargo.toml`, `crates/` and `dashboard/`).
+
+**Dependency layer.** Compiling the dependencies (sqlx, axum, rustls, ...) is nearly all of the build: about 45 minutes on a VM with 2 CPUs. The Dockerfile therefore compiles them in a layer of their own, from the workspace manifests, `dashboard/Cargo.lock` and empty stub sources, before it copies a single source file. Changing a file in `server/src`, `shared/src` or the two crates leaves that layer as it is, and only the four workspace crates are compiled again (about a minute on a 12-core laptop, measured; expect a few minutes on the 2-CPU VM). The layer is built again when a `Cargo.toml` or the lockfile changes, so a new dependency or a new path crate has to be added to the manifest `COPY` lines of `Dockerfile` (`scripts/dashboard-dockerfile.test.ts` fails when one is missing). Cargo compares modification times, and `COPY` keeps those of the files in the context, so the step that builds the real sources touches them first: without it cargo would take the stubs for up to date and the build would fail. The cache lives on the machine that builds, not in the image: build on the same machine every time (`docker save` and `docker load` ship the image, not the cache), and do not run `docker builder prune` or `docker system prune -a` in between.
 
 The integration tests start a throwaway Postgres (a random port on 127.0.0.1, removed afterwards) from `initdb`, `postgres` and `pg_ctl` found in `POSTGRES_BIN_DIR`, the `PATH`, `/opt/homebrew/bin` or `/usr/lib/postgresql/*/bin`. Without them each test prints `SKIPPED <name>` on stderr and does nothing; `REQUIRE_POSTGRES=1` turns that into a failure (use it in CI).
 
