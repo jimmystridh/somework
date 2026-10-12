@@ -308,7 +308,7 @@ export class Controls {
 		const slug = agent.replace(/^agent\//, "");
 		const answer = await this.#reach("Operations", "operations_unavailable", `${operations.url.replace(/\/$/, "")}/fleet/api/ops/agents/${encodeURIComponent(slug)}${path}`, {
 			method,
-			headers: { authorization: `Bearer ${token}`, ...(method === "GET" ? {} : { "x-operations-request": "1" }) },
+			headers: { "x-operations-service-token": token, ...(method === "GET" ? {} : { "x-operations-request": "1" }) },
 			caFile: operations.caFile,
 			...(body === undefined ? {} : { body }),
 			maxBytes: 4_000_000,

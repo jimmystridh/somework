@@ -372,7 +372,8 @@ test("the model can read an agent's instructions and the role's prompt, but only
 	const g = await gateway(b);
 	const read: any = await (await g.call("GET", "/v1/setup?agent=agent/reviewer")).json();
 	assert.deepEqual([read.agent, read.savedRevision, read.appliedRevision, read.instructions, read.rolePrompt], ["agent/reviewer", 3, 3, "Answer in Swedish.", "You review pull requests."]);
-	assert.equal(b.httpCalls[0]!.authorization, "Bearer hub-admin-token", "the token comes from the token file");
+	assert.equal(b.httpCalls[0]!.headers?.["x-operations-service-token"], "hub-admin-token", "the token comes from the token file, in the header Operations reads");
+	assert.equal(b.httpCalls[0]!.authorization, undefined, "Authorization stays with the dashboard's own gateway");
 	assert.equal((await g.call("GET", "/v1/setup?agent=reviewer")).status, 400);
 	g.close();
 
