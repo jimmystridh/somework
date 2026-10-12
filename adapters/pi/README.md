@@ -45,9 +45,10 @@ human). The agent and the requester must both be enrolled with `--side-effects w
 `auth.json` may hold several providers; refreshes are written back to that file only. Every provider an allowed model needs is registered
 at startup, and a model the provider does not offer stops the service at startup instead of failing a job.
 
-**Per-job model.** `input.model: {provider, id}` is optional. It is accepted only if listed in `PI_ALLOWED_MODELS` (comma separated
-`provider/model-id`; the default `PI_PROVIDER`/`PI_MODEL` is always allowed), otherwise the task fails with `model_not_allowed`. The
-model is fixed when a conversation starts: the same `agentKey` with a different model gets its own conversation.
+**Per-job model.** `input.model: {provider, id, effort}` is optional: `provider` and `id` together, `effort` (`off`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `max`) alone or with them; what is left out is the agent's own setting (`PI_EFFORT`, the fleet's model, the agent's override). A model is accepted only if listed
+in `PI_ALLOWED_MODELS` (comma separated `provider/model-id`; the default `PI_PROVIDER`/`PI_MODEL` is always allowed), otherwise the task fails with
+`model_not_allowed`; an effort the model does not take fails it with `invalid_input`. The model is fixed when a conversation starts: the same `agentKey` with a different model gets its own conversation.
 
 **Where the code goes.** Selecting `antigravity` sends the repository content the agent reads to Google through the account whose login is
 installed; `opencode-go` routes it to third-party model hosts. Neither is a default: enable them deliberately (`PI_ALLOWED_MODELS`) and

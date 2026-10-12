@@ -1,19 +1,139 @@
 //! The setup form as an editor handles it: what the role's defaults fill in, what counts as a change, and the checkbox lists.
 
 use fleet_shared::{
-    operations::{ApprovalPatternSetting, ModelChoice, RoleDefaults, SetupForm},
+    operations::{ApprovalPatternSetting, Effort, ModelChoice, RoleDefaults, SetupForm},
     somework::ApprovalPattern,
 };
 use std::collections::BTreeSet;
 
-/// `provider/modelId`, the way the agent's profile names a model.
-pub fn model_text(model: &ModelChoice) -> String {
-    format!("{}/{}", model.provider, model.model_id)
+/// Splits `provider/modelId`, the way the agent's profile names a model: only the first slash splits.
+pub fn split_model(text: &str) -> Option<(&str, &str)> {
+    let (provider, model_id) = text.trim().split_once('/')?;
+    (!provider.is_empty() && !model_id.is_empty()).then_some((provider, model_id))
 }
 
-pub fn parse_model(text: &str) -> Option<ModelChoice> {
-    let (provider, model_id) = text.trim().split_once('/')?;
-    (!provider.is_empty() && !model_id.is_empty()).then(|| ModelChoice { provider: provider.into(), model_id: model_id.into() })
+/// The providers of the models an agent allows, in the order it lists them, each once.
+pub fn allowed_providers(allowed: &[String]) -> Vec<String> {
+    let mut providers: Vec<String> = Vec::new();
+    for (provider, _) in allowed.iter().filter_map(|text| split_model(text)) {
+        if !providers.iter().any(|known| known == provider) {
+            providers.push(provider.to_string());
+        }
+    }
+    providers
+}
+
+/// The model ids an agent allows for one provider.
+pub fn allowed_model_ids(allowed: &[String], provider: &str) -> Vec<String> {
+    allowed.iter().filter_map(|text| split_model(text)).filter(|(name, _)| *name == provider).map(|(_, model_id)| model_id.to_string()).collect()
+}
+
+/// A part of the model set by something above the agent's own setup, and what it comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Inherited {
+    Fleet,
+    Environment,
+}
+
+impl Inherited {
+    pub fn text(self) -> &'static str {
+        match self {
+            Inherited::Fleet => "the fleet's model",
+            Inherited::Environment => "this agent's environment",
+        }
+    }
+}
+
+/// What the blank fields of an agent's model take: the fleet's value where it sets one, else the agent's environment.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InheritedModel {
+    pub provider: Option<(String, Inherited)>,
+    pub model_id: Option<(String, Inherited)>,
+    pub effort: Option<(Effort, Inherited)>,
+}
+
+pub fn inherited_model(fleet: Option<&ModelChoice>, defaults: Option<&RoleDefaults>) -> InheritedModel {
+    let environment = defaults.and_then(|defaults| split_model(&defaults.model));
+    let environment_effort = defaults.and_then(|defaults| defaults.effort.as_deref()).and_then(Effort::parse);
+    let pick = |from_fleet: Option<String>, from_environment: Option<&str>| match (from_fleet, from_environment) {
+        (Some(value), _) => Some((value, Inherited::Fleet)),
+        (None, Some(value)) => Some((value.to_string(), Inherited::Environment)),
+        (None, None) => None,
+    };
+    InheritedModel {
+        provider: pick(fleet.and_then(|model| model.provider.clone()), environment.map(|(provider, _)| provider)),
+        model_id: pick(fleet.and_then(|model| model.model_id.clone()), environment.map(|(_, model_id)| model_id)),
+        effort: match (fleet.and_then(|model| model.effort), environment_effort) {
+            (Some(effort), _) => Some((effort, Inherited::Fleet)),
+            (None, Some(effort)) => Some((effort, Inherited::Environment)),
+            (None, None) => None,
+        },
+    }
+}
+
+/// The text of the blank choice of a select: what it inherits, when that is known.
+pub fn inherit_label(value: Option<(&str, Inherited)>) -> String {
+    match value {
+        Some((value, source)) => format!("Inherit ({value}, from {})", source.text()),
+        None => "Inherit".to_string(),
+    }
+}
+
+/// The hint under a control: what a blank field takes.
+pub fn inherit_hint(part: &str, value: Option<(&str, Inherited)>, nothing: &str) -> String {
+    match value {
+        Some((value, source)) => format!("Blank: the {part} is {value}, from {}.", source.text()),
+        None => format!("Blank: {nothing}"),
+    }
+}
+
+/// The model after one part is chosen; an empty text inherits that part, and a model with no part left is no model.
+fn with_part(model: Option<&ModelChoice>, change: impl FnOnce(&mut ModelChoice)) -> Option<ModelChoice> {
+    let mut next = model.cloned().unwrap_or_default();
+    change(&mut next);
+    (!next.is_empty()).then_some(next)
+}
+
+fn named(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// The model after a provider is chosen. A model id that was chosen too, and that the agent does not allow for the new provider, goes with the old provider.
+pub fn with_provider(model: Option<&ModelChoice>, provider: &str, allowed: &[String]) -> Option<ModelChoice> {
+    with_part(model, |next| {
+        next.provider = named(provider);
+        let belongs = match (&next.provider, &next.model_id) {
+            (Some(provider), Some(model_id)) => allowed.is_empty() || allowed_model_ids(allowed, provider).contains(model_id),
+            _ => true,
+        };
+        if !belongs {
+            next.model_id = None;
+        }
+    })
+}
+
+pub fn with_model_id(model: Option<&ModelChoice>, model_id: &str) -> Option<ModelChoice> {
+    with_part(model, |next| next.model_id = named(model_id))
+}
+
+pub fn with_effort(model: Option<&ModelChoice>, effort: &str) -> Option<ModelChoice> {
+    with_part(model, |next| next.effort = Effort::parse(effort.trim()))
+}
+
+/// What the fleet page's three fields hold for a saved model: provider, model id and effort as text, empty where the part inherits.
+pub fn model_texts(model: Option<&ModelChoice>) -> [String; 3] {
+    [
+        model.and_then(|model| model.provider.clone()).unwrap_or_default(),
+        model.and_then(|model| model.model_id.clone()).unwrap_or_default(),
+        model.and_then(|model| model.effort).map(|effort| effort.as_str().to_string()).unwrap_or_default(),
+    ]
+}
+
+/// The model the three fields of the fleet page stand for: none while all are empty.
+pub fn model_from_texts(texts: &[String; 3]) -> Option<ModelChoice> {
+    let model = ModelChoice { provider: named(&texts[0]), model_id: named(&texts[1]), effort: Effort::parse(texts[2].trim()) };
+    (!model.is_empty()).then_some(model)
 }
 
 pub fn pattern_setting(pattern: &ApprovalPattern) -> ApprovalPatternSetting {
@@ -49,7 +169,7 @@ pub fn canonical(form: &SetupForm, defaults: Option<&RoleDefaults>) -> SetupForm
     SetupForm {
         instructions: form.instructions.as_deref().filter(|text| !text.trim().is_empty()).map(|text| text.trim_end().to_string()),
         disable_global_prompt: form.disable_global_prompt,
-        model: form.model.clone(),
+        model: form.model.clone().filter(|model| !model.is_empty()),
         approval_patterns: approval_patterns.filter(|list| defaults.is_none_or(|defaults| !same_patterns(list, &defaults.approval_patterns))),
         repository_skills: form.repository_skills.as_ref().map(|names| sorted(names)).filter(|names| defaults.is_none_or(|defaults| !same_names(names, &defaults.repository_skills))),
         library_skills: sorted(&form.library_skills),
@@ -144,12 +264,88 @@ mod tests {
 
     #[test]
     fn models_are_provider_slash_id() {
-        let model = parse_model("openai-codex/gpt-5.5").unwrap();
-        assert_eq!((model.provider.as_str(), model.model_id.as_str()), ("openai-codex", "gpt-5.5"));
-        assert_eq!(model_text(&model), "openai-codex/gpt-5.5");
-        assert_eq!(parse_model("noslash"), None);
-        assert_eq!(parse_model("/id"), None);
-        assert_eq!(parse_model("a/b/c").map(|model| model.model_id), Some("b/c".to_string()), "only the first slash splits");
+        assert_eq!(split_model("openai-codex/gpt-5.5"), Some(("openai-codex", "gpt-5.5")));
+        assert_eq!(split_model("noslash"), None);
+        assert_eq!(split_model("/id"), None);
+        assert_eq!(split_model("a/b/c"), Some(("a", "b/c")), "only the first slash splits");
+    }
+
+    fn allowed() -> Vec<String> {
+        ["openai-codex/gpt-5.5", "openai-codex/gpt-6.1-sol", "opencode-go/kimi-k3"].map(String::from).to_vec()
+    }
+
+    fn choice(provider: Option<&str>, model_id: Option<&str>, effort: Option<Effort>) -> ModelChoice {
+        ModelChoice { provider: provider.map(str::to_string), model_id: model_id.map(str::to_string), effort }
+    }
+
+    #[test]
+    fn the_providers_and_models_an_agent_allows_are_offered_one_list_each() {
+        assert_eq!(allowed_providers(&allowed()), ["openai-codex", "opencode-go"]);
+        assert_eq!(allowed_model_ids(&allowed(), "openai-codex"), ["gpt-5.5", "gpt-6.1-sol"]);
+        assert_eq!(allowed_model_ids(&allowed(), "nobody"), Vec::<String>::new());
+        assert!(allowed_providers(&[]).is_empty());
+    }
+
+    #[test]
+    fn each_part_of_the_model_is_chosen_alone_and_a_blank_one_inherits() {
+        let mut model = None;
+        model = with_effort(model.as_ref(), "high");
+        assert_eq!(model, Some(choice(None, None, Some(Effort::High))));
+        model = with_provider(model.as_ref(), "openai-codex", &allowed());
+        model = with_model_id(model.as_ref(), "gpt-6.1-sol");
+        assert_eq!(model, Some(choice(Some("openai-codex"), Some("gpt-6.1-sol"), Some(Effort::High))));
+        model = with_effort(model.as_ref(), "");
+        assert_eq!(model, Some(choice(Some("openai-codex"), Some("gpt-6.1-sol"), None)));
+        model = with_model_id(model.as_ref(), " ");
+        model = with_provider(model.as_ref(), "", &allowed());
+        assert_eq!(model, None, "a model with every part blank is no model");
+        assert_eq!(with_effort(None, "extreme"), None, "a level that does not exist is not chosen");
+    }
+
+    #[test]
+    fn changing_the_provider_drops_a_model_id_the_agent_does_not_allow_for_it() {
+        let model = choice(Some("openai-codex"), Some("gpt-6.1-sol"), Some(Effort::Low));
+        assert_eq!(with_provider(Some(&model), "opencode-go", &allowed()), Some(choice(Some("opencode-go"), None, Some(Effort::Low))));
+        assert_eq!(with_provider(Some(&model), "openai-codex", &allowed()), Some(model.clone()));
+        assert_eq!(with_provider(Some(&model), "opencode-go", &[]), Some(choice(Some("opencode-go"), Some("gpt-6.1-sol"), Some(Effort::Low))), "an agent that lists nothing gives no ground to drop it");
+    }
+
+    #[test]
+    fn blank_fields_take_the_fleets_value_and_then_the_agents_environment() {
+        let roles = RoleDefaults { model: "openai-codex/gpt-5.5".into(), effort: Some("medium".into()), ..Default::default() };
+        let none = inherited_model(None, Some(&roles));
+        assert_eq!(none.provider, Some(("openai-codex".to_string(), Inherited::Environment)));
+        assert_eq!(none.model_id, Some(("gpt-5.5".to_string(), Inherited::Environment)));
+        assert_eq!(none.effort, Some((Effort::Medium, Inherited::Environment)));
+
+        let fleet = choice(None, Some("gpt-6.1-sol"), Some(Effort::High));
+        let mixed = inherited_model(Some(&fleet), Some(&roles));
+        assert_eq!(mixed.provider, Some(("openai-codex".to_string(), Inherited::Environment)), "the fleet leaves the provider to the environment");
+        assert_eq!(mixed.model_id, Some(("gpt-6.1-sol".to_string(), Inherited::Fleet)));
+        assert_eq!(mixed.effort, Some((Effort::High, Inherited::Fleet)));
+
+        assert_eq!(inherited_model(None, None), InheritedModel::default(), "an agent that did not answer: nothing is known");
+        let without_effort = inherited_model(None, Some(&RoleDefaults { model: "a/b".into(), ..Default::default() }));
+        assert_eq!(without_effort.effort, None);
+    }
+
+    #[test]
+    fn the_hints_say_what_a_blank_field_takes() {
+        assert_eq!(inherit_label(Some(("gpt-6.1-sol", Inherited::Fleet))), "Inherit (gpt-6.1-sol, from the fleet's model)");
+        assert_eq!(inherit_label(None), "Inherit");
+        assert_eq!(inherit_hint("effort", Some(("high", Inherited::Environment)), "x"), "Blank: the effort is high, from this agent's environment.");
+        assert_eq!(inherit_hint("effort", None, "no effort is set."), "Blank: no effort is set.");
+    }
+
+    #[test]
+    fn the_fleet_pages_three_fields_make_a_model_when_any_is_filled() {
+        assert_eq!(model_from_texts(&[String::new(), "  ".into(), String::new()]), None);
+        let typed = ["openai-codex".to_string(), " gpt-6.1-sol ".to_string(), "high".to_string()];
+        let model = model_from_texts(&typed).unwrap();
+        assert_eq!(model, choice(Some("openai-codex"), Some("gpt-6.1-sol"), Some(Effort::High)));
+        assert_eq!(model_texts(Some(&model)), ["openai-codex", "gpt-6.1-sol", "high"]);
+        assert_eq!(model_texts(None), ["", "", ""]);
+        assert_eq!(model_from_texts(&[String::new(), String::new(), "max".into()]), Some(choice(None, None, Some(Effort::Max))));
     }
 
     #[test]
@@ -197,7 +393,7 @@ mod tests {
     #[test]
     fn changed_parts_are_named_for_people() {
         let saved = SetupForm::default();
-        let draft = SetupForm { instructions: Some("x".into()), model: parse_model("a/b"), library_skills: vec!["z".into(), "a".into()], mcp: vec!["docs".into()], ..Default::default() };
+        let draft = SetupForm { instructions: Some("x".into()), model: Some(choice(Some("a"), Some("b"), None)), library_skills: vec!["z".into(), "a".into()], mcp: vec!["docs".into()], ..Default::default() };
         assert_eq!(changed_parts(&saved, &draft, None), ["operator instructions", "model", "library skills", "MCP servers"]);
         assert_eq!(canonical(&draft, None).library_skills, ["a", "z"]);
     }

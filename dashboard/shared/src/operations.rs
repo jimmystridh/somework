@@ -136,11 +136,74 @@ pub struct McpEntry {
     pub timeout_seconds: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// How hard a model reasons: Pi's thinking levels plus `off`. Which of them a model takes is in its registry entry, which only the agent has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl Effort {
+    pub const ALL: [Effort; 7] = [Effort::Off, Effort::Minimal, Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effort::Off => "off",
+            Effort::Minimal => "minimal",
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::Xhigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Effort> {
+        Effort::ALL.into_iter().find(|effort| effort.as_str() == text)
+    }
+}
+
+pub const MAX_PROVIDER_CHARS: usize = 80;
+pub const MAX_MODEL_ID_CHARS: usize = 200;
+
+/// The model an agent uses, as a document sets it: provider, model and effort are chosen separately and a field left out is inherited, for an
+/// agent from the fleet's model and then its own environment, for the fleet from the agents' environment. At least one field is set.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct ModelChoice {
-    pub provider: String,
-    pub model_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
+}
+
+impl ModelChoice {
+    /// True when every field inherits.
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none() && self.model_id.is_none() && self.effort.is_none()
+    }
+
+    /// The choice as an agent takes it (text trimmed), or what it would refuse: a blank or too long provider or model id, or no field at all.
+    pub fn checked(&self) -> Result<ModelChoice, String> {
+        let text = |value: &Option<String>, name: &str, max: usize| match value.as_deref().map(str::trim) {
+            None => Ok(None),
+            Some(text) if text.is_empty() || text.encode_utf16().count() > max => Err(format!("the {name} is empty or longer than {max} characters (leave it unset to inherit it)")),
+            Some(text) => Ok(Some(text.to_string())),
+        };
+        let checked = ModelChoice { provider: text(&self.provider, "provider", MAX_PROVIDER_CHARS)?, model_id: text(&self.model_id, "model id", MAX_MODEL_ID_CHARS)?, effort: self.effort };
+        if checked.is_empty() {
+            return Err("the model needs at least one of provider, model id and effort".into());
+        }
+        Ok(checked)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,6 +254,9 @@ pub struct LimitsValues {
     /// The text every agent adds after its role's prompt. `None` keeps the agents' built-in text (`DEFAULT_GLOBAL_PROMPT`); an empty text means none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub global_prompt: Option<String>,
+    /// The model every agent uses unless its own setup says otherwise, field by field. `None` leaves each agent on its environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelChoice>,
 }
 
 /// The text the agents use until the fleet sets one: the same words as `DEFAULT_GLOBAL_PROMPT` in `packages/agent-kit/src/setup/global-prompt.ts` (a test keeps them equal),
@@ -215,6 +281,8 @@ pub struct FleetLimits {
     pub budget_raise_ceiling: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelChoice>,
 }
 
 /// What an agent reports of its applied setup under `setup` in `/profile` (`SetupStatus` of the contract).
@@ -239,11 +307,24 @@ pub struct EffectiveSetup {
     pub instructions_characters: u64,
     /// `provider/modelId`
     pub model: String,
+    /// The effort in effect; `None` when nothing sets one.
+    pub effort: Option<String>,
+    /// Where provider, model and effort come from, as the agent reports it. `None` for an agent that does not say.
+    pub model_sources: Option<ModelSources>,
     pub approval_patterns: Vec<ApprovalPattern>,
     pub repository_skills: Vec<String>,
     /// `name@version`
     pub library_skills: Vec<String>,
     pub mcp: Vec<EffectiveMcp>,
+}
+
+/// Which layer each part of an agent's model comes from: `env` (the agent's environment), `fleet` or `override`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModelSources {
+    pub provider: String,
+    pub model_id: String,
+    pub effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -528,6 +609,8 @@ pub struct RoleDefaults {
     pub prompt_sha256: String,
     pub prompt_characters: u64,
     pub model: String,
+    /// The effort the agent's environment sets (`PI_EFFORT`); `None` when it sets none.
+    pub effort: Option<String>,
     pub allowed_models: Vec<String>,
     pub approval_patterns: Vec<ApprovalPattern>,
     /// The skills the role allows from the repository.
@@ -546,6 +629,8 @@ pub struct OpsAgentDetail {
     /// What the agent reports as applied (the effective setup is in `setupCard`).
     pub reported: ReportedSetup,
     pub role_defaults: Option<RoleDefaults>,
+    /// The model the fleet sets for every agent (the latest limits revision), shown as what the editor's blank fields inherit.
+    pub fleet_model: Option<ModelChoice>,
     /// The existing setup card (effective setup as `/profile` describes it), `None` when the agent did not answer or is too old to have one.
     pub setup_card: Option<AgentSetup>,
     /// Jobs that run or wait now, and the recently finished ones (from the agents' job events).

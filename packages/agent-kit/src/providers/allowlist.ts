@@ -1,6 +1,10 @@
+import type { Effort } from "../setup/contract.ts";
+
+/** A complete model; `effort` is how hard it reasons and is left out when nothing sets it. Two refs are the same model when provider and id match. */
 export interface ModelRef {
 	provider: string;
 	modelId: string;
+	effort?: Effort;
 }
 
 export const sameModel = (a: ModelRef, b: ModelRef): boolean => a.provider === b.provider && a.modelId === b.modelId;
@@ -20,5 +24,5 @@ export function parseModelList(text: string | undefined): ModelRef[] {
 
 /** The configured default is always allowed; everything else must be listed explicitly. */
 export function allowlist(defaultModel: ModelRef, extra: ModelRef[]): ModelRef[] {
-	return [defaultModel, ...extra.filter((ref) => !sameModel(ref, defaultModel))];
+	return [{ provider: defaultModel.provider, modelId: defaultModel.modelId }, ...extra.filter((ref) => !sameModel(ref, defaultModel))];
 }

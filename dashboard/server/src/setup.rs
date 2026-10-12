@@ -7,7 +7,7 @@
 
 use crate::somework::{count, identifier};
 use fleet_shared::{
-    operations::{EffectiveMcp, EffectiveSetup, RejectedSetup, ReportedSetup, RoleDefaults},
+    operations::{Effort, EffectiveMcp, EffectiveSetup, ModelSources, RejectedSetup, ReportedSetup, RoleDefaults},
     somework::{AgentSetup, ApprovalPattern, RepositoryAccess},
 };
 use serde_json::Value;
@@ -65,6 +65,22 @@ fn model_name(value: Option<&Value>) -> Option<String> {
     Some(format!("{}/{}", identifier(value?.get("provider"))?, identifier(value?.get("modelId"))?))
 }
 
+/// The effort of a `{provider, modelId, effort}` object: one of the known levels, else nothing.
+fn model_effort(value: Option<&Value>) -> Option<String> {
+    Effort::parse(value?.get("effort")?.as_str()?).map(|effort| effort.as_str().to_string())
+}
+
+/// Which layer a part of the model comes from: `env`, `fleet` or `override`.
+fn model_layer(value: Option<&Value>) -> Option<String> {
+    let word = value?.as_str()?;
+    ["env", "fleet", "override"].contains(&word).then(|| word.to_string())
+}
+
+fn model_sources(value: Option<&Value>) -> Option<ModelSources> {
+    let sources = value.filter(|value| value.is_object())?;
+    Some(ModelSources { provider: model_layer(sources.get("provider"))?, model_id: model_layer(sources.get("modelId"))?, effort: model_layer(sources.get("effort")) })
+}
+
 fn approval_patterns(value: Option<&Value>) -> Vec<ApprovalPattern> {
     value
         .and_then(Value::as_array)
@@ -79,6 +95,8 @@ fn effective_setup(effective: &Value) -> EffectiveSetup {
         instructions_sha256: identifier(instructions.and_then(|i| i.get("sha256"))).map(|hash| hash.chars().take(12).collect()),
         instructions_characters: count(instructions.and_then(|i| i.get("characters"))).unwrap_or(0),
         model: model_name(effective.get("model")).unwrap_or_default(),
+        effort: model_effort(effective.get("model")),
+        model_sources: model_sources(effective.get("modelSources")),
         approval_patterns: approval_patterns(effective.get("approvalPatterns")),
         repository_skills: identifiers(effective.get("repositorySkills")),
         library_skills: effective
@@ -142,6 +160,7 @@ pub fn role_defaults(profile: &Value) -> Option<RoleDefaults> {
         prompt_sha256: identifier(prompt.and_then(|p| p.get("sha256"))).map(|hash| hash.chars().take(12).collect()).unwrap_or_default(),
         prompt_characters: count(prompt.and_then(|p| p.get("characters"))).unwrap_or(0),
         model: model_name(defaults.get("model")).unwrap_or_default(),
+        effort: model_effort(defaults.get("model")),
         allowed_models: defaults.get("allowedModels").and_then(Value::as_array).map(|list| list.iter().take(MAX_LIST).filter_map(|item| model_name(Some(item))).collect()).unwrap_or_default(),
         approval_patterns: approval_patterns(defaults.get("approvalPatterns")),
         repository_skills: identifiers(defaults.get("repositorySkills")),
@@ -365,6 +384,27 @@ mod tests {
         assert_eq!((effective.model.as_str(), effective.library_skills.clone(), effective.repository_skills.clone()), ("anthropic/claude", vec!["triage@3".to_string()], vec!["review".to_string()]));
         assert_eq!(effective.mcp.iter().map(|m| (m.name.as_str(), m.transport.as_str(), m.approval.as_str(), m.error.as_deref())).collect::<Vec<_>>(), vec![("docs", "stdio", "ask", None), ("gh", "http", "writes", Some("secret GITHUB_TOKEN is missing"))]);
         assert!(!format!("{effective:?}").contains("PRIVATE"));
+    }
+
+    #[test]
+    fn the_effort_and_where_each_part_of_the_model_comes_from_are_read_by_name() {
+        let mut value = profile();
+        value["setup"] = json!({"override": null, "limits": null, "defaults": {"model": {"provider": "openai-codex", "modelId": "gpt-5.5", "effort": "medium"}}, "effective": {
+            "model": {"provider": "openai-codex", "modelId": "gpt-6.1-sol", "effort": "high"},
+            "modelSources": {"provider": "env", "modelId": "fleet", "effort": "override", "path": "/PRIVATE"}
+        }});
+        let effective = reported_setup(&value).unwrap().effective.unwrap();
+        assert_eq!((effective.model.as_str(), effective.effort.as_deref()), ("openai-codex/gpt-6.1-sol", Some("high")));
+        assert_eq!(effective.model_sources, Some(ModelSources { provider: "env".into(), model_id: "fleet".into(), effort: Some("override".into()) }));
+        assert!(!format!("{effective:?}").contains("PRIVATE"));
+        assert_eq!(role_defaults(&value).unwrap().effort.as_deref(), Some("medium"), "the environment's effort is what a blank effort inherits");
+
+        value["setup"]["effective"] = json!({"model": {"provider": "p", "modelId": "m", "effort": "extreme"}, "modelSources": {"provider": "somewhere", "modelId": "env"}});
+        let odd = reported_setup(&value).unwrap().effective.unwrap();
+        assert_eq!((odd.effort, odd.model_sources), (None, None), "an unknown level or layer is not shown");
+        value["setup"]["effective"] = json!({"model": {"provider": "p", "modelId": "m"}, "modelSources": {"provider": "env", "modelId": "env"}});
+        let plain = reported_setup(&value).unwrap().effective.unwrap();
+        assert_eq!((plain.effort, plain.model_sources.unwrap().effort), (None, None), "an agent that sets no effort reports none");
     }
 
     #[test]

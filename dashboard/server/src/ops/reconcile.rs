@@ -451,7 +451,7 @@ mod tests {
         let reconciler = reconciler(&store, &base, vec![one, two, three]);
         reconciler.tick().await;
         assert!(domain.messages.lock().unwrap().is_empty(), "no limits saved");
-        let values = LimitsValues { max_tokens_cap: 5, max_minutes_cap: 6, daily_token_limit: 7, budget_raise_ceiling: 8, global_prompt: None };
+        let values = LimitsValues { max_tokens_cap: 5, max_minutes_cap: 6, daily_token_limit: 7, budget_raise_ceiling: 8, global_prompt: None, model: None };
         store.save_limits(0, &values, "", "admin@example.com").await.unwrap();
         reconciler.tick().await;
         let mut recipients: Vec<String> = domain.messages.lock().unwrap().iter().map(|m| m.0["recipients"][0]["id"].as_str().unwrap().to_string()).collect();

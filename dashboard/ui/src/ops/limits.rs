@@ -7,6 +7,7 @@ use crate::{
     live::Live,
     ops::{
         diff::{DiffView, summary},
+        form::{model_from_texts, model_texts},
         state::delivery_problem,
         validate::{Problem, global_prompt_counter, limits_from_text, note_counter, note_problem},
     },
@@ -15,7 +16,7 @@ use crate::{
     widgets::{CounterText, ErrorNotice, FieldMessage, Outcome, OutcomeNotice, Waiting, use_api},
 };
 use dioxus::prelude::*;
-use fleet_shared::operations::{AgentLimitsState, DEFAULT_GLOBAL_PROMPT, LimitsPut, LimitsRevision, LimitsRevisionList, LimitsValues, LimitsView};
+use fleet_shared::operations::{AgentLimitsState, DEFAULT_GLOBAL_PROMPT, Effort, LimitsPut, LimitsRevision, LimitsRevisionList, LimitsValues, LimitsView};
 
 const FIELDS: [(&str, &str, &str); 4] = [
     ("values.maxTokensCap", "Maximum tokens per job", "The most tokens one job may be given."),
@@ -112,6 +113,8 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
     let editable = session.is_admin();
     let start = current.as_ref().map(|current| texts_of(&current.values)).unwrap_or_default();
     let start_prompt = PromptDraft::of(current.as_ref().map(|current| &current.values));
+    let start_model = model_texts(current.as_ref().and_then(|current| current.values.model.as_ref()));
+    let mut model = use_signal(|| start_model.clone());
     let mut prompt = use_signal(|| start_prompt.clone());
     let mut texts = use_signal(|| start.clone());
     let mut base = use_signal(|| current.as_ref().map_or(0, |current| current.revision));
@@ -123,13 +126,15 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
     use_effect(move || {
         texts.read();
         prompt.read();
+        model.read();
         if !server_problems.peek().is_empty() {
             server_problems.set(Vec::new());
         }
     });
     let typed = texts.read().clone();
     let typed_prompt = prompt.read().clone();
-    let parsed = limits_from_text([&typed[0], &typed[1], &typed[2], &typed[3]], typed_prompt.value());
+    let typed_model = model.read().clone();
+    let parsed = limits_from_text([&typed[0], &typed[1], &typed[2], &typed[3]], typed_prompt.value(), model_from_texts(&typed_model));
     let mut problems: Vec<Problem> = match &parsed {
         Err(found) => found.iter().filter(|problem| !typed_empty_and_new(&typed, &problem.field, current.is_none())).cloned().collect(),
         Ok(_) => Vec::new(),
@@ -137,13 +142,13 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
     let note_text = note.read().clone();
     problems.extend(note_problem(&note_text));
     let all: Vec<Problem> = problems.iter().cloned().chain(server_problems.read().iter().cloned()).collect();
-    let changed = typed != start || typed_prompt != start_prompt;
+    let changed = typed != start || typed_prompt != start_prompt || typed_model != start_model;
     let blocked = parsed.is_err() || note_problem(&note_text).is_some();
     let note_count = note_counter(&note_text);
     let saved_by = current.as_ref().map(|current| format!("Revision {} saved by {}", current.revision, current.author));
 
     let save = move |_| {
-        let Ok(values) = limits_from_text([&texts.read()[0], &texts.read()[1], &texts.read()[2], &texts.read()[3]], prompt.read().value()) else { return };
+        let Ok(values) = limits_from_text([&texts.read()[0], &texts.read()[1], &texts.read()[2], &texts.read()[3]], prompt.read().value(), model_from_texts(&model.read())) else { return };
         let body = LimitsPut { base_revision: base(), values, note: Some(note.read().trim().to_string()).filter(|text| !text.is_empty()) };
         busy.set(true);
         server_problems.set(Vec::new());
@@ -182,6 +187,29 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
                         FieldMessage { problems: all.clone(), field: field.to_string(), id: format!("limit-{index}-error") }
                     }
                 }
+            }
+            fieldset { class: "group", disabled: !editable,
+                legend { "Model" }
+                p { class: "hint", "The provider, model and reasoning effort of every agent. Each is set on its own and a blank one means the agents' environment (PI_PROVIDER, PI_MODEL, PI_EFFORT). An agent's own setup can replace single parts on its page. The model must be one the agent allows; an agent whose model does not take the effort rejects the revision and says why. Applies from each agent's next model run." }
+                div { class: "field",
+                    label { r#for: "fleet-model-provider", "Provider" }
+                    input { id: "fleet-model-provider", r#type: "text", value: "{typed_model[0]}", placeholder: "inherit: the agents' environment", autocomplete: "off", spellcheck: false, "aria-describedby": "fleet-model-error",
+                        oninput: move |event| model.write()[0] = event.value() }
+                }
+                div { class: "field",
+                    label { r#for: "fleet-model-id", "Model" }
+                    input { id: "fleet-model-id", r#type: "text", value: "{typed_model[1]}", placeholder: "inherit: the agents' environment", autocomplete: "off", spellcheck: false, "aria-describedby": "fleet-model-error",
+                        oninput: move |event| model.write()[1] = event.value() }
+                }
+                div { class: "field",
+                    label { r#for: "fleet-model-effort", "Reasoning effort" }
+                    select { id: "fleet-model-effort", value: "{typed_model[2]}", "aria-describedby": "fleet-model-error",
+                        onchange: move |event| model.write()[2] = event.value(),
+                        option { value: "", selected: typed_model[2].is_empty(), "Inherit (the agents' environment)" }
+                        for effort in Effort::ALL { option { key: "{effort.as_str()}", value: "{effort.as_str()}", selected: effort.as_str() == typed_model[2], "{effort.as_str()}" } }
+                    }
+                }
+                FieldMessage { problems: all.clone(), field: "values.model".to_string(), id: "fleet-model-error".to_string() }
             }
             fieldset { class: "group", disabled: !editable,
                 legend { "Global prompt" }
@@ -255,14 +283,14 @@ mod tests {
 
     #[test]
     fn the_values_are_shown_as_typed_numbers() {
-        let values = LimitsValues { max_tokens_cap: 1_000_000, max_minutes_cap: 30, daily_token_limit: 5_000_000, budget_raise_ceiling: 8_000_000, global_prompt: None };
+        let values = LimitsValues { max_tokens_cap: 1_000_000, max_minutes_cap: 30, daily_token_limit: 5_000_000, budget_raise_ceiling: 8_000_000, global_prompt: None, model: None };
         assert_eq!(texts_of(&values), ["1000000", "30", "5000000", "8000000"]);
-        assert_eq!(limits_from_text([&texts_of(&values)[0], &texts_of(&values)[1], &texts_of(&values)[2], &texts_of(&values)[3]], None).unwrap(), values);
+        assert_eq!(limits_from_text([&texts_of(&values)[0], &texts_of(&values)[1], &texts_of(&values)[2], &texts_of(&values)[3]], None, None).unwrap(), values);
     }
 
     #[test]
     fn the_global_prompt_is_the_built_in_text_until_the_fleet_writes_its_own() {
-        let with = |global_prompt: Option<&str>| LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: global_prompt.map(str::to_string) };
+        let with = |global_prompt: Option<&str>| LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: global_prompt.map(str::to_string), model: None };
         let built_in = PromptDraft::of(Some(&with(None)));
         assert_eq!((built_in.built_in, built_in.text.as_str(), built_in.value()), (true, DEFAULT_GLOBAL_PROMPT, None), "nothing is sent for the built-in text");
         assert_eq!(PromptDraft::of(None), built_in, "a fleet that saved nothing uses it too");

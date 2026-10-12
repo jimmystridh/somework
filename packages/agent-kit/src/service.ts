@@ -48,7 +48,8 @@ import { createSetupIntercept } from "./setup/intake.ts";
 import { Setup } from "./setup/setup.ts";
 import { validateProfile, type AgentProfile, type RoleHooks, type ServiceContext } from "./profile.ts";
 import { scriptedModels } from "./providers/faux.ts";
-import { allowlist, isAllowed, type ModelRef } from "./providers/allowlist.ts";
+import { allowlist, type ModelRef } from "./providers/allowlist.ts";
+import { modelCheck } from "./providers/effective-model.ts";
 import { registerProviders } from "./providers/index.ts";
 import { RemoteExecutionEnv } from "./sandbox/remote-env.ts";
 import { keepRuntimeAlive } from "./runtime-lifecycle.ts";
@@ -77,16 +78,16 @@ export interface AgentServiceOptions {
 	env?: NodeJS.ProcessEnv;
 }
 
-/** Registers the providers of every allowed model (see `PI_ALLOWED_MODELS`); the default model is `PI_PROVIDER`/`PI_MODEL`. */
-async function buildModels(config: Config, env: NodeJS.ProcessEnv): Promise<{ models: Models; model: { provider: string; modelId: string } }> {
+/** Registers the providers of every allowed model (see `PI_ALLOWED_MODELS`); the default model is `PI_PROVIDER`/`PI_MODEL`, with `PI_EFFORT` when set. */
+async function buildModels(config: Config, env: NodeJS.ProcessEnv): Promise<{ models: Models; model: ModelRef }> {
 	if (config.model.provider === "faux") {
 		// credential-free smoke/crash drills only; never a default
 		const fake = scriptedModels(JSON.parse(env.PI_FAUX_PLAN ?? '["final:ok"]'));
-		return { models: fake.models, model: fake.model };
+		return { models: fake.models, model: { ...fake.model, ...(config.model.effort ? { effort: config.model.effort } : {}) } };
 	}
 	const models = createModels({ credentials: new FileCredentialStore(config.state.authFile) });
 	await registerProviders(models, config.allowedModels, { stateDir: join(config.state.dir, "antigravity") });
-	return { models, model: { provider: config.model.provider, modelId: config.model.modelId } };
+	return { models, model: config.model };
 }
 
 /**
@@ -137,10 +138,9 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const { models, model } = await buildModels(config, env);
 			const skillAllow = config.skills.allow ?? profile.skills.allow;
 			const setupModels = allowlist(model, config.allowedModels);
-			const modelRefusal = (wanted: ModelRef): string | undefined => {
-				if (!isAllowed(setupModels, wanted)) return `the model ${wanted.provider}/${wanted.modelId} is not one of this agent's allowed models (${setupModels.map((ref) => `${ref.provider}/${ref.modelId}`).join(", ")})`;
-				return models.getModel(wanted.provider, wanted.modelId) ? undefined : `the model ${wanted.provider}/${wanted.modelId} is not offered by its provider`;
-			};
+			const modelRefusal = modelCheck({ allowed: setupModels, find: (provider, modelId) => models.getModel(provider, modelId) });
+			const defaultRefusal = modelRefusal(model);
+			if (defaultRefusal) throw new Error(`the configured model cannot be used: ${defaultRefusal}`);
 			let ledgerRef: DailyLedger | undefined;
 			let runtimeRef: PiDurableRuntime | undefined;
 			const mcpHub = new McpHub({ root: join(config.state.dir, "mcp"), env, log });
@@ -280,7 +280,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			// the thread tools are registered with the runtime but offered only to conversations: jobs get the role's own tools, with the coding tools spelled out when it lists none
 			const normalTools = [...(profile.allowedTools ?? ["read", "write", "edit", "bash"]), ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])];
 			const llmUsage = llmUsageCounters(metrics, { agent: identity.agentId, role: profile.id });
-			llmUsage.start(setup.model() ?? model);
+			llmUsage.start(setup.model());
 			const runtime = new PiDurableRuntime({
 				storagePath: join(config.state.dir, "pi.sqlite"),
 				models,
@@ -300,8 +300,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				...(runTrace ? { trace: runTrace } : {}),
 			});
 			runtimeRef = runtime;
-			const restoredModel = setup.model();
-			if (restoredModel) runtime.setModel(restoredModel);
+			runtime.setModel(setup.model());
 			await runtime.start();
 
 			const session: GitSession = {
@@ -324,6 +323,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				client: taskClient,
 				limits: config.limits,
 				allowedModels: config.allowedModels,
+				resolveModel: (request) => setup.modelForJob(request),
 				metrics,
 				log,
 				profile,

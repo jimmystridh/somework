@@ -528,13 +528,14 @@ impl Store {
 
     pub async fn save_limits(&self, base: u64, values: &LimitsValues, note: &str, author: &str) -> Result<LimitsRevision> {
         contract::check_limits(values)?;
+        let stored = LimitsValues { model: values.model.as_ref().and_then(|model| model.checked().ok()), ..values.clone() };
         let mut tx = self.begin().await?;
         let current: i64 = sqlx::query_scalar("SELECT COALESCE(max(revision), 0) FROM fleet_limits_revisions").fetch_one(&mut *tx).await?;
         if number(current) != base {
             return Err(StoreError::Conflict(number(current)));
         }
         let row: (i64, Json<LimitsValues>, String, String, DateTime<Utc>) =
-            sqlx::query_as("INSERT INTO fleet_limits_revisions (revision, limits, note, author) VALUES ($1, $2, $3, $4) RETURNING revision, limits, note, author, created_at").bind(current + 1).bind(Json(values)).bind(note).bind(author).fetch_one(&mut *tx).await?;
+            sqlx::query_as("INSERT INTO fleet_limits_revisions (revision, limits, note, author) VALUES ($1, $2, $3, $4) RETURNING revision, limits, note, author, created_at").bind(current + 1).bind(Json(&stored)).bind(note).bind(author).fetch_one(&mut *tx).await?;
         Self::audit_in(&mut tx, author, "limits.put", "fleet", &format!("revision {}", current + 1)).await?;
         tx.commit().await?;
         Ok(Self::limits_revision(row))
@@ -829,14 +830,21 @@ mod tests {
         let Some(pg) = postgres("fleet_limits_are_revisions_too") else { return };
         let store = pg.store("limits").await;
         assert!(store.latest_limits().await.unwrap().is_none());
-        let values = LimitsValues { max_tokens_cap: 100, max_minutes_cap: 30, daily_token_limit: 1000, budget_raise_ceiling: 200, global_prompt: None };
+        let values = LimitsValues { max_tokens_cap: 100, max_minutes_cap: 30, daily_token_limit: 1000, budget_raise_ceiling: 200, global_prompt: None, model: None };
         assert_eq!(store.save_limits(0, &values, "initial", "admin@example.com").await.unwrap().revision, 1);
         let second = store.save_limits(1, &LimitsValues { max_minutes_cap: 45, ..values.clone() }, "", "admin@example.com").await.unwrap();
         assert_eq!((second.revision, second.values.max_minutes_cap), (2, 45));
         assert!(matches!(store.save_limits(1, &values, "", "admin@example.com").await, Err(StoreError::Conflict(2))));
-        assert!(matches!(store.save_limits(2, &LimitsValues { daily_token_limit: 0, ..values }, "", "a@b").await, Err(StoreError::Invalid(_))));
-        assert_eq!(store.limits_revisions(10).await.unwrap().len(), 2);
-        assert_eq!(store.latest_limits().await.unwrap().unwrap().revision, 2);
+        assert!(matches!(store.save_limits(2, &LimitsValues { daily_token_limit: 0, ..values.clone() }, "", "a@b").await, Err(StoreError::Invalid(_))));
+        let owner = ModelChoice { provider: Some(" openai-codex ".into()), model_id: Some("gpt-6.1-sol".into()), effort: Some(Effort::High) };
+        let third = store.save_limits(2, &LimitsValues { model: Some(owner), ..values.clone() }, "the model", "admin@example.com").await.unwrap();
+        let stored = ModelChoice { provider: Some("openai-codex".into()), model_id: Some("gpt-6.1-sol".into()), effort: Some(Effort::High) };
+        assert_eq!(third.values.model, Some(stored.clone()), "the model is stored as the agents will read it");
+        assert_eq!(store.latest_limits().await.unwrap().unwrap().values.model, Some(stored));
+        assert!(matches!(store.save_limits(3, &LimitsValues { model: Some(ModelChoice::default()), ..values.clone() }, "", "a@b").await, Err(StoreError::Invalid(_))), "a model with no field is refused");
+        assert_eq!(store.save_limits(3, &values, "back to the environment", "admin@example.com").await.unwrap().values.model, None);
+        assert_eq!(store.limits_revisions(10).await.unwrap().len(), 4);
+        assert_eq!(store.latest_limits().await.unwrap().unwrap().revision, 4);
     }
 
     #[tokio::test]
@@ -885,7 +893,7 @@ mod tests {
         let store = pg.store("audit").await;
         store.save_catalog(&entry("docs", "npx"), 0, "", "cat@example.com").await.unwrap();
         store.save_setup("agent/a", 0, &form(&["docs"], &[]), "", "ed@example.com", "setup.save").await.unwrap();
-        store.save_limits(0, &LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: None }, "", "admin@example.com").await.unwrap();
+        store.save_limits(0, &LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: None, model: None }, "", "admin@example.com").await.unwrap();
         store.put_user("v@example.com", Role::Viewer, "admin@example.com").await.unwrap();
         let page = store.audit_page(10, None).await.unwrap();
         let seen: Vec<(&str, &str, &str)> = page.entries.iter().map(|e| (e.actor.as_str(), e.action.as_str(), e.target.as_str())).collect();

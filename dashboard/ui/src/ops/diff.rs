@@ -8,7 +8,9 @@ use fleet_shared::operations::{DiffEntry, DiffKind, DiffLine, LineOp};
 pub fn field_label(field: &str) -> String {
     match field {
         "instructions" => "Operator instructions".into(),
-        "model" => "Model".into(),
+        "model.provider" => "Model provider".into(),
+        "model.modelId" => "Model".into(),
+        "model.effort" => "Reasoning effort".into(),
         "approvalPatterns" => "Approval patterns".into(),
         "repositorySkills" => "Repository skills".into(),
         "librarySkills" => "Library skills".into(),
@@ -49,6 +51,9 @@ fn entry_field_label(name: &str) -> String {
 
 fn limit_label(name: &str) -> String {
     match name {
+        "model.provider" => "Fleet model provider".into(),
+        "model.modelId" => "Fleet model".into(),
+        "model.effort" => "Fleet reasoning effort".into(),
         "maxTokensCap" => "Maximum tokens per job".into(),
         "maxMinutesCap" => "Maximum minutes per job".into(),
         "dailyTokenLimit" => "Daily token limit".into(),

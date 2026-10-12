@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { allowlist, parseModelList, type ModelRef } from "./providers/allowlist.ts";
+import { EFFORTS, isEffort } from "./setup/contract.ts";
 import { parseSkillList } from "./skills.ts";
 import { validateTable, type ShardTable } from "./shards.ts";
 import { slackSettingsFrom, type SlackSettings } from "./slack/config.ts";
@@ -10,6 +11,7 @@ export interface Config {
 	state: { dir: string; authFile: string };
 	/** The full record of every model run, kept on the agent's disk (`RUN_TRACE=0` turns it off; days and size bound how long it stays). */
 	trace?: { enabled: boolean; dir: string; keepDays: number; maxMegabytes: number };
+	/** `PI_PROVIDER`, `PI_MODEL` and, optional, `PI_EFFORT`: what every agent runs on until the fleet's document or its own override says otherwise. */
 	model: ModelRef;
 	/** Models a job may ask for with `input.model`; the default model is always first. */
 	allowedModels: ModelRef[];
@@ -87,7 +89,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	const shardFile = env.SHARD_TABLE_FILE;
 	const shards = shardFile ? (JSON.parse(readFileSync(shardFile, "utf8")) as ShardTable) : undefined;
 	if (shards) validateTable(shards);
-	const model = { provider: env.PI_PROVIDER ?? "openai-codex", modelId: env.PI_MODEL ?? "gpt-5.5" };
+	const effort = env.PI_EFFORT || undefined;
+	if (effort !== undefined && !isEffort(effort)) throw new Error(`PI_EFFORT must be one of ${EFFORTS.join(", ")}`);
+	const model: ModelRef = { provider: env.PI_PROVIDER ?? "openai-codex", modelId: env.PI_MODEL ?? "gpt-5.5", ...(effort ? { effort } : {}) };
 	return {
 		somework: { url: required(env, "SOMEWORK_URL"), keyFile: required(env, "SOMEWORK_KEY_FILE"), caFile: env.SOMEWORK_CA_FILE, requireTls: env.SOMEWORK_REQUIRE_TLS === "1" },
 		state: { dir: env.PI_STATE_DIR ?? "/state", authFile: env.PI_AUTH_FILE ?? "/run/secrets/pi/auth.json" },

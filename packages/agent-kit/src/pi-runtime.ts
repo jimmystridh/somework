@@ -6,7 +6,9 @@ import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { silent, type Log } from "./log.ts";
-import { sameModel } from "./providers/allowlist.ts";
+import { sameModel, type ModelRef } from "./providers/allowlist.ts";
+import { supportedEfforts } from "./providers/effective-model.ts";
+import type { Effort } from "./setup/contract.ts";
 import { Metrics } from "./metrics.ts";
 import type { RunRecording, RunTracer } from "./trace.ts";
 import { emptyUsage, type AgentOutcome, type AgentRequest, type AgentRuntime, type ApprovalDecision, type ApprovalRequest, type RunHooks, type Usage } from "./runtime.ts";
@@ -34,7 +36,8 @@ export interface OperatorSetup {
 export interface PiRuntimeOptions {
 	storagePath: string;
 	models: Models;
-	model: { provider: string; modelId: string };
+	/** The configured default: provider, model and, when `PI_EFFORT` is set, the effort every run uses. */
+	model: ModelRef;
 	env: (cwd: string | undefined) => ExecutionEnv;
 	policy?: ApprovalPolicy;
 	operator?: OperatorSetup;
@@ -79,7 +82,7 @@ export class PiDurableRuntime implements AgentRuntime {
 	#harness: Harness | undefined;
 	#rootId = 0;
 	#resumed = false;
-	#modelChoice: { provider: string; modelId: string };
+	#modelChoice: ModelRef;
 	#offeredTools: ToolRegistration[] | undefined;
 	#registered = new Map<string, ToolRegistration>();
 	/** Tools a running conversation was restricted to by its request (chat sessions); everything else uses the runtime's list. */
@@ -118,7 +121,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		for (const extension of this.#options.extensions ?? []) registry.install(extension);
 		const storage = await openNodeSqliteStorage(this.#options.storagePath);
 		this.#harness = await Harness.open(storage, { models: this.#options.models, registry, env: ({ cwd }) => this.#options.env(cwd) }, ctx);
-		const root = await this.#harness.root(ctx, { agent: { model: this.#modelChoice } });
+		const root = await this.#harness.root(ctx, { agent: { model: piModel(this.#modelChoice), ...thinkingOf(this.#modelChoice.effort) } });
 		this.#rootId = root.id;
 		// continue any run the last process left unfinished
 		this.#harness.resume();
@@ -126,15 +129,17 @@ export class PiDurableRuntime implements AgentRuntime {
 		this.#log("info", "runtime_started", { storage: this.#options.storagePath });
 	}
 
-	/** The model a new conversation starts on unless its request names one. */
-	get model(): { provider: string; modelId: string } {
+	/** The model a new conversation starts on unless its request names one, with the effort every run of it uses. */
+	get model(): ModelRef {
 		return this.#modelChoice;
 	}
 
-	/** Changes the model new conversations start on (`undefined`: back to the configured one). Throws with the reason when the provider does not offer it. */
-	setModel(model: { provider: string; modelId: string } | undefined): void {
+	/** Changes the model and effort runs start on (`undefined`: back to the configured ones); the next run of every conversation follows. Throws with the reason when the provider does not offer the model or the model does not take the effort. */
+	setModel(model: ModelRef | undefined): void {
 		const wanted = model ?? this.#options.model;
-		if (!this.#options.models.getModel(wanted.provider, wanted.modelId)) throw new Error(`the model ${wanted.provider}/${wanted.modelId} is not offered by its provider`);
+		const offered = this.#options.models.getModel(wanted.provider, wanted.modelId);
+		if (!offered) throw new Error(`the model ${wanted.provider}/${wanted.modelId} is not offered by its provider`);
+		if (wanted.effort !== undefined && !supportedEfforts(offered).includes(wanted.effort)) throw new Error(`the model ${wanted.provider}/${wanted.modelId} does not support the effort ${wanted.effort}`);
 		this.#modelChoice = wanted;
 	}
 
@@ -183,13 +188,21 @@ export class PiDurableRuntime implements AgentRuntime {
 		return (await harness.createConversation(
 			{
 				ownership: { kind: "ownerless" },
-				agent: { model, cwd: workspace, ...(instructions ? { instructions } : {}), ...(tools ? { tools } : {}) },
+				agent: { model: piModel(model), ...thinkingOf(model.effort), cwd: workspace, ...(instructions ? { instructions } : {}), ...(tools ? { tools } : {}) },
 				init: async (tx, conversationId) => {
 					(await tx.doc(Keys, rootId as never)).map[agentKey] = conversationId as unknown as number;
 				},
 			},
 			ctx,
 		)) as unknown as Conversation;
+	}
+
+	/** A conversation keeps the effort it was created with, so a changed setting is put into it before a run starts; a run that is going keeps the one it began with. */
+	async #applyEffort(conversation: Conversation, effort: Effort | undefined): Promise<void> {
+		if (this.#active.has(conversation.id as unknown as number)) return;
+		const stored = (await conversation.agent(ctx)).thinkingLevel;
+		if (stored === (effort ?? "off")) return;
+		await conversation.configure({ thinkingLevel: effort ?? null }, ctx);
 	}
 
 	/** The tools of a new conversation: the request's own list or the runtime's, plus what the operator's setup brings (when the list restricts at all). */
@@ -205,6 +218,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		if (!harness) throw new Error("the runtime is not started");
 		const conversation = await this.#conversation(request);
 		const conversationId = conversation.id as unknown as number;
+		await this.#applyEffort(conversation, (request.model ?? this.#modelChoice).effort);
 		this.#active.set(conversationId, { hooks, requestId: request.requestId, conversation, ...(request.context !== undefined ? { context: request.context } : {}) });
 		if (request.tools) this.#conversationTools.set(conversationId, new Set([...request.tools, ...(this.#options.operator?.tools() ?? [])]));
 		const baseline = await this.#usageOf(conversation);
@@ -372,6 +386,10 @@ export class PiDurableRuntime implements AgentRuntime {
 		});
 	}
 }
+
+/** Pi stores the model by provider and id only; the effort is the agent's `thinkingLevel`. */
+const piModel = (model: ModelRef): { provider: string; modelId: string } => ({ provider: model.provider, modelId: model.modelId });
+const thinkingOf = (effort: Effort | undefined): { thinkingLevel?: Effort } => (effort ? { thinkingLevel: effort } : {});
 
 const diff = (now: Usage, before: Usage): Usage => ({
 	inputTokens: now.inputTokens - before.inputTokens,

@@ -3,10 +3,11 @@ import { McpHub, type PreparedServers } from "../mcp/hub.ts";
 import { MCP_TOOL_NAMES } from "../mcp/tools.ts";
 import { silent, type Log } from "../log.ts";
 import type { ModelRef } from "../providers/allowlist.ts";
+import { resolveModel, type ModelResolution, type ModelSources } from "../providers/effective-model.ts";
 import { SKILL_LIBRARY_TOOL } from "./library.ts";
 import { DEFAULT_GLOBAL_PROMPT, type GlobalPromptSource } from "./global-prompt.ts";
 import { SetupFiles } from "./files.ts";
-import { parseLimits, parseOverride, SetupRejected, sha256Hex, type ApprovalPatternSetting, type FleetLimits, type LibrarySkill, type SetupKind, type SetupOverride, type SetupReport, type SetupStatus } from "./contract.ts";
+import { parseLimits, parseOverride, SetupRejected, sha256Hex, type ApprovalPatternSetting, type FleetLimits, type LibrarySkill, type ModelChoice, type SetupKind, type SetupOverride, type SetupReport, type SetupStatus } from "./contract.ts";
 
 /** What the role and the deployment give the agent without any override: shown next to the override so an editor sees what it changes. */
 export interface SetupDefaults {
@@ -22,9 +23,9 @@ export interface SetupOptions {
 	dir: string;
 	defaults: SetupDefaults;
 	hub: McpHub;
-	/** The reason a model is refused (not allowed, not offered by its provider), or `undefined` when it can be used. */
+	/** The reason a complete model (provider, id and effort) is refused (not allowed, not offered by its provider, effort not supported), or `undefined` when it can be used. */
 	checkModel: (model: ModelRef) => string | undefined;
-	/** Switches the model new runs start on; `undefined` goes back to the configured default. */
+	/** Switches the model new runs start on, effort included; `undefined` goes back to the configured default. */
 	setModel: (model: ModelRef | undefined) => void;
 	/** Puts fleet limits into effect where they are read (the handler's limits, the ledger, the budget controls). */
 	applyLimits: (limits: FleetLimits) => void;
@@ -55,6 +56,8 @@ export class Setup {
 	#override: AppliedOverride | undefined;
 	#limits: Applied<FleetLimits> | undefined;
 	#rejected: SetupStatus["rejected"];
+	/** What the runtime was last told to use: empty for its configured model. */
+	#switchedTo = "";
 	#queue: Promise<unknown> = Promise.resolve();
 
 	constructor(options: SetupOptions) {
@@ -65,10 +68,18 @@ export class Setup {
 
 	/** Loads what an earlier run applied, before the runtime is built. A document that no longer checks out is left out and logged; the agent starts on its defaults. */
 	async restore(): Promise<void> {
+		await this.#restoreDocuments();
+		this.#switchedTo = this.#modelKey();
+	}
+
+	async #restoreDocuments(): Promise<void> {
 		const limits = this.#files.read("limits");
 		if (limits) {
 			try {
-				const document = parseLimits(limits.document);
+				const parsed = parseLimits(limits.document);
+				const refused = parsed.model ? this.#resolve(parsed.model, undefined) : undefined;
+				if (refused && !refused.ok) this.#log("warn", "setup_model_ignored", { kind: "limits", reason: refused.reason });
+				const document: FleetLimits = refused && !refused.ok ? { ...parsed, model: undefined } : parsed;
 				this.#limits = { document, sha256: limits.sha256, appliedAt: limits.appliedAt };
 				this.#options.applyLimits(document);
 			} catch (error) {
@@ -79,9 +90,9 @@ export class Setup {
 		if (!stored) return;
 		try {
 			const parsed = parseOverride(stored.document, this.#options.agentId);
-			const refused = parsed.model ? this.#options.checkModel(parsed.model) : undefined;
-			if (refused) this.#log("warn", "setup_model_ignored", { reason: refused });
-			const document: SetupOverride = refused ? { ...parsed, model: undefined } : parsed;
+			const refused = parsed.model ? this.#resolve(this.#limits?.document.model, parsed.model) : undefined;
+			if (refused && !refused.ok) this.#log("warn", "setup_model_ignored", { kind: "override", reason: refused.reason });
+			const document: SetupOverride = refused && !refused.ok ? { ...parsed, model: undefined } : parsed;
 			const prepared = await this.#options.hub.prepare(document.mcp, false);
 			this.#take(document, stored.sha256, stored.appliedAt, prepared);
 		} catch (error) {
@@ -114,29 +125,51 @@ export class Setup {
 	/** Checks the document against this agent (its model list, its secrets, its downloads), saves it and puts it into effect. Throws `SetupRejected`; nothing has changed then. */
 	applyOverride(document: SetupOverride, sha256: string): Promise<void> {
 		return this.#exclusive(async () => {
-			const refused = document.model ? this.#options.checkModel(document.model) : undefined;
-			if (refused) throw new SetupRejected(refused);
+			const resolved = this.#resolve(this.#limits?.document.model, document.model);
+			if (!resolved.ok) throw new SetupRejected(resolved.reason);
 			const prepared = await this.#options.hub.prepare(document.mcp, true);
 			const appliedAt = (this.#options.now?.() ?? new Date()).toISOString();
 			this.#save("override", document, sha256, appliedAt);
 			this.#take(document, sha256, appliedAt, prepared);
-			try {
-				this.#options.setModel(document.model);
-			} catch (error) {
-				this.#log("warn", "setup_model_not_set", { reason: error instanceof Error ? error.message : String(error) });
-			}
+			this.#switchModel();
 			this.#rejected = undefined;
 		});
 	}
 
 	applyLimits(document: FleetLimits, sha256: string): Promise<void> {
 		return this.#exclusive(async () => {
+			const resolved = this.#resolve(document.model, this.#override?.document.model);
+			if (!resolved.ok) throw new SetupRejected(resolved.reason);
 			const appliedAt = (this.#options.now?.() ?? new Date()).toISOString();
 			this.#save("limits", document, sha256, appliedAt);
 			this.#limits = { document, sha256, appliedAt };
 			this.#options.applyLimits(document);
+			this.#switchModel();
 			this.#rejected = undefined;
 		});
+	}
+
+	#resolve(fleet: ModelChoice | undefined, override: ModelChoice | undefined, job?: ModelChoice): ModelResolution {
+		return resolveModel({ env: this.#options.defaults.model, fleet, override, ...(job ? { job } : {}) }, this.#options.checkModel);
+	}
+
+	/** Empty while every part of the model comes from the environment, else the model: what tells the runtime's current choice from a new one. */
+	#modelKey(): string {
+		const { model, sources } = this.effectiveModel();
+		const fromEnvironmentOnly = sources.provider === "env" && sources.modelId === "env" && (sources.effort === undefined || sources.effort === "env");
+		return fromEnvironmentOnly ? "" : JSON.stringify(model);
+	}
+
+	/** Puts the effective model into the runtime: new runs start on it. When nothing above the environment sets a field the runtime goes back to its configured default. */
+	#switchModel(): void {
+		const key = this.#modelKey();
+		if (key === this.#switchedTo) return;
+		this.#switchedTo = key;
+		try {
+			this.#options.setModel(key === "" ? undefined : this.effectiveModel().model);
+		} catch (error) {
+			this.#log("warn", "setup_model_not_set", { reason: error instanceof Error ? error.message : String(error) });
+		}
 	}
 
 	#save(name: SetupKind, document: unknown, sha256: string, appliedAt: string): void {
@@ -159,9 +192,22 @@ export class Setup {
 		return this.#override?.document;
 	}
 
-	/** The model the override chooses, for the runtime's first start. */
-	model(): ModelRef | undefined {
-		return this.#override?.document.model;
+	/** The model new runs start on: the environment's default with the fleet's document and the override on top, field by field. */
+	model(): ModelRef {
+		return this.effectiveModel().model;
+	}
+
+	/** `model()` with where each of its parts comes from. The layers were checked when they were applied; should they no longer fit together the environment's default stands. */
+	effectiveModel(): { model: ModelRef; sources: ModelSources } {
+		const resolved = this.#resolve(this.#limits?.document.model, this.#override?.document.model);
+		if (resolved.ok) return resolved;
+		const env = this.#options.defaults.model;
+		return { model: env, sources: { provider: "env", modelId: "env", ...(env.effort ? { effort: "env" as const } : {}) } };
+	}
+
+	/** The model a job runs on when `input.model` asks for some of it: the same layers with the job's choice on top. */
+	modelForJob(request: ModelChoice): ModelResolution {
+		return this.#resolve(this.#limits?.document.model, this.#override?.document.model, request);
 	}
 
 	/** The global prompt this agent has: the fleet's text, else the built-in default; none when the agent's override or the fleet switches it off. */
@@ -214,15 +260,17 @@ export class Setup {
 	}
 
 	/**
-	 * What of the override a conversation keeps from its start (the instructions, the model, which extra tools it has): a new revision of those
+	 * What a conversation keeps from its start (the instructions, the provider and model, which extra tools it has): a new revision of those
 	 * must start a fresh conversation. Empty when none of them is set, so an agent without an override keeps the keys it always had.
+	 * The effort is not part of it: it is applied to a conversation at every run.
 	 */
 	conversationSuffix(): string {
 		const document = this.#override?.document;
-		if (!document) return "";
+		const { model, sources } = this.effectiveModel();
+		const chosenModel = sources.provider !== "env" || sources.modelId !== "env" ? { provider: model.provider, modelId: model.modelId } : null;
 		const tools = this.operatorTools();
-		if (!document.instructions?.trim() && !document.model && tools.length === 0) return "";
-		return `#setup-${createHash("sha256").update(JSON.stringify({ instructions: document.instructions?.trim() ?? "", model: document.model ?? null, tools })).digest("hex").slice(0, 12)}`;
+		if (!document?.instructions?.trim() && !chosenModel && tools.length === 0) return "";
+		return `#setup-${createHash("sha256").update(JSON.stringify({ instructions: document?.instructions?.trim() ?? "", model: chosenModel, tools })).digest("hex").slice(0, 12)}`;
 	}
 
 	// ---- what `/profile` tells -----------------------------------------------------------------------------------------------------
@@ -235,6 +283,11 @@ export class Setup {
 		};
 	}
 
+	#reportedSources(): SetupReport["effective"]["modelSources"] {
+		const { sources } = this.effectiveModel();
+		return { provider: sources.provider as "env" | "fleet" | "override", modelId: sources.modelId as "env" | "fleet" | "override", ...(sources.effort ? { effort: sources.effort as "env" | "fleet" | "override" } : {}) };
+	}
+
 	report(current: { model: ModelRef }): SetupReport {
 		const { defaults } = this.#options;
 		const document = this.#override?.document;
@@ -245,6 +298,7 @@ export class Setup {
 			effective: {
 				...(instructions ? { instructions: { sha256: sha256Hex(instructions), characters: instructions.length, text: instructions } } : {}),
 				model: current.model,
+				modelSources: this.#reportedSources(),
 				globalPrompt: ((global) => (global.text ? { source: global.source, sha256: sha256Hex(global.text), characters: global.text.length, text: global.text } : { source: global.source }))(this.globalPrompt()),
 				approvalPatterns: document?.approvalPatterns ?? defaults.approvalPatterns,
 				repositorySkills: [...this.repositorySkills(defaults.repositorySkills)],

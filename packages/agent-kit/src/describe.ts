@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { AgentProfile } from "./profile.ts";
 import type { PreflightResult } from "./preflight.ts";
-import type { SetupReport } from "./setup/contract.ts";
+import type { Effort, SetupReport } from "./setup/contract.ts";
 
 /** What a service tells about itself on `/profile`: how it is set up, never what it holds. No keys, tokens, file paths or environment values. */
 export interface AgentDescription {
@@ -13,7 +13,8 @@ export interface AgentDescription {
 	/** The image tag or build the service runs (`AGENT_VERSION`). */
 	version: string;
 	capabilities: { id: string; version: string }[];
-	model: { provider: string; modelId: string; allowed: string[] };
+	/** The model new runs use; `effort` is left out when nothing sets one. */
+	model: { provider: string; modelId: string; effort?: Effort; allowed: string[] };
 	systemPrompt: { sha256: string; characters: number; text?: string };
 	tools: { allowed: string[] | "all"; commandApprovals: { pattern: string; reason: string }[]; toolApprovals: string[]; extraApprovalPatterns: number };
 	budgets: { default: { maxTokens: number; maxMinutes: number }; required: boolean; maxTokensCap: number; maxMinutesCap: number; dailyTokenLimit: number };
@@ -51,7 +52,7 @@ export interface DescribeInput {
 	profile: AgentProfile;
 	agentId: string;
 	version?: string;
-	model: { provider: string; modelId: string };
+	model: { provider: string; modelId: string; effort?: Effort };
 	allowedModels: { provider: string; modelId: string }[];
 	limits: { maxTokensCap: number; maxMinutesCap: number; dailyTokenLimit: number };
 	concurrency: number;

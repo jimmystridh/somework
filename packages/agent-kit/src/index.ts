@@ -28,6 +28,7 @@ export * from "./preflight.ts";
 export * from "./github-preflight.ts";
 export * from "./profile.ts";
 export * from "./providers/allowlist.ts";
+export * from "./providers/effective-model.ts";
 export * from "./providers/index.ts";
 export * from "./runtime.ts";
 export * from "./service.ts";

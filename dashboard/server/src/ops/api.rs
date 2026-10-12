@@ -221,11 +221,13 @@ async fn agent(State(ops): State<Arc<Ops>>, _: AsViewer, Path(slug): Path<String
     if sample.usage.is_none() {
         notes.push("Model usage is not available (no metrics source is configured).".into());
     }
+    let fleet_model = ops.store.latest_limits().await?.and_then(|limits| limits.values.model);
     Ok(Json(OpsAgentDetail {
         form: revision.as_ref().map(|revision| revision.form.clone()).unwrap_or_default(),
         revision,
         reported: observation.as_ref().map(|o| o.reported.clone()).unwrap_or_default(),
         role_defaults: observation.and_then(|o| o.defaults),
+        fleet_model,
         setup_card: events.and_then(|agent| agent.setup.clone()),
         live_jobs: sample.work.active.iter().chain(sample.work.finished.iter()).filter(|job| job.agent == id).cloned().collect(),
         history: events.map(|agent| agent.jobs.clone()).unwrap_or_default(),
@@ -711,6 +713,8 @@ mod tests {
             (json!({"mcp": ["ghost"]}), "mcp"),
             (json!({"approvalPatterns": [{"pattern": "(", "reason": "r"}]}), "approvalPatterns"),
             (json!({"model": {"provider": "", "modelId": "m"}}), "model"),
+            (json!({"model": {}}), "model"),
+            (json!({"model": {"effort": "high", "modelId": " "}}), "model"),
         ];
         for (form, field) in cases {
             let (status, answer, _) = send(&app, "PUT", "/agents/pi-agent/setup", Some(json!({"baseRevision": 0, "form": form})), WRITE).await;
@@ -718,6 +722,8 @@ mod tests {
         }
         let (status, answer, _) = send(&app, "PUT", "/agents/pi-agent/setup", Some(json!({"baseRevision": "zero"})), WRITE).await;
         assert_eq!((status, answer["code"].as_str()), (S::BAD_REQUEST, Some("bad_request")));
+        let (status, _, _) = send(&app, "PUT", "/agents/pi-agent/setup", Some(json!({"baseRevision": 0, "form": {"model": {"effort": "extreme"}}})), WRITE).await;
+        assert_eq!(status, S::BAD_REQUEST, "an effort that is not a level never gets as far as the checks");
         assert_eq!(send(&app, "PUT", "/agents/nobody/setup", Some(json!({"baseRevision": 0, "form": {}})), WRITE).await.0, S::NOT_FOUND);
         assert!(store.latest_setup("agent/pi-agent").await.unwrap().is_none());
     }
@@ -739,10 +745,24 @@ mod tests {
         let revisions = log["revisions"].as_array().unwrap();
         assert_eq!(revisions.iter().map(|r| r["revision"]["revision"].as_u64().unwrap()).collect::<Vec<_>>(), vec![3, 2, 1]);
         let fields = |index: usize| revisions[index]["diff"].as_array().unwrap().iter().map(|d| d["field"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(fields(0), vec!["instructions", "model"], "the restore brings the instructions and the model back");
+        assert_eq!(fields(0), vec!["instructions", "model.provider", "model.modelId"], "the restore brings the instructions and the model back");
         assert_eq!(revisions[1]["diff"][0]["kind"], "removed");
-        assert_eq!(fields(2), vec!["instructions", "model"], "revision 1 is against an empty setup");
+        assert_eq!(fields(2), vec!["instructions", "model.provider", "model.modelId"], "revision 1 is against an empty setup");
         assert_eq!(revisions[2]["diff"][0]["kind"], "added");
+    }
+
+    #[tokio::test]
+    async fn the_agent_page_gets_the_fleets_model_for_what_its_blank_fields_inherit() {
+        let Some(pg) = postgres("the_agent_page_gets_the_fleets_model_for_what_its_blank_fields_inherit") else { return };
+        let store = pg.store("fleet_model_detail").await;
+        let (app, _) = with_agent(&store, Role::Admin).await;
+        let (_, detail, _) = send(&app, "GET", "/agents/pi-agent", None, &[]).await;
+        assert!(detail["fleetModel"].is_null(), "no limits saved, nothing inherited from the fleet");
+        let model = json!({"provider": "openai-codex", "modelId": "gpt-6.1-sol", "effort": "high"});
+        let values = json!({"maxTokensCap": 1, "maxMinutesCap": 1, "dailyTokenLimit": 1, "budgetRaiseCeiling": 1, "model": model});
+        assert_eq!(send(&app, "PUT", "/limits", Some(json!({"baseRevision": 0, "values": values})), WRITE).await.0, S::OK);
+        let (_, detail, _) = send(&app, "GET", "/agents/pi-agent", None, &[]).await;
+        assert_eq!(detail["fleetModel"], model);
     }
 
     #[tokio::test]
@@ -837,6 +857,21 @@ mod tests {
         assert_eq!((log["revisions"][0]["diff"][0]["field"].as_str(), log["revisions"][0]["diff"][0]["after"].as_str()), (Some("limits.maxMinutesCap"), Some("90")));
         let (_, view, _) = send(&app, "GET", "/limits", None, &[]).await;
         assert_eq!(view["current"]["revision"], 2);
+        let model = json!({"provider": "openai-codex", "modelId": "gpt-6.1-sol", "effort": "high"});
+        let mut with_model = changed.clone();
+        with_model["model"] = model.clone();
+        let (status, saved, _) = send(&app, "PUT", "/limits", Some(json!({"baseRevision": 2, "values": with_model})), WRITE).await;
+        assert_eq!((status, &saved["values"]["model"]), (S::OK, &model), "the fleet's model is saved with the limits");
+        let (_, log, _) = send(&app, "GET", "/limits/revisions", None, &[]).await;
+        let fields: Vec<&str> = log["revisions"][0]["diff"].as_array().unwrap().iter().filter_map(|entry| entry["field"].as_str()).collect();
+        assert_eq!(fields, vec!["limits.model.provider", "limits.model.modelId", "limits.model.effort"]);
+        let mut empty = changed.clone();
+        empty["model"] = json!({});
+        let (status, answer, _) = send(&app, "PUT", "/limits", Some(json!({"baseRevision": 3, "values": empty})), WRITE).await;
+        assert_eq!((status, answer["field"].as_str()), (S::UNPROCESSABLE_ENTITY, Some("values.model")));
+        let mut unknown = changed.clone();
+        unknown["model"] = json!({"effort": "extreme"});
+        assert!(send(&app, "PUT", "/limits", Some(json!({"baseRevision": 3, "values": unknown})), WRITE).await.0.is_client_error(), "an effort that is not a level is refused");
         let (status, user, _) = send(&app, "PUT", "/users/New.Person@Example.com", Some(json!({"role": "editor"})), WRITE).await;
         assert_eq!((status, user["email"].as_str(), user["role"].as_str(), user["addedBy"].as_str()), (S::OK, Some("new.person@example.com"), Some("editor"), Some("admin@example.com")));
         assert_eq!(send(&app, "PUT", "/users/not-an-email", Some(json!({"role": "viewer"})), WRITE).await.0, S::UNPROCESSABLE_ENTITY);

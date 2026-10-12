@@ -10,6 +10,8 @@ import { silent, type Log } from "./log.ts";
 import { Metrics } from "./metrics.ts";
 import { InvalidInput, type AgentProfile, type JobContext, type ResultContext, type RoleHooks } from "./profile.ts";
 import { isAllowed, type ModelRef } from "./providers/allowlist.ts";
+import type { ModelResolution } from "./providers/effective-model.ts";
+import { EFFORTS, isEffort, type ModelChoice } from "./setup/contract.ts";
 import type { AgentOutcome, AgentRuntime, ApprovalDecision, Usage } from "./runtime.ts";
 import { ownsKey, type ShardTable } from "./shards.ts";
 
@@ -32,6 +34,8 @@ export interface HandlerDeps {
 	shards?: { table: ShardTable; agentId: string };
 	/** Models a job may request with `input.model`. Without it (or without a match) the request is refused. */
 	allowedModels?: readonly ModelRef[];
+	/** The complete model (provider, id and effort) a job gets when `input.model` names some of it: what the agent runs on with the job's choice on top. Without it only a request that names provider and id is served, as it is. */
+	resolveModel?: (request: ModelChoice) => ModelResolution;
 	metrics?: Metrics;
 	log?: Log;
 	/** The role. Without one the handler behaves as the developer role always has (branch prefix `agent`, push and pull request on). */
@@ -63,11 +67,21 @@ export function createServiceMetrics(metrics: Metrics) {
 
 const fail = (code: string, message: string, retryable = false): Outcome => ({ type: "failed", failure: { code, message, retryable } satisfies Failure });
 
-function requestedModel(value: unknown): ModelRef | "invalid" | undefined {
+/** `input.model`: provider and id together, and/or an effort; what it leaves out the agent's own model settings fill in. */
+function requestedModel(value: unknown): ModelChoice | "invalid" | undefined {
 	if (value === undefined) return undefined;
-	const { provider, id } = (value ?? {}) as { provider?: unknown; id?: unknown };
-	return typeof provider === "string" && provider && typeof id === "string" && id ? { provider, modelId: id } : "invalid";
+	const { provider, id, effort } = (value ?? {}) as { provider?: unknown; id?: unknown; effort?: unknown };
+	const named = typeof provider === "string" && provider !== "" && typeof id === "string" && id !== "";
+	if (!named && (provider !== undefined || id !== undefined)) return "invalid";
+	if (effort !== undefined && !isEffort(effort)) return "invalid";
+	if (!named && effort === undefined) return "invalid";
+	return { ...(named ? { provider, modelId: id } : {}), ...(effort !== undefined ? { effort } : {}) };
 }
+
+const resolveWithoutSettings = (request: ModelChoice): ModelResolution =>
+	request.provider !== undefined && request.modelId !== undefined
+		? { ok: true, model: { provider: request.provider, modelId: request.modelId, ...(request.effort ? { effort: request.effort } : {}) }, sources: { provider: "job", modelId: "job", ...(request.effort ? { effort: "job" as const } : {}) } }
+		: { ok: false, reason: "this agent has no model settings to take an effort from; name provider and id as well" };
 
 const DEVELOPER_DEFAULTS = {
 	git: { push: true, pullRequest: true, branchPrefix: DEFAULT_BRANCH_PREFIX },
@@ -154,9 +168,12 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			return fail("budget_exhausted", "the daily token budget does not cover this job");
 		}
 
-		const model = requestedModel(prepared.model);
-		if (model === "invalid") return fail("invalid_input", "model must be {provider, id}");
-		if (model && !isAllowed(deps.allowedModels ?? [], model)) return fail("model_not_allowed", `model ${model.provider}/${model.modelId} is not enabled on this agent`);
+		const modelChoice = requestedModel(prepared.model);
+		if (modelChoice === "invalid") return fail("invalid_input", `model must be {provider, id} and/or {effort}, effort being one of ${EFFORTS.join(", ")}`);
+		if (modelChoice?.provider !== undefined && modelChoice.modelId !== undefined && !isAllowed(deps.allowedModels ?? [], { provider: modelChoice.provider, modelId: modelChoice.modelId })) return fail("model_not_allowed", `model ${modelChoice.provider}/${modelChoice.modelId} is not enabled on this agent`);
+		const resolution = modelChoice ? (deps.resolveModel ?? resolveWithoutSettings)(modelChoice) : undefined;
+		if (resolution && !resolution.ok) return fail("invalid_input", resolution.reason);
+		const model = resolution?.ok ? resolution.model : undefined;
 
 		const started = Date.now();
 		m.active.add(1);

@@ -21,6 +21,18 @@ export const SETUP_LABELS = { kind: "setup.kind", revision: "setup.revision", sh
 
 export type SetupKind = "override" | "limits";
 
+/** How hard a model reasons: Pi's thinking levels plus `off`. Which of them a model takes is in its registry entry. */
+export const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+export const isEffort = (value: unknown): value is Effort => typeof value === "string" && (EFFORTS as readonly string[]).includes(value);
+
+/** What one layer says about the model. Every field is optional: a field a layer leaves out is inherited from the layer below. */
+export interface ModelChoice {
+	provider?: string;
+	modelId?: string;
+	effort?: Effort;
+}
+
 export const MCP_NAME = /^[a-z0-9][a-z0-9_-]{0,39}$/;
 export const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -83,7 +95,8 @@ export interface SetupOverride {
 	instructions?: string;
 	/** True keeps the fleet's global prompt out of this agent's prompt. */
 	disableGlobalPrompt?: boolean;
-	model?: { provider: string; modelId: string };
+	/** Provider, model and effort are set one by one; a field left out is inherited from the fleet's document, then from the agent's environment. */
+	model?: ModelChoice;
 	/** When present, replaces the role's own list of commands that need approval. */
 	approvalPatterns?: ApprovalPatternSetting[];
 	skills: {
@@ -108,6 +121,8 @@ export interface FleetLimits {
 	budgetRaiseCeiling: number;
 	/** The text every agent adds after its role's prompt; absent means the built-in default, empty means none. */
 	globalPrompt?: string;
+	/** The model every agent uses unless its own override says otherwise, field by field; absent means the agents' environment. */
+	model?: ModelChoice;
 }
 
 /** What an agent reports of its applied setup. */
@@ -125,13 +140,16 @@ export interface SetupReport extends SetupStatus {
 		approvalPatterns: ApprovalPatternSetting[];
 		/** The repository skills the role (or the deployment) allows. */
 		repositorySkills: string[];
-		model: { provider: string; modelId: string };
+		/** The agent's environment: `PI_PROVIDER`, `PI_MODEL` and `PI_EFFORT` when set. */
+		model: { provider: string; modelId: string; effort?: Effort };
 		allowedModels: { provider: string; modelId: string }[];
 	};
-	/** What is in effect now: the defaults with the applied override on top. */
+	/** What is in effect now: the defaults with the fleet's document and the applied override on top. */
 	effective: {
 		instructions?: { sha256: string; characters: number; text: string };
-		model: { provider: string; modelId: string };
+		model: { provider: string; modelId: string; effort?: Effort };
+		/** Where each part of the model comes from. `effort` is absent when nothing sets one. */
+		modelSources: { provider: "env" | "fleet" | "override"; modelId: "env" | "fleet" | "override"; effort?: "env" | "fleet" | "override" };
 		/** The global prompt in effect: from the fleet, the built-in default, or switched off for this agent or for the fleet. */
 		globalPrompt: { source: "fleet" | "default" | "off"; sha256?: string; characters?: number; text?: string };
 		approvalPatterns: ApprovalPatternSetting[];
@@ -236,6 +254,20 @@ function validateSkill(entry: unknown): LibrarySkill {
 	return { name, version: positive(entry.version) ?? fail(`the library skill ${name} has no version`), description: text(entry.description, 500) ?? "", content, sha256 };
 }
 
+/** The provider, model and effort a document sets: each optional, at least one present, nothing else read. `null` counts as absent. */
+function parseModelChoice(raw: unknown, whose: string): ModelChoice {
+	if (!isRecord(raw)) fail(`${whose} is not an object`);
+	const choice: ModelChoice = {};
+	if (raw.provider !== undefined && raw.provider !== null) choice.provider = text(raw.provider, 80) || fail(`${whose} has an empty or too long provider`);
+	if (raw.modelId !== undefined && raw.modelId !== null) choice.modelId = text(raw.modelId, 200) || fail(`${whose} has an empty or too long model id`);
+	if (raw.effort !== undefined && raw.effort !== null) {
+		if (!isEffort(raw.effort)) fail(`${whose} has an unknown effort (use ${EFFORTS.join(", ")})`);
+		choice.effort = raw.effort;
+	}
+	if (choice.provider === undefined && choice.modelId === undefined && choice.effort === undefined) fail(`${whose} needs at least one of provider, model id and effort`);
+	return choice;
+}
+
 /** Parses and checks a setup override; throws `SetupRejected` with a reason an operator can read. */
 export function parseOverride(raw: unknown, agent: string): SetupOverride {
 	if (!isRecord(raw) || raw.schema !== SETUP_SCHEMA || raw.kind !== "override") fail("not a setup override this agent understands");
@@ -257,9 +289,7 @@ export function parseOverride(raw: unknown, agent: string): SetupOverride {
 		override.disableGlobalPrompt = raw.disableGlobalPrompt;
 	}
 	if (raw.model !== undefined && raw.model !== null) {
-		const model = raw.model;
-		if (!isRecord(model) || !text(model.provider, 80) || !text(model.modelId, 200)) fail("the model needs a provider and a model id");
-		override.model = { provider: model.provider as string, modelId: model.modelId as string };
+		override.model = parseModelChoice(raw.model, "the override's model");
 	}
 	if (raw.approvalPatterns !== undefined && raw.approvalPatterns !== null) {
 		if (!Array.isArray(raw.approvalPatterns) || raw.approvalPatterns.length > 100) fail("approvalPatterns is not a list of at most 100");
@@ -315,6 +345,7 @@ export function parseLimits(raw: unknown): FleetLimits {
 		budgetRaiseCeiling: positive(raw.budgetRaiseCeiling) ?? fail("budgetRaiseCeiling must be a positive integer"),
 	};
 	if (raw.globalPrompt !== undefined && raw.globalPrompt !== null) limits.globalPrompt = text(raw.globalPrompt, MAX_GLOBAL_PROMPT_CHARS) ?? fail(`the global prompt is longer than ${MAX_GLOBAL_PROMPT_CHARS} characters`);
+	if (raw.model !== undefined && raw.model !== null) limits.model = parseModelChoice(raw.model, "the fleet's model");
 	return limits;
 }
 

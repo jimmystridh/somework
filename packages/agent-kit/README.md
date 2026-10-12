@@ -326,15 +326,32 @@ An agent takes a **setup override** and **fleet limits** from one sender only: t
 | In the document | Effect |
 |---|---|
 | `instructions` | appended to the role's built-in system prompt (which stays read-only) for new conversations. Chat conversations get a suffix `#setup-<hash>` on their key while the instructions, the model or the extra tools are set, so a new revision starts a fresh conversation; without such an override keys are what they always were. |
-| `model` | the model new conversations start on. Refused unless it is in the agent's allowed models (`PI_ALLOWED_MODELS`) and its provider offers it; removing it goes back to `PI_PROVIDER`/`PI_MODEL`. |
+| `model` | `{provider?, modelId?, effort?}`, each field optional and at least one present (a document with both `provider` and `modelId` is still valid). A field left out is inherited from the fleet's `model`, then from the agent's environment; see "Provider, model and effort". The combined result is refused unless it is in the agent's allowed models (`PI_ALLOWED_MODELS`), its provider offers it and the model takes the effort; removing the override goes back to the fleet's model, and without one to `PI_PROVIDER`/`PI_MODEL`/`PI_EFFORT`. The provider and model apply to new conversations; the effort is put into every conversation before each run. |
 | `approvalPatterns` | when present, replaces the role's own list of commands that need approval (the deployment's `APPROVAL_PATTERNS` and the role's tool approvals stay). Read on every tool call. |
 | `skills.repository` | replaces the role's list of repository skills (an empty list turns them off); `skills.overlays` come from the override first and from `SKILLS_OVERLAY_DIR` as before. |
 | `skills.library` | offered as `library/<name>` through one fixed tool, `skill_library` (no argument lists name and description, `{name}` returns the `SKILL.md`), and an index in the prompt. They never replace a repository skill. |
 | `mcp` | MCP servers (below). |
-| fleet limits (`kind: limits`) | `maxTokensCap`, `maxMinutesCap`, `dailyTokenLimit` and `budgetRaiseCeiling` are read on every job, ledger and budget-raise call; the environment's values are the fallback until a document arrives. Not part of any override. |
+| fleet limits (`kind: limits`) | `maxTokensCap`, `maxMinutesCap`, `dailyTokenLimit` and `budgetRaiseCeiling` are read on every job, ledger and budget-raise call; the environment's values are the fallback until a document arrives. Not part of any override. The same document may carry `model` (`{provider?, modelId?, effort?}`, absent means nothing is set at fleet level): the model of every agent under its own override. |
 | global prompt (`globalPrompt` in the limits document, `disableGlobalPrompt` in an override) | Added to the prompt of every model run after the role's prompt and before the operator instructions: the fleet's text, else the built-in one (`src/setup/global-prompt.ts`: ask the other agents for help, with `agents_list`, `agents_search` and `message_send`); an empty text means none, `disableGlobalPrompt: true` switches it off for this agent. `/profile` shows which one is in effect under `setup.effective.globalPrompt`. |
 
-`/profile` shows `setup`: `override` (revision, the SHA-256 of the bytes Operations sent, when applied), `limits`, `rejected`, the role's `defaults` (its own approval patterns as `{pattern, reason}`, its repository skills, the configured model and the allowed models) and `effective` (instructions with their text and hash, model, approval patterns, repository skills, library skills with versions, MCP servers by name, transport and approval). No secret, URL, header or command is ever in it.
+`/profile` shows `setup`: `override` (revision, the SHA-256 of the bytes Operations sent, when applied), `limits`, `rejected`, the role's `defaults` (its own approval patterns as `{pattern, reason}`, its repository skills, the configured model with its effort and the allowed models) and `effective` (instructions with their text and hash, model with its effort, `modelSources` (for `provider`, `modelId` and `effort`: `env`, `fleet` or `override`; `effort` is absent when nothing sets one), approval patterns, repository skills, library skills with versions, MCP servers by name, transport and approval). No secret, URL, header or command is ever in it.
+
+### Provider, model and effort
+
+The model of an agent is three settings that are chosen one by one, not a pair. Pi Durable calls the effort `thinkingLevel`; the levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`.
+
+| Layer (lowest first) | Where it comes from | Fields |
+|---|---|---|
+| environment | `PI_PROVIDER` (default `openai-codex`), `PI_MODEL` (default `gpt-5.5`), `PI_EFFORT` (optional, no default) | provider and model always; effort only when set |
+| fleet | `model` in the limits document | any of the three |
+| override | `model` in the agent's override | any of the three |
+| job | `input.model` of one job: `{provider, id}` and/or `{effort}` (provider and id go together) | the same, for that job only |
+
+A field a layer leaves out is inherited from the layer below, so the fleet can set only an effort, and an agent can then change only its model. `/profile` shows the outcome (`model`, `setup.effective.model`) and where each part comes from (`setup.effective.modelSources`).
+
+The result must be complete and valid, else the document that caused it is rejected as a whole with a reason that names where each part came from, and the previous setup stays (this includes a fleet document that does not fit an agent's own override, and the other way round). Valid means: the provider and model are in the allowlist (the default model is always in it) and in the registry the runtime uses, and the effort is supported by that model. A level the model's `thinkingLevelMap` maps to `null` is not supported, and `xhigh` and `max` need a mapping; a model without `reasoning: true` takes only `off` or no effort. For a job the same rules decide: an effort the model does not take fails the job with `invalid_input` and the reason. An effort that no layer sets is not passed at all, as before. A bad `PI_EFFORT`, or one the default model does not take, stops the service at startup.
+
+The runtime puts the effective effort into every conversation's agent configuration before each run (chat, job and event wake), so a change of the fleet's or the agent's setting applies from the next run, also in conversations that already exist. A change of provider or model starts new conversations, as before (the key suffix carries provider and model, not the effort). An event handler's cheaper model (`EVENTS_SMALL_MODEL`) runs without effort.
 
 ### MCP servers
 

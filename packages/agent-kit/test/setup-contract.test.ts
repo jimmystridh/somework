@@ -38,6 +38,26 @@ describe("parsing a setup override", () => {
 		assert.deepEqual(parsed.mcp.map((item) => item.name), ["files", "docs"]);
 	});
 
+	it("takes the provider, the model and the effort one by one, so an old document with both names stays valid", () => {
+		assert.deepEqual(parseOverride(document({ model: { provider: "openai" } }), AGENT).model, { provider: "openai" });
+		assert.deepEqual(parseOverride(document({ model: { modelId: "gpt-6.1-sol" } }), AGENT).model, { modelId: "gpt-6.1-sol" });
+		assert.deepEqual(parseOverride(document({ model: { effort: "high" } }), AGENT).model, { effort: "high" });
+		assert.deepEqual(parseOverride(document({ model: { provider: "openai-codex", modelId: "gpt-6.1-sol", effort: "high", unknown: 1 } }), AGENT).model, { provider: "openai-codex", modelId: "gpt-6.1-sol", effort: "high" });
+		assert.deepEqual(parseOverride(document({ model: { provider: "openai", modelId: "gpt-5.5" } }), AGENT).model, { provider: "openai", modelId: "gpt-5.5" });
+		assert.deepEqual(parseOverride(document({ model: { provider: null, modelId: null, effort: "low" } }), AGENT).model, { effort: "low" }, "null is the same as absent");
+		for (const effort of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) assert.equal(parseOverride(document({ model: { effort } }), AGENT).model?.effort, effort);
+	});
+
+	it("refuses a model with no field, an unknown effort, or a blank or oversized name", () => {
+		rejects(document({ model: {} }), /needs at least one of provider, model id and effort/);
+		rejects(document({ model: { provider: null } }), /needs at least one of provider, model id and effort/);
+		rejects(document({ model: { effort: "extreme" } }), /unknown effort \(use off, minimal, low, medium, high, xhigh, max\)/);
+		rejects(document({ model: { effort: 3 } }), /unknown effort/);
+		rejects(document({ model: { provider: "" } }), /empty or too long provider/);
+		rejects(document({ model: { provider: "p".repeat(81) } }), /empty or too long provider/);
+		rejects(document({ model: { modelId: "m".repeat(201) } }), /empty or too long model id/);
+	});
+
 	it("keeps an empty repository list (no repository skills) apart from an absent one (the role's list)", () => {
 		assert.deepEqual(parseOverride(document({ skills: { repository: [] } }), AGENT).skills.repository, []);
 		assert.equal(parseOverride(document({ skills: {} }), AGENT).skills.repository, undefined);
@@ -56,8 +76,7 @@ describe("parsing a setup override", () => {
 	it("rejects bad instructions, models and approval patterns", () => {
 		rejects(document({ instructions: "x".repeat(MAX_INSTRUCTIONS_CHARS + 1) }), /longer than/);
 		rejects(document({ instructions: 5 }), /longer than/);
-		rejects(document({ model: { provider: "openai" } }), /needs a provider and a model id/);
-		rejects(document({ model: "openai/gpt" }), /needs a provider and a model id/);
+		rejects(document({ model: "openai/gpt" }), /override's model is not an object/);
 		rejects(document({ approvalPatterns: [{ pattern: "(", reason: "broken" }] }), /is not a regular expression/);
 		rejects(document({ approvalPatterns: [{ pattern: "x" }] }), /needs a pattern .* and a reason/);
 		rejects(document({ approvalPatterns: "all" }), /not a list/);
@@ -108,6 +127,16 @@ describe("parsing fleet limits", () => {
 		const parsed = parseLimits(limits());
 		assert.equal(parsed.dailyTokenLimit, 5_000_000);
 		assert.equal(parsed.revision, 2);
+	});
+
+	it("carries no model unless the fleet sets one, and takes the same shape as an override", () => {
+		assert.equal(parseLimits(limits()).model, undefined);
+		assert.equal(parseLimits(limits({ model: null })).model, undefined);
+		assert.deepEqual(parseLimits(limits({ model: { provider: "openai-codex", modelId: "gpt-6.1-sol", effort: "high" } })).model, { provider: "openai-codex", modelId: "gpt-6.1-sol", effort: "high" });
+		assert.deepEqual(parseLimits(limits({ model: { effort: "max", extra: true } })).model, { effort: "max" });
+		assert.throws(() => parseLimits(limits({ model: {} })), /the fleet's model needs at least one/);
+		assert.throws(() => parseLimits(limits({ model: { effort: "huge" } })), /the fleet's model has an unknown effort/);
+		assert.throws(() => parseLimits(limits({ model: "x" })), /the fleet's model is not an object/);
 	});
 
 	it("rejects a missing, zero, negative, fractional or textual limit", () => {

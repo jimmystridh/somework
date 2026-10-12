@@ -35,8 +35,12 @@ The text added to every agent's prompt after its role's built-in prompt and befo
 _Avoid_: system prompt (the role's built-in prompt is that), operator instructions (those belong to one agent)
 
 **Fleet limits**:
-The one set of budget limits (per-run caps, daily token limit, raise ceiling) that applies to every agent alike. Administrators edit it in Operations and it is sent to all agents; an agent falls back to its own environment values until it has received one. It is not part of any *Setup override*.
+The one set of budget limits (per-run caps, daily token limit, raise ceiling) that applies to every agent alike, together with the fleet's *Model choice*. Administrators edit it in Operations and it is sent to all agents; an agent falls back to its own environment values until it has received one. It is not part of any *Setup override*.
 _Avoid_: budget (a job's own budget is a different thing), quota
+
+**Model choice**:
+Which provider, which model and how much reasoning effort an agent uses, as three independent settings. Each is set at the fleet level in the *Fleet limits* and for one agent in its *Setup override*; a part left out is inherited from the layer below, the lowest being the agent's own environment, and one job may still ask for a model and an effort of its own. The agent rejects a combination it cannot use (a model it does not allow, an effort the model does not take) and keeps its previous setup.
+_Avoid_: model setting, model profile, thinking level (Pi's name for the effort)
 
 **MCP catalog**:
 The one list, shared by every agent, of the tool servers (MCP servers) that an agent may be given. Operators maintain it in Operations; an agent can use only the entries its setup override enables. An entry can say how a local server is obtained for each operating system, with a fixed version and checksum, and names the secrets it needs without holding them.

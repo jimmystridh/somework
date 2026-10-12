@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { PI_VERSION } from "../pi-version.ts";
 import type { ApprovalRules } from "../policy.ts";
 import { SYSTEM_PROMPT } from "../prompt.ts";
-import type { SetupOverride, SetupStatus } from "./contract.ts";
+import type { Effort, SetupOverride, SetupStatus } from "./contract.ts";
 
 /** What the Manager tells Operations about itself on `/profile`: the fields of the kit's description that apply to it, and `setup` as the kit reports it. No secrets, tokens or paths. */
 export interface ManagerDescription {
@@ -11,7 +11,8 @@ export interface ManagerDescription {
 	agentId: string;
 	version: string;
 	capabilities: never[];
-	model: { provider: string; modelId: string; allowed: string[] } | null;
+	/** What Pi runs with now; `effort` is its thinking level. */
+	model: { provider: string; modelId: string; effort?: Effort; allowed: string[] } | null;
 	systemPrompt: { sha256: string; characters: number };
 	operatorInstructions: { characters: number };
 	tools: { allowed: "all"; commandApprovals: { pattern: string; reason: string }[]; toolApprovals: string[]; extraApprovalPatterns: number };
@@ -30,7 +31,7 @@ export interface DescribeManagerInput {
 	override: SetupOverride | undefined;
 	status: SetupStatus;
 	rules: ApprovalRules;
-	model: { provider: string; modelId: string } | undefined;
+	model: { provider: string; modelId: string; effort?: Effort } | undefined;
 	restartPending: boolean;
 }
 

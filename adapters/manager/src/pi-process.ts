@@ -1,11 +1,14 @@
 import { SYSTEM_PROMPT } from "./prompt.ts";
 import { ChildPiRpc, type PiChild, type PiRpc } from "./rpc.ts";
+import type { Effort } from "./setup/contract.ts";
 
 /** What operators can change about how Pi is started (ADR 0004); everything else about the process is fixed. */
 export interface PiLaunch {
 	/** Appended to the built-in prompt after it, so it can add to the rules and never take one away. */
 	addendum?: string;
 	model?: { provider: string; modelId: string };
+	/** Pi's `--thinking` level (clamped by Pi to what the model supports); absent leaves Pi's own default. */
+	thinking?: Effort;
 	/** The container's Pi starts with `--no-extensions --no-skills`: its built-in MCP support and the library skills have to be asked for by name. */
 	mcp?: boolean;
 	skillsDir?: string;
@@ -33,6 +36,7 @@ export function piArguments(composeFiles: string[], sessionPath: string, launch:
 		"--append-system-prompt", SYSTEM_PROMPT,
 		...(launch.addendum ? ["--append-system-prompt", launch.addendum] : []),
 		...(launch.model ? ["--model", `${launch.model.provider}/${launch.model.modelId}`] : []),
+		...(launch.thinking ? ["--thinking", launch.thinking] : []),
 	];
 }
 
@@ -62,7 +66,7 @@ export interface LaunchResult {
 }
 
 /**
- * The Pi child process behind one stable `PiRpc`. A new setup (prompt addendum, model, MCP servers, skills) reaches Pi only through a new
+ * The Pi child process behind one stable `PiRpc`. A new setup (prompt addendum, model and effort, MCP servers, skills) reaches Pi only through a new
  * process, because Pi reads those at start and takes none of them through RPC; the restart waits until no run is going, so a run always finishes with the setup
  * it began with. Commands that arrive during the few seconds of a restart wait for the new process.
  */

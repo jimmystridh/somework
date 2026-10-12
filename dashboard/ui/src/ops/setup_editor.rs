@@ -7,7 +7,10 @@ use crate::{
     ops::{
         agent_page::approval_class,
         diff::DiffView,
-        form::{self, canonical, changed_parts, is_dirty, model_text, overlay_names, parse_model, shown_patterns, shown_repository_skills, with_name},
+        form::{
+            self, allowed_model_ids, allowed_providers, canonical, changed_parts, inherit_hint, inherit_label, inherited_model, is_dirty, overlay_names, shown_patterns, shown_repository_skills, with_effort, with_model_id, with_name,
+            with_provider,
+        },
         state::{classify, delivery_problem, revision_pair},
         validate::{self, Problem, form_problems, instructions_counter, note_counter, note_problem, overlay_counter},
     },
@@ -16,7 +19,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use fleet_shared::operations::{
-    ApprovalPatternSetting, CatalogEntryView, CatalogList, DiffEntry, EffectiveMcp, LibraryList, McpEntry, OpsAgentDetail, RoleDefaults, SetupForm, SetupRevision, SetupSave, SetupSaved,
+    ApprovalPatternSetting, CatalogEntryView, CatalogList, DiffEntry, Effort, EffectiveMcp, LibraryList, McpEntry, ModelChoice, OpsAgentDetail, RoleDefaults, SetupForm, SetupRevision, SetupSave, SetupSaved,
 };
 
 /// The newer revision someone else saved, with what changed when the server said so (a refused save does; the passive banner does not).
@@ -249,7 +252,7 @@ pub fn SetupEditor(detail: OpsAgentDetail, on_saved: EventHandler<()>) -> Elemen
 
             fieldset { class: "group", disabled: !editable,
                 legend { "Model" }
-                ModelSelect { form: draft, defaults: defaults.clone() }
+                ModelControls { form: draft, defaults: defaults.clone(), fleet: detail.fleet_model.clone() }
                 FieldMessage { problems: all_problems.clone(), field: "model".to_string(), id: "model-error".to_string() }
             }
 
@@ -322,27 +325,64 @@ fn NewerRevision(newer: Newer, started_from: u64, editable: bool, on_load: Event
     }
 }
 
+/// Provider, model and effort are three settings of their own. A blank one inherits: the fleet's value where the fleet sets one, else the agent's environment.
 #[component]
-fn ModelSelect(form: Signal<SetupForm>, defaults: Option<RoleDefaults>) -> Element {
-    let current = form.read().model.as_ref().map(model_text).unwrap_or_default();
-    let default_model = defaults.as_ref().map(|defaults| defaults.model.clone()).filter(|model| !model.is_empty());
-    let mut allowed: Vec<String> = defaults.as_ref().map(|defaults| defaults.allowed_models.clone()).unwrap_or_default();
-    let outside = !current.is_empty() && !allowed.contains(&current);
-    if outside {
-        allowed.push(current.clone());
+fn ModelControls(form: Signal<SetupForm>, defaults: Option<RoleDefaults>, fleet: Option<ModelChoice>) -> Element {
+    let choice = form.read().model.clone().unwrap_or_default();
+    let inherited = inherited_model(fleet.as_ref(), defaults.as_ref());
+    let allowed = defaults.as_ref().map(|defaults| defaults.allowed_models.clone()).unwrap_or_default();
+    let (provider_now, model_now) = (choice.provider.clone().unwrap_or_default(), choice.model_id.clone().unwrap_or_default());
+    let effort_now = choice.effort.map(Effort::as_str).unwrap_or("");
+
+    let mut providers = allowed_providers(&allowed);
+    if !provider_now.is_empty() && !providers.contains(&provider_now) {
+        providers.push(provider_now.clone());
     }
-    let default_label = match &default_model {
-        Some(model) => format!("Role default ({model})"),
-        None => "Role default".to_string(),
-    };
+    let shown_provider = choice.provider.clone().or_else(|| inherited.provider.as_ref().map(|(provider, _)| provider.clone()));
+    let mut model_ids = shown_provider.as_deref().map(|provider| allowed_model_ids(&allowed, provider)).unwrap_or_default();
+    if !model_now.is_empty() && !model_ids.contains(&model_now) {
+        model_ids.push(model_now.clone());
+    }
+    let model_outside = !model_now.is_empty() && !allowed.is_empty() && shown_provider.as_deref().is_some_and(|provider| !allowed_model_ids(&allowed, provider).contains(&model_now));
+
+    let provider_label = inherit_label(inherited.provider.as_ref().map(|(value, source)| (value.as_str(), *source)));
+    let model_label = inherit_label(inherited.model_id.as_ref().map(|(value, source)| (value.as_str(), *source)));
+    let effort_label = inherit_label(inherited.effort.map(|(value, source)| (value.as_str(), source)));
+    let provider_hint = inherit_hint("provider", inherited.provider.as_ref().map(|(value, source)| (value.as_str(), *source)), "the agent did not report its provider.");
+    let model_hint = inherit_hint("model", inherited.model_id.as_ref().map(|(value, source)| (value.as_str(), *source)), "the agent did not report its model.");
+    let effort_hint = inherit_hint("effort", inherited.effort.map(|(value, source)| (value.as_str(), source)), "no effort is set, so the agent runs without reasoning effort.");
+    let list_hint = if allowed.is_empty() { "The agent did not report which models it allows; it rejects a model it does not know." } else { "Only the providers and models the agent allows are offered." };
+    let for_provider = allowed.clone();
+
     rsx! {
-        label { r#for: "model", "Model" }
-        select { id: "model", value: "{current}", "aria-describedby": "model-hint model-error",
-            onchange: move |event| form.write().model = parse_model(&event.value()),
-            option { value: "", selected: current.is_empty(), "{default_label}" }
-            for model in allowed { option { key: "{model}", value: "{model}", selected: model == current, "{model}", if outside && model == current { " (not in the agent's allowed list)" } } }
+        div { class: "field",
+            label { r#for: "model-provider", "Provider" }
+            select { id: "model-provider", value: "{provider_now}", "aria-describedby": "model-provider-hint model-error",
+                onchange: move |event| { let next = with_provider(form.read().model.as_ref(), &event.value(), &for_provider); form.write().model = next; },
+                option { value: "", selected: provider_now.is_empty(), "{provider_label}" }
+                for provider in providers { option { key: "{provider}", value: "{provider}", selected: provider == provider_now, "{provider}" } }
+            }
+            small { id: "model-provider-hint", class: "hint", "{provider_hint}" }
         }
-        small { id: "model-hint", class: "hint", if defaults.as_ref().is_some_and(|defaults| defaults.allowed_models.is_empty()) { "The agent did not report which models it allows; it rejects a model it does not know." } else { "Only the models the agent allows are offered." } }
+        div { class: "field",
+            label { r#for: "model-id", "Model" }
+            select { id: "model-id", value: "{model_now}", "aria-describedby": "model-id-hint model-error",
+                onchange: move |event| { let next = with_model_id(form.read().model.as_ref(), &event.value()); form.write().model = next; },
+                option { value: "", selected: model_now.is_empty(), "{model_label}" }
+                for model_id in model_ids { option { key: "{model_id}", value: "{model_id}", selected: model_id == model_now, "{model_id}", if model_outside && model_id == model_now { " (not in the agent's allowed list)" } } }
+            }
+            small { id: "model-id-hint", class: "hint", "{model_hint}" }
+        }
+        div { class: "field",
+            label { r#for: "model-effort", "Reasoning effort" }
+            select { id: "model-effort", value: "{effort_now}", "aria-describedby": "model-effort-hint model-error",
+                onchange: move |event| { let next = with_effort(form.read().model.as_ref(), &event.value()); form.write().model = next; },
+                option { value: "", selected: effort_now.is_empty(), "{effort_label}" }
+                for effort in Effort::ALL { option { key: "{effort.as_str()}", value: "{effort.as_str()}", selected: effort.as_str() == effort_now, "{effort.as_str()}" } }
+            }
+            small { id: "model-effort-hint", class: "hint", "{effort_hint} Which levels a model takes depends on the model; the agent refuses a revision with the reason when it does not take this one." }
+        }
+        small { class: "hint", "{list_hint}" }
     }
 }
 

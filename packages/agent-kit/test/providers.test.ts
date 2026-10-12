@@ -45,6 +45,16 @@ describe("model allowlist", () => {
 		assert.ok(isAllowed(allowlist({ provider: "a", modelId: "b" }, []), { provider: "a", modelId: "b" }));
 		assert.ok(!isAllowed(allowlist({ provider: "a", modelId: "b" }, []), { provider: "a", modelId: "c" }));
 	});
+
+	it("reads the environment's effort from PI_EFFORT, keeps it out of the allowlist, and refuses an unknown level", () => {
+		assert.equal("effort" in loadConfig(baseEnv).model, false, "no effort unless the environment sets one");
+		assert.equal("effort" in loadConfig({ ...baseEnv, PI_EFFORT: "" }).model, false);
+		const config = loadConfig({ ...baseEnv, PI_PROVIDER: "openai-codex", PI_MODEL: "gpt-6.1-sol", PI_EFFORT: "high" });
+		assert.deepEqual(config.model, { provider: "openai-codex", modelId: "gpt-6.1-sol", effort: "high" });
+		assert.deepEqual(config.allowedModels, [{ provider: "openai-codex", modelId: "gpt-6.1-sol" }]);
+		assert.throws(() => loadConfig({ ...baseEnv, PI_EFFORT: "extreme" }), /PI_EFFORT must be one of off, minimal, low, medium, high, xhigh, max/);
+		assert.ok(isAllowed(allowlist({ provider: "a", modelId: "b", effort: "low" }, []), { provider: "a", modelId: "b", effort: "max" }), "the effort is not part of which model is allowed");
+	});
 });
 
 describe("opencode-go", () => {

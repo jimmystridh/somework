@@ -157,6 +157,15 @@ test("the Slack app is described by whether it runs, how many people may write t
 	assert.notEqual(on.hash, describeAgent(input()).hash, "switching it on is a change of the setup");
 });
 
+test("the model carries its effort when one is set, and a change of effort is a change of the setup", () => {
+	const plain = describeAgent(input());
+	assert.equal("effort" in plain.model, false);
+	const high = describeAgent(input({ model: { provider: "openai-codex", modelId: "gpt-5.5", effort: "high" } }));
+	assert.deepEqual(high.model, { provider: "openai-codex", modelId: "gpt-5.5", effort: "high", allowed: ["openai-codex/gpt-5.5"] });
+	assert.notEqual(high.hash, plain.hash);
+	assert.notEqual(describeAgent(input({ model: { provider: "openai-codex", modelId: "gpt-5.5", effort: "low" } })).hash, high.hash);
+});
+
 test("the setup an operator gave the agent is served under setup, outside the hash, and /profile can serve a description that is built per request", async () => {
 	const setup = {
 		override: { revision: 3, hash: "a".repeat(64), appliedAt: "2026-10-10T12:00:00Z" },

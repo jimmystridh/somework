@@ -253,6 +253,8 @@ fn JobBars(counts: JobCounts) -> Element {
 #[component]
 fn EffectiveCard(effective: EffectiveSetup) -> Element {
     let model = if effective.model.is_empty() { "—".to_string() } else { effective.model.clone() };
+    let effort = effective.effort.clone().unwrap_or_else(|| "not set".to_string());
+    let origin = model_origin(&effective);
     let library = if effective.library_skills.is_empty() { "none".to_string() } else { effective.library_skills.join(", ") };
     let repository = if effective.repository_skills.is_empty() { "none".to_string() } else { effective.repository_skills.join(", ") };
     let instructions = match effective.instructions_characters {
@@ -264,7 +266,8 @@ fn EffectiveCard(effective: EffectiveSetup) -> Element {
         div { class: "platform-card effective",
             dl {
                 dt { "Operator instructions" } dd { "{instructions}" }
-                dt { "Model" } dd { "{model}" }
+                dt { "Model" } dd { "{model}", if !origin.is_empty() { small { class: "wrap", " · {origin}" } } }
+                dt { "Reasoning effort" } dd { "{effort}" }
                 dt { "Approval patterns" } dd { "{plural(effective.approval_patterns.len(), \"pattern\", \"patterns\")}" }
                 dt { "Repository skills" } dd { "{repository}" }
                 dt { "Library skills" } dd { "{library}" }
@@ -280,6 +283,26 @@ fn EffectiveCard(effective: EffectiveSetup) -> Element {
                 }
             }
         }
+    }
+}
+
+/// Where the agent says its provider, model and effort come from, in words (empty for an agent that does not say).
+pub fn model_origin(effective: &EffectiveSetup) -> String {
+    let layer = |name: &str| match name {
+        "env" => "its environment",
+        "fleet" => "the fleet",
+        "override" => "its own setup",
+        _ => "somewhere",
+    };
+    match &effective.model_sources {
+        Some(sources) => {
+            let mut parts = vec![format!("provider from {}", layer(&sources.provider)), format!("model from {}", layer(&sources.model_id))];
+            if let Some(effort) = &sources.effort {
+                parts.push(format!("effort from {}", layer(effort)));
+            }
+            parts.join(", ")
+        }
+        None => String::new(),
     }
 }
 
@@ -369,6 +392,16 @@ mod tests {
         let all = [alert("agent/qa"), alert("agent/qa handler triage"), alert("agent/qa2"), alert("agent/pi-agent"), alert("hub")];
         let subjects: Vec<String> = alerts_for("agent/qa", &all).into_iter().map(|alert| alert.subject).collect();
         assert_eq!(subjects, ["agent/qa", "agent/qa handler triage"], "agent/qa2 is another agent");
+    }
+
+    #[test]
+    fn the_agent_says_where_each_part_of_its_model_comes_from() {
+        let mut effective = EffectiveSetup::default();
+        assert_eq!(model_origin(&effective), "", "an older agent does not say");
+        effective.model_sources = Some(fleet_shared::operations::ModelSources { provider: "env".into(), model_id: "fleet".into(), effort: Some("override".into()) });
+        assert_eq!(model_origin(&effective), "provider from its environment, model from the fleet, effort from its own setup");
+        effective.model_sources = Some(fleet_shared::operations::ModelSources { provider: "env".into(), model_id: "env".into(), effort: None });
+        assert_eq!(model_origin(&effective), "provider from its environment, model from its environment", "no effort is mentioned when none is set");
     }
 
     #[test]

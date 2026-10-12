@@ -17,6 +17,7 @@ import { piArguments, PiProcess } from "./pi-process.ts";
 import { ApprovalGrants, ApprovalRules } from "./policy.ts";
 import { ManagerService } from "./service.ts";
 import { SetupApplier } from "./setup/apply.ts";
+import { isEffort } from "./setup/contract.ts";
 import { isSetupMessage, SetupIntake } from "./setup/intake.ts";
 import { describeManager } from "./setup/profile.ts";
 import { SetupStore } from "./setup/store.ts";
@@ -131,7 +132,7 @@ async function main(): Promise<void> {
 			override: store.status.override ? store.override : undefined,
 			status: store.status,
 			rules,
-			model: await rpc.command("get_state", {}, 3000).then((current) => (current.model ? { provider: current.model.provider, modelId: current.model.id } : rpc.launch.model), () => rpc.launch.model),
+			model: await rpc.command("get_state", {}, 3000).then((current) => (current.model ? { provider: current.model.provider, modelId: current.model.id, ...(isEffort(current.thinkingLevel) ? { effort: current.thinkingLevel } : {}) } : rpc.launch.model), () => rpc.launch.model),
 			restartPending: rpc.restartPending,
 		});
 	process.once("SIGTERM", shutdown);

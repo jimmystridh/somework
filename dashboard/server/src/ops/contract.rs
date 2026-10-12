@@ -448,11 +448,7 @@ pub fn check_form(form: &SetupForm, known: &Known) -> Check<SetupForm> {
     }
     out.disable_global_prompt = form.disable_global_prompt;
     if let Some(model) = &form.model {
-        let (provider, id) = (model.provider.trim(), model.model_id.trim());
-        if provider.is_empty() || js_len(provider) > 80 || id.is_empty() || js_len(id) > 200 {
-            return invalid("model", "the model needs a provider (at most 80 characters) and a model id (at most 200)");
-        }
-        out.model = Some(ModelChoice { provider: provider.into(), model_id: id.into() });
+        out.model = Some(model.checked().or_else(|message| invalid("model", message))?);
     }
     if let Some(patterns) = &form.approval_patterns {
         if patterns.len() > MAX_APPROVAL_PATTERNS {
@@ -599,6 +595,9 @@ pub fn check_limits(values: &LimitsValues) -> Check<()> {
             return invalid(&format!("values.{field}"), format!("{field} must be a positive integer"));
         }
     }
+    if let Some(model) = &values.model {
+        model.checked().or_else(|message| invalid("values.model", message))?;
+    }
     if let Some(text) = &values.global_prompt {
         if js_len(text) > MAX_GLOBAL_PROMPT_CHARS {
             return invalid("values.globalPrompt", format!("the global prompt is longer than {MAX_GLOBAL_PROMPT_CHARS} characters"));
@@ -622,6 +621,7 @@ pub fn compose_limits(revision: &LimitsRevision) -> FleetLimits {
         daily_token_limit: revision.values.daily_token_limit,
         budget_raise_ceiling: revision.values.budget_raise_ceiling,
         global_prompt: revision.values.global_prompt.as_deref().map(|text| text.trim().to_string()),
+        model: revision.values.model.as_ref().and_then(|model| model.checked().ok()),
     }
 }
 
@@ -850,7 +850,7 @@ mod tests {
         assert!(check_form(&SetupForm { instructions: Some("x".repeat(MAX_INSTRUCTIONS_CHARS)), ..Default::default() }, &known()).is_ok());
         assert_eq!(check(SetupForm { mcp: vec!["nope".into()], ..Default::default() }).message, "the catalog has no entry nope");
         assert_eq!(check(SetupForm { library_skills: vec!["nope".into()], ..Default::default() }).field.as_deref(), Some("librarySkills"));
-        assert!(check(SetupForm { model: Some(ModelChoice { provider: String::new(), model_id: "m".into() }), ..Default::default() }).message.contains("model"));
+        assert!(check(SetupForm { model: Some(ModelChoice { provider: Some(String::new()), model_id: Some("m".into()), effort: None }), ..Default::default() }).message.contains("provider"));
         assert!(check(SetupForm { approval_patterns: Some(vec![ApprovalPatternSetting { pattern: "(unclosed".into(), reason: "r".into() }]), ..Default::default() }).message.contains("not a regular expression"));
         assert!(check(SetupForm { approval_patterns: Some(vec![ApprovalPatternSetting { pattern: "x".repeat(301), reason: "r".into() }]), ..Default::default() }).message.contains("at most 300"));
         assert!(check(SetupForm { approval_patterns: Some(vec![ApprovalPatternSetting { pattern: "x".into(), reason: " ".into() }]), ..Default::default() }).message.contains("reason"));
@@ -859,8 +859,66 @@ mod tests {
         assert!(check(SetupForm { overlays: BTreeMap::from([("Bad Name".to_string(), "x".into())]), ..Default::default() }).message.contains("invalid"));
         assert!(check(SetupForm { instructions: Some("use ghp_abcdefghijklmnopqrstuvwxyz0123456789 please".into()), ..Default::default() }).message.contains("token or key"));
         assert!(check(SetupForm { repository_skills: Some(vec!["Bad".into()]), ..Default::default() }).message.contains("invalid skill"));
-        let model = ModelChoice { provider: "openai-codex".into(), model_id: "gpt-5.5".into() };
+        let model = ModelChoice { provider: Some("openai-codex".into()), model_id: Some("gpt-5.5".into()), effort: None };
         assert!(check_form(&SetupForm { model: Some(model), approval_patterns: Some(vec![]), ..Default::default() }, &known()).is_ok(), "an empty pattern list is allowed: nothing needs approval");
+    }
+
+    fn model(provider: Option<&str>, model_id: Option<&str>, effort: Option<Effort>) -> ModelChoice {
+        ModelChoice { provider: provider.map(str::to_string), model_id: model_id.map(str::to_string), effort }
+    }
+
+    #[test]
+    fn an_agents_model_is_provider_model_and_effort_each_optional_and_at_least_one() {
+        let checked = |choice: ModelChoice| check_form(&SetupForm { model: Some(choice), ..Default::default() }, &known());
+        for choice in [model(Some("openai-codex"), Some("gpt-6.1-sol"), Some(Effort::High)), model(Some("openai-codex"), None, None), model(None, Some("gpt-6.1-sol"), None), model(None, None, Some(Effort::Max))] {
+            assert_eq!(checked(choice.clone()).unwrap().model, Some(choice));
+        }
+        assert_eq!(checked(model(Some("  openai-codex "), Some(" gpt-6.1-sol "), None)).unwrap().model, Some(model(Some("openai-codex"), Some("gpt-6.1-sol"), None)), "names are trimmed");
+        assert_eq!(checked(ModelChoice::default()).unwrap_err().field.as_deref(), Some("model"));
+        assert!(checked(ModelChoice::default()).unwrap_err().message.contains("at least one of provider, model id and effort"));
+        assert!(checked(model(Some("  "), None, Some(Effort::Low))).unwrap_err().message.contains("provider is empty"));
+        assert!(checked(model(Some(&"p".repeat(81)), None, None)).is_err());
+        assert!(checked(model(Some(&"p".repeat(80)), None, None)).is_ok());
+        assert!(checked(model(None, Some(&"m".repeat(201)), None)).unwrap_err().message.contains("model id is empty or longer than 200"));
+    }
+
+    #[test]
+    fn the_efforts_are_the_levels_of_the_agents_and_nothing_else() {
+        let kit = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/agent-kit/src/setup/contract.ts")).expect("the kit's contract");
+        let listed = Effort::ALL.iter().map(|effort| format!("\"{}\"", effort.as_str())).collect::<Vec<_>>().join(", ");
+        assert!(kit.contains(&format!("export const EFFORTS = [{listed}] as const;")), "the kit's list differs from Effort::ALL");
+        for effort in Effort::ALL {
+            assert_eq!(serde_json::to_value(effort).unwrap(), effort.as_str());
+            assert_eq!(Effort::parse(effort.as_str()), Some(effort));
+        }
+        assert_eq!(Effort::parse("extreme"), None);
+        assert!(serde_json::from_value::<ModelChoice>(serde_json::json!({"effort": "extreme"})).is_err());
+        assert_eq!(serde_json::from_value::<ModelChoice>(serde_json::json!({"provider": "p", "modelId": "m"})).unwrap(), model(Some("p"), Some("m"), None), "a model saved before the effort existed still reads");
+    }
+
+    #[test]
+    fn the_override_document_carries_only_the_fields_that_are_set() {
+        let empty = Resolved { library: &BTreeMap::new(), catalog: &BTreeMap::new() };
+        let composed = |choice: ModelChoice| serde_json::to_value(compose_override(&revision(SetupForm { model: Some(choice), ..Default::default() }), &empty).unwrap()).unwrap();
+        assert_eq!(composed(model(None, None, Some(Effort::High)))["model"], serde_json::json!({"effort": "high"}));
+        assert_eq!(composed(model(Some("openai-codex"), Some("gpt-6.1-sol"), Some(Effort::Xhigh)))["model"], serde_json::json!({"provider": "openai-codex", "modelId": "gpt-6.1-sol", "effort": "xhigh"}));
+        assert_eq!(composed(model(Some("p"), Some("m"), None))["model"], serde_json::json!({"provider": "p", "modelId": "m"}), "the document an agent already understands");
+        assert!(serde_json::to_value(compose_override(&revision(SetupForm::default()), &empty).unwrap()).unwrap().get("model").is_none());
+    }
+
+    #[test]
+    fn the_fleets_model_travels_in_the_limits_and_is_checked_like_an_agents() {
+        let values = |choice: Option<ModelChoice>| LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: None, model: choice };
+        let revision = |choice: Option<ModelChoice>| LimitsRevision { revision: 2, values: values(choice), note: String::new(), author: "admin@example.com".into(), created_at: "2026-10-12T10:00:00.000Z".into() };
+        assert!(serde_json::to_value(compose_limits(&revision(None))).unwrap().get("model").is_none(), "no model sent leaves every agent on its environment");
+        let owner = model(Some("openai-codex"), Some(" gpt-6.1-sol"), Some(Effort::High));
+        assert_eq!(serde_json::to_value(compose_limits(&revision(Some(owner.clone())))).unwrap()["model"], serde_json::json!({"provider": "openai-codex", "modelId": "gpt-6.1-sol", "effort": "high"}));
+        assert!(check_limits(&values(Some(owner))).is_ok());
+        assert!(check_limits(&values(Some(model(None, None, Some(Effort::Low))))).is_ok(), "an effort alone is a fleet setting");
+        let empty = check_limits(&values(Some(ModelChoice::default()))).unwrap_err();
+        assert_eq!((empty.field.as_deref(), empty.message.contains("at least one")), (Some("values.model"), true));
+        assert_eq!(check_limits(&values(Some(model(Some(""), None, None)))).unwrap_err().field.as_deref(), Some("values.model"));
+        assert!(check_limits(&values(Some(model(None, Some(&"m".repeat(201)), None)))).is_err());
     }
 
     #[test]
@@ -897,7 +955,7 @@ mod tests {
     fn the_global_prompt_travels_in_the_fleet_limits_and_its_switch_in_the_override() {
         let limits = |global_prompt: Option<&str>| LimitsRevision {
             revision: 2,
-            values: LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: global_prompt.map(str::to_string) },
+            values: LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: global_prompt.map(str::to_string), model: None },
             note: String::new(),
             author: "admin@example.com".into(),
             created_at: "2026-10-12T10:00:00.000Z".into(),
@@ -915,7 +973,7 @@ mod tests {
 
     #[test]
     fn a_global_prompt_is_checked_like_instructions() {
-        let with = |text: String| check_limits(&LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: Some(text) });
+        let with = |text: String| check_limits(&LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: Some(text), model: None });
         assert!(with("x".repeat(MAX_GLOBAL_PROMPT_CHARS)).is_ok());
         assert_eq!(with("x".repeat(MAX_GLOBAL_PROMPT_CHARS + 1)).unwrap_err().field.as_deref(), Some("values.globalPrompt"));
         assert!(with("use ghp_abcdefghijklmnopqrstuvwxyz0123456789 please".into()).unwrap_err().message.contains("token or key"));
@@ -956,7 +1014,7 @@ mod tests {
 
     #[test]
     fn limits_are_positive_integers_an_agent_can_read() {
-        let ok = LimitsValues { max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4, global_prompt: None };
+        let ok = LimitsValues { max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4, global_prompt: None, model: None };
         assert!(check_limits(&ok).is_ok());
         assert_eq!(check_limits(&LimitsValues { max_minutes_cap: 0, ..ok.clone() }).unwrap_err().field.as_deref(), Some("values.maxMinutesCap"));
         assert!(check_limits(&LimitsValues { daily_token_limit: JS_INTEGER_MAX + 1, ..ok.clone() }).is_err());
