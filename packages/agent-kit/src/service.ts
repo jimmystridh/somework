@@ -17,6 +17,9 @@ import { Approvals } from "./threads/approvals.ts";
 import { JobArtifacts } from "./threads/artifacts.ts";
 import { KIT_THREAD_RULES, ThreadEngine } from "./threads/engine.ts";
 import { JobManager, requestIdOf, type JobEntry } from "./threads/jobs.ts";
+import { RunRecall } from "./recall.ts";
+import { RunTrace } from "./trace.ts";
+import { AgentDirectory } from "./threads/directory.ts";
 import { MessageSender, type Sender } from "./threads/message.ts";
 import { createJobReporter, topicSlug } from "./threads/reporter.ts";
 import { ResourceRegistry } from "./threads/resources.ts";
@@ -225,6 +228,10 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				].join("\n");
 			};
 			const statusTool = createStatusTool(threadState);
+			const agentDirectory = new AgentDirectory(client, identity.agentId);
+			// the record of every model run, and the way back into it: both exist only while the record is kept
+			const runTrace = config.trace?.enabled ? new RunTrace({ dir: config.trace.dir, agentId: identity.agentId, role: profile.id, log, keepDays: config.trace.keepDays, maxTotalBytes: config.trace.maxMegabytes * 1024 * 1024 }) : undefined;
+			const runRecall = config.trace?.enabled ? new RunRecall({ dir: config.trace.dir }) : undefined;
 			const threadTools = createThreadTools(
 				{
 					context: (id) => runtimeRef?.contextOf(id) as RunContext | undefined,
@@ -241,6 +248,9 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					jobs: () => jobsRef!,
 					resources: () => resources,
 					sender: () => sender,
+					directory: () => agentDirectory,
+					...(runTrace ? { notes: () => runTrace } : {}),
+					...(runRecall ? { recall: () => runRecall } : {}),
 				},
 				hooks.chat?.jobTools ?? [],
 			);
@@ -277,6 +287,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				log,
 				metrics,
 				onUsage: llmUsage.record,
+				...(runTrace ? { trace: runTrace } : {}),
 			});
 			runtimeRef = runtime;
 			const restoredModel = setup.model();
@@ -320,6 +331,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					await client.publishEvent({ topic: `agent.${slug}.job.${state}`, key: `${payload.jobId}:${state}`, source: slug, data: payload as unknown as Record<string, never> });
 				},
 				describeResult: hooks.chat?.describeResult,
+				...(runTrace ? { notes: runTrace } : {}),
 				log,
 			});
 			const jobs = new JobManager({
@@ -364,6 +376,8 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				instructions: [hooks.chat?.instructions ?? `You are ${identity.agentId}, the ${profile.id} agent of this platform. You offer these capabilities: ${profile.capabilities.map((c) => `${c.id}@${c.version}`).join(", ")}.`, KIT_THREAD_RULES].join("\n\n"),
 				state: threadState,
 				...(chatChannels.length > 0 ? { local: combinedLocal(chatChannels.map((channel) => channel.store)) } : {}),
+				...(runTrace ? { notes: runTrace } : {}),
+				...(runRecall ? { recall: runRecall } : {}),
 				workspace: threadWorkspace,
 				ledger,
 				setupKey: () => setup.conversationSuffix(),

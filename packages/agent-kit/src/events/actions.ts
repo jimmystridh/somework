@@ -43,6 +43,7 @@ export function createEventActions(deps: ActionDeps): EventActions {
 						instruction: frameEvent(event, options.note),
 						workspace: deps.workspace,
 						budget: deps.wakeBudget,
+						meta: { kind: "event", eventId: event.id, topic: event.topic, asked: `event ${event.topic}` },
 						...(options.tier === "small" && deps.smallModel ? { model: deps.smallModel } : {}),
 					},
 					{

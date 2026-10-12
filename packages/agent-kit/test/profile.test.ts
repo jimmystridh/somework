@@ -415,10 +415,19 @@ describe("beforeRun and afterRun", () => {
 			profile: readOnly,
 			hooks,
 		});
-		const run = () =>
-			handler({ taskId: "task_1", task: {}, input: { repository: { url: remote, ref: "main" }, instruction: "x", budget: { maxTokens: 5000, maxMinutes: 1 } }, capability: { id: "code.agent", version: "1" } } as unknown as Job, { signal: new AbortController().signal, progress() {} } as unknown as JobControl) as Promise<any>;
+		const run = (task: Record<string, unknown> = {}) =>
+			handler({ taskId: "task_1", task, input: { repository: { url: remote, ref: "main" }, instruction: "x", budget: { maxTokens: 5000, maxMinutes: 1 } }, capability: { id: "code.agent", version: "1" } } as unknown as Job, { signal: new AbortController().signal, progress() {} } as unknown as JobControl) as Promise<any>;
 		return { run, logs, workspaceRoot };
 	}
+
+	it("files the model run under the job, the conversation that asked and who asked, for the run record", async () => {
+		let meta: any;
+		const { run } = setup({}, async (request) => ((meta = request.meta), { status: "done", answer: "ok", usage: emptyUsage() }));
+		await run({ conversationId: "c1", jobId: "job-9", replyTo: "m1", label: "verify SAD-1", source: "message", requestedBy: { kind: "human", id: "user/jimmy" } });
+		assert.deepEqual(meta, { kind: "job", jobId: "job-9", conversationId: "c1", replyTo: "m1", label: "verify SAD-1", startedBy: "message", capability: "code.agent@1", by: "user/jimmy (human)", asked: "x" });
+		await run();
+		assert.deepEqual(meta, { kind: "job", jobId: "task_1", capability: "code.agent@1", asked: "x" });
+	});
 
 	it("runs before the model with the workspace ready, and after it, in that order", async () => {
 		const order: string[] = [];

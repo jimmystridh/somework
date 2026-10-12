@@ -1,7 +1,8 @@
 import type { Outcome } from "../job-types.ts";
 import { describeOutcome } from "../journal.ts";
 import { silent, type Log } from "../log.ts";
-import type { JobEntry, JobReporter, Party } from "./jobs.ts";
+import { requestIdOf, type JobEntry, type JobReporter, type Party } from "./jobs.ts";
+import type { RunNotes } from "../trace.ts";
 import type { Sender } from "./message.ts";
 
 export type JobEventState = "started" | "waiting" | "finished";
@@ -24,6 +25,8 @@ export interface JobReporterDeps {
 	publish?: (state: JobEventState, payload: JobEventPayload) => Promise<void>;
 	/** The role's words for a finished job's result (see `ChatRoleHooks.describeResult`). */
 	describeResult?: (result: unknown) => string | undefined;
+	/** Where the job's run is told which message carried its result, for the run record. */
+	notes?: RunNotes;
 	log?: Log;
 }
 
@@ -73,22 +76,24 @@ export function createJobReporter(deps: JobReporterDeps): JobReporter {
 			log("warn", "job_event_failed", { jobId: entry.id, state, error: String(error).slice(0, 160) });
 		}
 	};
-	const tell = async (entry: JobEntry, text: string, key: string, artifacts: unknown[] = []): Promise<void> => {
+	const tell = async (entry: JobEntry, text: string, key: string, via: string, artifacts: unknown[] = []): Promise<void> => {
 		const to = audienceOf(entry, deps.agentId);
 		if (to.length === 0) return;
-		await deps.sender.send({ recipients: to, ...(entry.conversationId ? { conversationId: entry.conversationId } : {}), ...(entry.replyTo ? { causationId: entry.replyTo } : {}), text, artifacts, key, labels: { jobId: entry.id, ...(entry.source === "event" ? { eventNotice: "true" } : {}) } });
+		const sent = await deps.sender.send({ recipients: to, ...(entry.conversationId ? { conversationId: entry.conversationId } : {}), ...(entry.replyTo ? { causationId: entry.replyTo } : {}), text, artifacts, key, labels: { jobId: entry.id, ...(entry.source === "event" ? { eventNotice: "true" } : {}) } });
+		const into = sent?.conversationId ?? entry.conversationId;
+		deps.notes?.note(requestIdOf(entry.id), "sent", { ...(sent?.messageId ? { messageId: sent.messageId } : {}), ...(into ? { conversationId: into } : {}), to: to.map((party) => party.id), via });
 	};
 	return {
 		async waiting(entry, blocking) {
 			await publish("waiting", entry);
-			await tell(entry, `${entry.label} (${entry.id}) waits for ${blocking.map((hold) => `${hold.resource}, which ${hold.label} is using`).join("; ")}. It starts when that is free.`, `job-waiting:${entry.id}`);
+			await tell(entry, `${entry.label} (${entry.id}) waits for ${blocking.map((hold) => `${hold.resource} (only one job can use it at a time), which ${hold.label} (${hold.holder}) is using`).join("; ")}. It starts when that is free.`, `job-waiting:${entry.id}`, "job_waiting");
 		},
 		async started(entry) {
 			await publish("started", entry);
 		},
 		async finished(entry, outcome, artifacts) {
 			await publish("finished", entry);
-			await tell(entry, describeEnding(entry, outcome, deps.describeResult), `job-finished:${entry.id}`, artifacts);
+			await tell(entry, describeEnding(entry, outcome, deps.describeResult), `job-finished:${entry.id}`, "job_result", artifacts);
 		},
 	};
 }

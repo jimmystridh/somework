@@ -284,7 +284,7 @@ export class JobManager {
 
 	#synthetic(entry: JobEntry): Job {
 		const input = { ...entry.input, budget: entry.input.budget ?? this.#deps.budget };
-		return { taskId: entry.id, capability: entry.capability, input, task: { conversationId: entry.conversationId }, fencingToken: 0, runtimeInstanceId: "threads" } as unknown as Job;
+		return { taskId: entry.id, capability: entry.capability, input, task: { conversationId: entry.conversationId, jobId: entry.id, label: entry.label, source: entry.source, requestedBy: entry.requestedBy, ...(entry.replyTo ? { replyTo: entry.replyTo } : {}) }, fencingToken: 0, runtimeInstanceId: "threads" } as unknown as Job;
 	}
 
 	#control(entry: JobEntry, abort: AbortController): JobControl {

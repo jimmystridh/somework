@@ -1,5 +1,5 @@
 import { silent, type Log } from "../log.ts";
-import { finishReply, type OutgoingMessage, type Sender } from "../threads/message.ts";
+import { finishReply, type OutgoingMessage, type Sender, type SentMessage } from "../threads/message.ts";
 import { textChunks, type TelegramApi } from "./api.ts";
 import { TELEGRAM_PREFIX, type TelegramStore } from "./store.ts";
 
@@ -32,17 +32,19 @@ export class TelegramSender implements Sender {
 		this.#log = options.log ?? silent;
 	}
 
-	async send(message: OutgoingMessage): Promise<void> {
+	async send(message: OutgoingMessage): Promise<SentMessage> {
 		const chat = chatOf(message.conversationId);
 		if (chat === undefined) throw new Error("not a Telegram conversation");
 		const text = finishReply(`${message.text}${attachmentsLine(message.artifacts)}`, this.#maxBytes);
-		this.#store.record({ id: `${TELEGRAM_PREFIX}out:${Date.now()}:${this.#sent++}`, conversationId: message.conversationId!, sender: { kind: "agent", id: this.#agentId }, text, at: new Date().toISOString() });
+		const messageId = `${TELEGRAM_PREFIX}out:${Date.now()}:${this.#sent++}`;
+		this.#store.record({ id: messageId, conversationId: message.conversationId!, sender: { kind: "agent", id: this.#agentId }, text, at: new Date().toISOString() });
 		for (const chunk of textChunks(text)) await this.#api("sendMessage", { chat_id: chat, text: chunk });
 		this.#log("info", "telegram_sent", { chunks: textChunks(text).length });
+		return { messageId, conversationId: message.conversationId! };
 	}
 
 	/** A line into a conversation that is not an answer: an approval question. */
-	say(conversationId: string, text: string): Promise<void> {
-		return this.send({ recipients: [], conversationId, text, key: "" });
+	async say(conversationId: string, text: string): Promise<void> {
+		await this.send({ recipients: [], conversationId, text, key: "" });
 	}
 }

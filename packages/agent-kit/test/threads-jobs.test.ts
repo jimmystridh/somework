@@ -78,6 +78,8 @@ describe("jobs", () => {
 		assert.equal(seen.input.ticket, "SAD-2");
 		assert.deepEqual(seen.input.budget, { maxTokens: 1000, maxMinutes: 1 });
 		assert.equal(seen.task.conversationId, "conv_1");
+		assert.deepEqual([seen.task.jobId, seen.task.label, seen.task.source], [entry.id, entry.label, "message"]);
+		assert.equal(seen.task.requestedBy.id, entry.requestedBy.id);
 	});
 
 	it("makes a second job for a singleton resource wait, says what it waits for, and runs it when the first is done", async () => {

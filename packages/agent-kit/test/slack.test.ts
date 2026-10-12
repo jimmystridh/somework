@@ -227,6 +227,7 @@ describe("slack store", () => {
 		assert.equal(reopened.claim(["Ev2"]), false);
 		assert.ok(reopened.claim(["Ev9"]));
 		assert.deepEqual(reopened.history(conversationId, "slack:Ev2", 10, 100).map((line) => [line.sender, line.text]), [[`slack/${OWNER}`, "first"], [ME, "answer"]]);
+		assert.deepEqual(reopened.history(conversationId, "slack:Ev2", 10, 100).map((line) => line.messageId), ["slack:Ev1", "slack:out:1"]);
 		assert.deepEqual(reopened.message("slack:Ev2"), { messageId: "slack:Ev2", type: "chat.message", sender: human, recipients: [{ kind: "agent", id: ME }], conversationId, createdAt: "2026-10-10T10:01:00.000Z", text: "second" });
 		assert.equal(reopened.message("slack:out:1"), undefined, "the agent's own lines are not messages to answer");
 		assert.ok(reopened.owns(conversationId) && reopened.owns(`slack:${CHANNEL}:${ts(1)}`) && !reopened.owns("tg:1") && !reopened.owns("conv_1") && !reopened.owns(undefined));

@@ -3,10 +3,13 @@ import type { SomeWorkClient } from "@somework/sdk";
 import type { DailyLedger } from "../ledger.ts";
 import { silent, type Log } from "../log.ts";
 import type { Metrics } from "../metrics.ts";
+import type { RunRecall } from "../recall.ts";
 import type { AgentRuntime } from "../runtime.ts";
+import type { RunNotes } from "../trace.ts";
 import type { Approvals } from "./approvals.ts";
 import type { JobManager } from "./jobs.ts";
-import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, repliesTo, type HistoryLine, type InboundMessage, type Sender } from "./message.ts";
+import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, NO_REPLY, repliesTo, type HistoryLine, type InboundMessage, type Sender } from "./message.ts";
+import { relatedLines } from "./recall.ts";
 import type { ThreadSettings } from "./settings.ts";
 import { SETUP_LABELS } from "../setup/contract.ts";
 import type { DurableInbox, InboxItem } from "./store.ts";
@@ -35,6 +38,9 @@ export interface ThreadEngineDeps {
 	intercept?: (message: InboundMessage) => Promise<boolean>;
 	/** Conversations that live outside the domain (a chat channel of the agent): their messages and history are read here, not from the domain. */
 	local?: LocalConversations;
+	/** Where the engine says what a run did (the messages it sent) for the run record, and the record read back for the prompt. */
+	notes?: RunNotes;
+	recall?: RunRecall;
 	signal: AbortSignal;
 	log?: Log;
 	metrics?: Metrics;
@@ -64,6 +70,7 @@ const TRUST_RULES = `Rules that do not change:
 - Work that takes more than a few minutes (a verification, a fix, anything with a long build or a browser) is a job: start it with the tool the role gives you. It runs in the background while you keep talking, and its result is posted to the conversation by itself. Say what you started; do not wait for it. Look at job_status before starting what may already be running, and at resources before touching, by hand, anything that only one job can use.
 - A message from someone about work that is already running is also handed to that job's own model. If you are asked to stop work, call job_stop: it only tells the job, which decides for itself.
 - State only facts from the state summary, your tools and what you read. If you do not know, say so. Never invent results.
+- If a message depends on something done earlier (in this conversation, in one linked to it, or by a job) and the history does not show enough, read it with run_recall, if you have that tool, instead of guessing: history lines marked [run ...] and the linked work listed above name the runs to look at.
 - Answer plainly and shortly, in the language of the message, with what you did and what you could not do. If you have nothing to add, answer exactly NO_REPLY.`;
 
 export const KIT_THREAD_RULES = TRUST_RULES;
@@ -263,9 +270,11 @@ export class ThreadEngine {
 			return;
 		}
 		const to = repliesTo(message, this.#deps.agentId);
-		const say = async (text: string, key: string): Promise<void> => {
+		const runId = `thread:${id}`;
+		const say = async (text: string, key: string, via = "notice"): Promise<void> => {
 			if (to.length === 0) return;
-			await this.#deps.sender.send({ recipients: to, ...(message.conversationId ? { conversationId: message.conversationId } : {}), causationId: message.messageId, text, key });
+			const sent = await this.#deps.sender.send({ recipients: to, ...(message.conversationId ? { conversationId: message.conversationId } : {}), causationId: message.messageId, text, key });
+			this.#deps.notes?.note(runId, "sent", { ...(sent?.messageId ? { messageId: sent.messageId } : {}), ...((sent?.conversationId ?? message.conversationId) ? { conversationId: sent?.conversationId ?? message.conversationId } : {}), to: to.map((party) => party.id), via });
 		};
 		const started = this.#now();
 		const remaining = this.#deps.ledger.chatRemaining();
@@ -281,16 +290,16 @@ export class ThreadEngine {
 			return;
 		}
 		const [state, history] = await Promise.all([this.#deps.state().catch(() => "(the state summary could not be built)"), this.#history(message)]);
-		const context: RunContext = { ...(message.conversationId ? { conversationId: message.conversationId } : {}), messageId: id, sender: message.sender, audience: to };
+		const context: RunContext = { ...(message.conversationId ? { conversationId: message.conversationId } : {}), messageId: id, runId, sender: message.sender, audience: to };
 		const jobs = message.conversationId ? this.#deps.jobs.activeIn(message.conversationId).map((job) => describeJob(job, this.#now())) : [];
-		const instruction = frameThread({ self: this.#deps.agentId, state, history, message, text, boundary: (this.#deps.boundary ?? (() => randomBytes(8).toString("hex")))(), jobs, ...(describeAge(message.createdAt, this.#now()) ? { age: describeAge(message.createdAt, this.#now())! } : {}), now: new Date(this.#now()) });
+		const instruction = frameThread({ self: this.#deps.agentId, state, history, message, text, boundary: (this.#deps.boundary ?? (() => randomBytes(8).toString("hex")))(), jobs, related: this.#related(message, runId), ...(describeAge(message.createdAt, this.#now()) ? { age: describeAge(message.createdAt, this.#now())! } : {}), now: new Date(this.#now()) });
 		const budget = { maxTokens: Math.min(settings.runBudget.maxTokens, settings.hardTokenCap, remaining), maxMinutes: settings.runBudget.maxMinutes };
 		const stop = new AbortController();
 		const forward = (): void => stop.abort(this.#deps.signal.reason ?? "shutdown");
 		this.#deps.signal.addEventListener("abort", forward, { once: true });
 		try {
 			const outcome = await this.#deps.runtime.execute(
-				{ requestId: `thread:${id}`, agentKey: `thread:${id}${inbox.get(id)?.setup ?? ""}`, instruction, workspace: await this.#deps.workspace(threadKey(context)), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context },
+				{ requestId: runId, agentKey: `thread:${id}${inbox.get(id)?.setup ?? ""}`, instruction, workspace: await this.#deps.workspace(threadKey(context)), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context, meta: chatMeta(message, text) },
 				{
 					signal: stop.signal,
 					onProgress: () => undefined,
@@ -313,8 +322,10 @@ export class ThreadEngine {
 				this.#log("warn", "thread_unfinished", { messageId: id, status: outcome.status });
 			} else {
 				const reply = finishReply(outcome.answer, settings.replyMaxBytes);
-				if (reply === "" || isNoReply(reply)) this.#log("info", "thread_no_reply", { messageId: id, from: message.sender.id });
-				else await say(reply, `reply:${id}`);
+				if (reply === "" || isNoReply(reply)) {
+					this.#log("info", "thread_no_reply", { messageId: id, from: message.sender.id });
+					this.#deps.notes?.note(runId, "no_reply", { why: reply === "" ? "empty answer" : NO_REPLY });
+				} else await say(reply, `reply:${id}`, "reply");
 				this.#log("info", "thread_answered", { messageId: id, to: to.map((party) => party.id), conversationId: message.conversationId, tokens: outcome.usage.totalTokens, ms: this.#now() - started, replied: !(reply === "" || isNoReply(reply)) });
 			}
 			inbox.finish(id);
@@ -323,7 +334,33 @@ export class ThreadEngine {
 		}
 	}
 
+	/** The history of the conversation, each line of this agent's own with what the run that wrote it did. */
 	async #history(message: InboundMessage): Promise<HistoryLine[]> {
+		const lines = await this.#readHistory(message);
+		const recall = this.#deps.recall;
+		if (!recall || lines.length === 0) return lines;
+		try {
+			const notes = recall.notesFor(lines.flatMap((line) => (line.messageId ? [line.messageId] : [])));
+			return lines.map((line) => (line.messageId && notes.has(line.messageId) ? { ...line, note: notes.get(line.messageId)! } : line));
+		} catch (error) {
+			this.#log("warn", "recall_failed", { error: String(error).slice(0, 160) });
+			return lines;
+		}
+	}
+
+	/** Linked work and conversations for the prompt; the record failing to read costs the prompt this section and nothing else. */
+	#related(message: InboundMessage, runId: string): string[] {
+		const recall = this.#deps.recall;
+		if (!recall) return [];
+		try {
+			return relatedLines({ recall, jobs: this.#deps.jobs, describeJob, ...(message.conversationId ? { conversationId: message.conversationId } : {}), selfRunId: runId, now: this.#now() });
+		} catch (error) {
+			this.#log("warn", "recall_failed", { error: String(error).slice(0, 160) });
+			return [];
+		}
+	}
+
+	async #readHistory(message: InboundMessage): Promise<HistoryLine[]> {
 		const { settings } = this.#deps;
 		if (!message.conversationId || settings.historyMessages <= 0) return [];
 		if (this.#deps.local?.owns(message.conversationId)) return this.#deps.local.history(message.conversationId, message.messageId, settings.historyMessages, settings.messageChars);
@@ -345,6 +382,22 @@ export class ThreadEngine {
 			.filter((record) => record?.type === "chat.message" && record?.messageId !== message.messageId && textOf(record) !== undefined && record?.labels?.chatApprovalRequest === undefined && record?.labels?.chatApprovalDecision === undefined)
 			.filter((record) => Date.parse(record.createdAt ?? "") <= Date.parse(message.createdAt ?? "") || !message.createdAt)
 			.slice(-settings.historyMessages)
-			.map((record) => ({ sender: String(record.sender?.id ?? "?").slice(0, 80), kind: String(record.sender?.kind ?? "?").slice(0, 20), at: String(record.createdAt ?? "").slice(0, 25), text: cleanText(textOf(record), settings.messageChars) }));
+			.map((record) => ({ sender: String(record.sender?.id ?? "?").slice(0, 80), kind: String(record.sender?.kind ?? "?").slice(0, 20), at: String(record.createdAt ?? "").slice(0, 25), text: cleanText(textOf(record), settings.messageChars), ...(typeof record.messageId === "string" ? { messageId: record.messageId } : {}) }));
 	}
+}
+
+/** What ties a conversation run to the message that started it, for the run record. */
+function chatMeta(message: InboundMessage, text: string): Record<string, unknown> {
+	return {
+		kind: "chat",
+		...(message.conversationId ? { conversationId: message.conversationId } : {}),
+		messageId: message.messageId,
+		...(message.replyTo ? { replyTo: message.replyTo } : {}),
+		...(message.causationId ? { causationId: message.causationId } : {}),
+		by: `${message.sender.id} (${message.sender.kind})`,
+		recipients: message.recipients.map((party) => party.id),
+		...(message.labels && Object.keys(message.labels).length > 0 ? { labels: message.labels } : {}),
+		...(message.artifacts?.length ? { attachments: message.artifacts.map((ref: any) => ({ artifactId: ref?.artifactId, filename: ref?.filename, mediaType: ref?.mediaType })) } : {}),
+		asked: text.slice(0, 300),
+	};
 }

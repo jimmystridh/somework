@@ -80,6 +80,6 @@ export class TelegramStore {
 			.filter((line) => line.conversationId === conversationId && line.n < before)
 			.sort((a, b) => a.n - b.n)
 			.slice(-limit)
-			.map((line) => ({ sender: line.sender.id, kind: line.sender.kind, at: line.at.slice(0, 25), text: cleanText(line.text, chars) }));
+			.map((line) => ({ sender: line.sender.id, kind: line.sender.kind, at: line.at.slice(0, 25), text: cleanText(line.text, chars), messageId: line.id }));
 	}
 }

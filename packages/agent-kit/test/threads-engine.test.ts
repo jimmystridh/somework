@@ -13,6 +13,8 @@ import { DEFAULT_THREAD_SETTINGS, type ThreadSettings } from "../src/threads/set
 import { DurableInbox, DurableTable } from "../src/threads/store.ts";
 import type { Handler } from "../src/job-types.ts";
 import type { AgentOutcome, AgentRequest, RunHooks } from "../src/runtime.ts";
+import { RunRecall } from "../src/recall.ts";
+import { RunTrace, type RunNotes } from "../src/trace.ts";
 
 const ME = "agent/qa";
 const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0 };
@@ -25,7 +27,7 @@ interface Sent {
 	text: string;
 }
 
-function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSettings>; answer?: (request: AgentRequest, text: string) => Promise<string> | string; dir?: string; now?: () => number; intercept?: (message: InboundMessage) => Promise<boolean>; setupKey?: () => string } = {}) {
+function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSettings>; answer?: (request: AgentRequest, text: string) => Promise<string> | string; dir?: string; now?: () => number; intercept?: (message: InboundMessage) => Promise<boolean>; setupKey?: () => string; history?: any[]; notes?: RunNotes; recall?: RunRecall } = {}) {
 	const dir = options.dir ?? mkdtempSync(join(tmpdir(), "threads-"));
 	const messages = new Map<string, any>();
 	const sent: Sent[] = [];
@@ -40,12 +42,13 @@ function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSetting
 				if (!message) throw new Error("not found");
 				return message;
 			}
+			if (path.startsWith("/v1/conversations/")) return { messages: options.history ?? [] };
 			return { messages: [] };
 		},
 		post: async (path: string, body: any): Promise<any> => {
 			if (path === "/v1/messages/read") return void body.messageIds.forEach((id: string) => read.add(id));
 			sent.push({ recipients: body.recipients, conversationId: body.conversationId, causationId: body.causationId, text: body.content.data });
-			return {};
+			return { messageId: `out${sent.length}`, conversationId: body.conversationId };
 		},
 	};
 	const settings: ThreadSettings = { ...DEFAULT_THREAD_SETTINGS, busyAfterSeconds: 3600, ...options.settings };
@@ -90,6 +93,8 @@ function world(options: { jobHandler?: Handler; settings?: Partial<ThreadSetting
 		...(options.now ? { now: options.now } : {}),
 		...(options.intercept ? { intercept: options.intercept } : {}),
 		...(options.setupKey ? { setupKey: options.setupKey } : {}),
+		...(options.notes ? { notes: options.notes } : {}),
+		...(options.recall ? { recall: options.recall } : {}),
 	});
 	const put = (id: string, extra: Partial<{ sender: any; recipients: any[]; conversationId: string; text: string; createdAt: string; type: string; labels: Record<string, string> }> = {}): void => {
 		messages.set(id, {
@@ -286,9 +291,81 @@ describe("threads", () => {
 		await w.engine.accept("m1");
 		await w.engine.idle();
 		const request = w.requests[0]!;
-		assert.deepEqual(request.context, { conversationId: "conv/odd name", messageId: "m1", sender: { kind: "human", id: "user/jimmy" }, audience: [{ kind: "human", id: "user/jimmy" }] });
+		assert.deepEqual(request.context, { conversationId: "conv/odd name", messageId: "m1", runId: "thread:m1", sender: { kind: "human", id: "user/jimmy" }, audience: [{ kind: "human", id: "user/jimmy" }] });
 		assert.equal(request.workspace, "/work/conv_odd_name");
 		assert.deepEqual(request.tools, ["read"]);
+	});
+
+	it("files the run under the conversation and the message, and says who asked", async () => {
+		const w = world();
+		w.put("m1", { conversationId: "c1", labels: { topic: "qa" } });
+		await w.engine.accept("m1");
+		await w.engine.idle();
+		assert.deepEqual(w.requests[0]!.meta, { kind: "chat", conversationId: "c1", messageId: "m1", by: "user/jimmy (human)", recipients: [ME], labels: { topic: "qa" }, asked: "hello from m1" });
+	});
+
+	it("tells the run record which message carried the answer, and when it stayed silent", async () => {
+		const calls: { id: string; type: string; fields: any }[] = [];
+		const notes: RunNotes = { note: (id, type, fields) => void calls.push({ id, type, fields }) };
+		const answered = world({ notes, answer: () => "Hi Jimmy" });
+		answered.put("m1", { conversationId: "c1" });
+		await answered.engine.accept("m1");
+		await answered.engine.idle();
+		assert.deepEqual(calls, [{ id: "thread:m1", type: "sent", fields: { messageId: "out1", conversationId: "c1", to: ["user/jimmy"], via: "reply" } }]);
+		calls.length = 0;
+		const silent = world({ notes, answer: () => "NO_REPLY" });
+		silent.put("m2", { conversationId: "c2" });
+		await silent.engine.accept("m2");
+		await silent.engine.idle();
+		assert.deepEqual(calls, [{ id: "thread:m2", type: "no_reply", fields: { why: "NO_REPLY" } }]);
+	});
+
+	it("marks its own earlier messages in the history with what the run that wrote them did, and lists the work linked to the conversation", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "threads-recall-engine-"));
+		const trace = new RunTrace({ dir, agentId: ME, role: "qa" });
+		const earlier = trace.open({ requestId: "thread:old", agentKey: "k", instruction: "p", meta: { kind: "chat", conversationId: "c1", messageId: "old" } });
+		for (const id of ["t1", "t2"]) {
+			earlier.event({ type: "tool_execution_start", toolCallId: id, toolName: "bash", args: {} });
+			earlier.event({ type: "tool_execution_end", toolCallId: id, toolName: "bash", entry: { model: [{ role: "toolResult", isError: false, content: [{ type: "text", text: "ok" }] }] } });
+		}
+		earlier.note("job_started", { jobId: "job-7", label: "verify" });
+		earlier.end({ status: "done", answer: "started" });
+		earlier.note("sent", { messageId: "agent-msg-1", conversationId: "c1", to: ["user/jimmy"], via: "reply" });
+		trace.open({ requestId: "thread:opener", agentKey: "k", instruction: "p", meta: { kind: "chat", conversationId: "c1", messageId: "opener" } }).note("sent", { messageId: "out-x", conversationId: "dm-qa", to: ["agent/other"], fromConversation: "c1", via: "message_send" });
+		const old = new Date(Date.now() - 600_000).toISOString();
+		const history = [
+			{ type: "chat.message", messageId: "u-1", sender: { kind: "human", id: "user/jimmy" }, createdAt: old, content: { data: "please verify" } },
+			{ type: "chat.message", messageId: "agent-msg-1", sender: { kind: "agent", id: ME }, createdAt: old, content: { data: "started it" } },
+		];
+		const w = world({ history, recall: new RunRecall({ dir }) });
+		w.put("m1", { conversationId: "c1" });
+		await w.engine.accept("m1");
+		await w.engine.idle();
+		const prompt = w.requests[0]!.instruction;
+		assert.match(prompt, /please verify\n/);
+		assert.match(prompt, new RegExp(`${ME} \\(agent\\): started it \\[run thread:old; tools: bash×2; started job-7\\]`));
+		assert.doesNotMatch(prompt, /please verify \[run/, "only its own messages are marked");
+		assert.match(prompt, /Linked work and conversations, from the service's records \(the run_recall tool reads the steps of any run named here\):/);
+		assert.match(prompt, /- this agent opened conversation dm-qa from here to ask agent\/other \(run thread:opener/);
+		assert.match(prompt, /- earlier run thread:old \(.*, done\): bash×2; started job-7/);
+	});
+
+	it("leaves the prompt as it was when no record is kept", async () => {
+		const w = world();
+		w.put("m1", { conversationId: "c1" });
+		await w.engine.accept("m1");
+		await w.engine.idle();
+		assert.doesNotMatch(w.requests[0]!.instruction, /Linked work/);
+	});
+
+	it("does not let a record that cannot be read cost the answer", async () => {
+		const broken = { notesFor: () => { throw new Error("disk gone"); }, parentOf: () => { throw new Error("disk gone"); }, all: () => { throw new Error("disk gone"); } } as unknown as RunRecall;
+		const w = world({ recall: broken, history: [{ type: "chat.message", messageId: "u-1", sender: { kind: "human", id: "user/jimmy" }, createdAt: new Date(0).toISOString(), content: { data: "earlier" } }] });
+		w.put("m1", { conversationId: "c1" });
+		await w.engine.accept("m1");
+		await w.engine.idle();
+		assert.match(w.requests[0]!.instruction, /earlier/);
+		assert.deepEqual(w.sent.map((message) => message.text), ["ok"]);
 	});
 
 	it("marks a message read once it is safely in the inbox", async () => {

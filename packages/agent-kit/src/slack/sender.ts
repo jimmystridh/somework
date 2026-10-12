@@ -1,6 +1,6 @@
 import { silent, type Log } from "../log.ts";
 import { attachmentsLine } from "../telegram/sender.ts";
-import { finishReply, type OutgoingMessage, type Sender } from "../threads/message.ts";
+import { finishReply, type OutgoingMessage, type Sender, type SentMessage } from "../threads/message.ts";
 import { slackChunks, slackTargetOf, type SlackApi } from "./api.ts";
 import { SLACK_PREFIX, type SlackStore } from "./store.ts";
 
@@ -31,18 +31,20 @@ export class SlackSender implements Sender {
 		this.#log = options.log ?? silent;
 	}
 
-	async send(message: OutgoingMessage): Promise<void> {
+	async send(message: OutgoingMessage): Promise<SentMessage> {
 		const target = slackTargetOf(message.conversationId);
 		if (!target) throw new Error("not a Slack conversation");
 		const text = finishReply(`${message.text}${attachmentsLine(message.artifacts)}`, this.#maxBytes);
-		this.#store.record({ id: `${SLACK_PREFIX}out:${Date.now()}:${this.#sent++}`, conversationId: message.conversationId!, sender: { kind: "agent", id: this.#agentId }, text, at: new Date().toISOString() });
+		const messageId = `${SLACK_PREFIX}out:${Date.now()}:${this.#sent++}`;
+		this.#store.record({ id: messageId, conversationId: message.conversationId!, sender: { kind: "agent", id: this.#agentId }, text, at: new Date().toISOString() });
 		const chunks = slackChunks(text);
 		for (const chunk of chunks) await this.#api("chat.postMessage", slackMessage(target, chunk));
 		this.#log("info", "slack_sent", { chunks: chunks.length });
+		return { messageId, conversationId: message.conversationId! };
 	}
 
 	/** A line into a conversation that is not an answer: an approval question. */
-	say(conversationId: string, text: string): Promise<void> {
-		return this.send({ recipients: [], conversationId, text, key: "" });
+	async say(conversationId: string, text: string): Promise<void> {
+		await this.send({ recipients: [], conversationId, text, key: "" });
 	}
 }

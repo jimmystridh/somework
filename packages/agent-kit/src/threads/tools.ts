@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
 import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
+import { DIRECTORY_SEARCH_LIMIT, type AgentDirectory } from "./directory.ts";
 import type { JobEntry, JobManager, JobSpec, Party } from "./jobs.ts";
-import type { Sender } from "./message.ts";
+import type { RunRecall } from "../recall.ts";
+import type { RunNotes } from "../trace.ts";
+import { RUN_RECALL_TOOL, type Sender } from "./message.ts";
+import { createRecallTool } from "./recall.ts";
 import type { ResourceRegistry } from "./resources.ts";
 
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
@@ -31,6 +35,8 @@ export interface JobTool {
 export interface RunContext {
 	conversationId?: string;
 	messageId: string;
+	/** The request id of the run, which is what the run record is filed under. */
+	runId?: string;
 	sender: Party;
 	/** Everyone a reply goes to. */
 	audience: Party[];
@@ -43,9 +49,15 @@ export interface ThreadToolHost {
 	jobs(): JobManager;
 	resources(): ResourceRegistry;
 	sender(): Sender;
+	/** Who else is in the domain; without it the agent has no directory tools. */
+	directory?(): AgentDirectory;
+	/** Where the tools say what a run did (a message sent, a job started) for the run record. */
+	notes?(): RunNotes;
+	/** The run record, read back; without it the agent has no recall tool. */
+	recall?(): RunRecall;
 }
 
-export const THREAD_TOOLS = { jobStatus: "job_status", jobStop: "job_stop", resources: "resources", send: "message_send", attachment: "attachment_get" } as const;
+export const THREAD_TOOLS = { jobStatus: "job_status", jobStop: "job_stop", resources: "resources", send: "message_send", attachment: "attachment_get", agents: "agents_list", agentSearch: "agents_search", recall: RUN_RECALL_TOOL } as const;
 
 /** The scratch directory of a conversation: its id, or the message when there is none, made safe for a path. */
 export const threadKey = (context: { conversationId?: string; messageId: string }): string => (context.conversationId ?? context.messageId).replace(/[^A-Za-z0-9_-]+/g, "_").slice(0, 60);
@@ -97,6 +109,7 @@ export function createThreadTools(host: ThreadToolHost, jobTools: readonly JobTo
 					source: "message",
 				};
 				const entry = host.jobs().start(spec, jobId(context.messageId, plan));
+				if (context.runId) host.notes?.().note(context.runId, "job_started", { jobId: entry.id, label: entry.label, capability: `${plan.capability.id}@${plan.capability.version}` });
 				return text(`Started ${describeJob(entry)}.`);
 			},
 		}),
@@ -162,7 +175,9 @@ export function createThreadTools(host: ThreadToolHost, jobTools: readonly JobTo
 			if (args.to.length > 1 && !args.conversationId) return failure("not sent: several recipients need a conversationId");
 			const key = `send:${context?.messageId ?? "none"}:${createHash("sha256").update(JSON.stringify([args.to, args.conversationId, args.text])).digest("hex").slice(0, 16)}`;
 			try {
-				await host.sender().send({ recipients: args.to, ...(args.conversationId ? { conversationId: args.conversationId } : {}), ...(context ? { causationId: context.messageId } : {}), text: args.text, key });
+				const sent = await host.sender().send({ recipients: args.to, ...(args.conversationId ? { conversationId: args.conversationId } : {}), ...(context ? { causationId: context.messageId } : {}), text: args.text, key });
+				const into = sent?.conversationId ?? args.conversationId;
+				if (context?.runId) host.notes?.().note(context.runId, "sent", { ...(sent?.messageId ? { messageId: sent.messageId } : {}), ...(into ? { conversationId: into } : {}), to: args.to.map((party) => party.id), ...(context.conversationId ? { fromConversation: context.conversationId } : {}), via: "message_send" });
 			} catch (error) {
 				return failure(`not sent: ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
 			}
@@ -187,6 +202,42 @@ export function createThreadTools(host: ThreadToolHost, jobTools: readonly JobTo
 		},
 	});
 
-	const all = [...starters, status, stop, resources, send, attachment];
+	const directoryTools = host.directory ? createDirectoryTools(host.directory) : [];
+	const recallTools = host.recall ? [createRecallTool(host.recall, contextOf)] : [];
+	const all = [...starters, status, stop, resources, send, attachment, ...directoryTools, ...recallTools];
 	return { extension: defineExtension({ name: "threads", tools: all }), toolNames: all.map((tool) => tool.name) };
+}
+
+/** The directory of the domain as two read-only tools: who is there, and who can do what is needed. */
+function createDirectoryTools(directory: () => AgentDirectory) {
+	const fail = (error: unknown) => failure(`the directory could not be read: ${error instanceof Error ? error.message.slice(0, 200) : String(error)}`);
+	const list = defineTool({
+		name: THREAD_TOOLS.agents,
+		description: "Every agent of this domain with what it advertises (its capabilities, whether it only reads or also writes, whether it is online). Read only. Use it to find out who exists before you ask somebody for something with message_send; the ids it shows are the ones message_send takes (kind agent).",
+		parameters: Type.Object({}),
+		replay: "safe",
+		execute: async () => {
+			try {
+				const agents = directory();
+				return text(agents.describe(await agents.list()));
+			} catch (error) {
+				return fail(error);
+			}
+		},
+	});
+	const search = defineTool({
+		name: THREAD_TOOLS.agentSearch,
+		description: "Search the directory of agents by what you need done, in plain words (for example \"review a pull request\"). Best match first, with only the capabilities that matched. Read only. If nothing matches, say so instead of improvising.",
+		parameters: Type.Object({ query: Type.String({ minLength: 2, maxLength: 300 }), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: DIRECTORY_SEARCH_LIMIT })) }),
+		replay: "safe",
+		execute: async (args: { query: string; limit?: number }) => {
+			try {
+				const agents = directory();
+				return text(agents.describe(await agents.search(args.query, args.limit ?? 5)));
+			} catch (error) {
+				return fail(error);
+			}
+		},
+	});
+	return [list, search];
 }

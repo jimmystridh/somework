@@ -8,6 +8,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { silent, type Log } from "./log.ts";
 import { sameModel } from "./providers/allowlist.ts";
 import { Metrics } from "./metrics.ts";
+import type { RunRecording, RunTracer } from "./trace.ts";
 import { emptyUsage, type AgentOutcome, type AgentRequest, type AgentRuntime, type ApprovalDecision, type ApprovalRequest, type RunHooks, type Usage } from "./runtime.ts";
 
 const ctx: Context = BACKGROUND_CONTEXT;
@@ -46,6 +47,8 @@ export interface PiRuntimeOptions {
 	metrics?: Metrics;
 	/** Called with what a run spent on one model since the last call (tokens by kind and cost), while the run goes and once more when it ends. */
 	onUsage?: (spent: ModelSpend) => void;
+	/** Keeps the full record of every run (messages, tool calls with arguments and results, usage) for later analysis. */
+	trace?: RunTracer;
 }
 
 /** What one model consumed in a stretch of a run; `provider` and `modelId` are the key the SDK keeps usage under, split at its first slash. */
@@ -217,9 +220,11 @@ export class PiDurableRuntime implements AgentRuntime {
 		};
 
 		// progress from the event stream and the token budget from per-conversation usage
+		const recording: RunRecording | undefined = this.#options.trace?.open({ requestId: request.requestId, agentKey: request.agentKey, instruction: request.instruction, ...(request.context !== undefined ? { context: request.context } : {}), ...(request.meta ? { meta: request.meta } : {}), model: request.model ?? this.#modelChoice });
 		const events = await watchEvents(harness, conversation.id, ctx);
 		await events.start(async (batch) => {
 			for (const event of batch) {
+				recording?.event(event);
 				const update = describeEvent(event);
 				if (update) hooks.onProgress(update);
 				if (event.type === "tool_execution_start") hooks.onTool?.(event.toolName ?? event.name ?? event.tool?.name ?? "?");
@@ -238,22 +243,26 @@ export class PiDurableRuntime implements AgentRuntime {
 		};
 		hooks.signal.addEventListener("abort", onSignal, { once: true });
 
+		let outcome: AgentOutcome | undefined;
 		try {
 			const submission = await conversation.submit({ type: "input", content: request.instruction, requestId: request.requestId }, ctx);
 			log("run_submitted", { submissionId: submission.id });
 			const settled = await this.#settle(submission.wait(ctx), hooks.signal);
 			if (settled === "detach") {
 				log("run_detached", { reason: hooks.signal.reason });
-				return { status: "detached" };
+				outcome = { status: "detached" };
+				return outcome;
 			}
 			const usage = diff(await this.#usageOf(conversation), baseline);
-			if (stopWhy) return { status: "aborted", reason: stopWhy, usage };
-			if (settled.status === "done") return { status: "done", answer: await this.#answer(conversation), usage };
-			return { status: "unanswered", reason: settled.reason ?? "unknown", usage };
+			if (stopWhy) outcome = { status: "aborted", reason: stopWhy, usage };
+			else if (settled.status === "done") outcome = { status: "done", answer: await this.#answer(conversation), usage };
+			else outcome = { status: "unanswered", reason: settled.reason ?? "unknown", usage };
+			return outcome;
 		} finally {
 			clearTimeout(deadline);
 			hooks.signal.removeEventListener("abort", onSignal);
 			await events.stop?.().catch?.(() => {});
+			recording?.end(outcome ? { status: outcome.status, ...("reason" in outcome ? { reason: outcome.reason } : {}), ...("answer" in outcome ? { answer: outcome.answer } : {}), ...("usage" in outcome ? { usage: outcome.usage } : {}) } : { status: "error" });
 			await this.#reportUsage(conversation, reported).catch(() => {});
 			this.#active.delete(conversationId);
 			this.#conversationTools.delete(conversationId);
@@ -354,6 +363,7 @@ export class PiDurableRuntime implements AgentRuntime {
 							if (!active) return { block: "no requester is attached to approve this action" };
 							decision = await awaitWithContext(active.hooks.requestApproval({ tool: call.name, summary } satisfies ApprovalRequest), context);
 							decision = await api.memo<ApprovalDecision>(memo, decision, context);
+							this.#options.trace?.note(active.requestId, "approval", { tool: call.name, summary, approved: decision.approved, ...(decision.reason ? { reason: decision.reason } : {}) });
 						}
 						return decision.approved ? undefined : { block: decision.reason ? `denied by the requester: ${decision.reason}` : "denied by the requester" };
 					},

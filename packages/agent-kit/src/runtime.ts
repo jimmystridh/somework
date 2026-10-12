@@ -27,6 +27,8 @@ export interface AgentRequest {
 	instructions?: string;
 	/** What the tools of this run may ask for while it goes (who is being answered, which conversation): see `AgentRuntime.contextOf`. Not stored. */
 	context?: unknown;
+	/** What ties this run to the rest, for the run record only (kind, conversation, job, who asked); tools never see it. */
+	meta?: Record<string, unknown>;
 }
 
 export interface Usage {

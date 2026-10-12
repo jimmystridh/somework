@@ -1,5 +1,5 @@
 import type { LocalConversations } from "./engine.ts";
-import type { OutgoingMessage, Sender } from "./message.ts";
+import type { OutgoingMessage, Sender, SentMessage } from "./message.ts";
 
 /** A chat channel's way into its conversations, and which conversations those are. */
 export interface SenderRoute {
@@ -29,7 +29,7 @@ export class RoutedSender implements Sender {
 		this.#routes = Array.isArray(channelOrRoutes) ? channelOrRoutes : [{ sender: channelOrRoutes as Sender, store: store! }];
 	}
 
-	send(message: OutgoingMessage): Promise<void> {
+	send(message: OutgoingMessage): Promise<SentMessage | void> {
 		return (this.#routes.find((route) => route.store.owns(message.conversationId))?.sender ?? this.#domain).send(message);
 	}
 }

@@ -112,6 +112,17 @@ describe("telegram store", () => {
 		assert.ok(reopened.owns("tg:4242") && !reopened.owns("conv_1") && !reopened.owns(undefined));
 		assert.ok(reopened.record({ id: "tg:3", conversationId: "tg:4242", sender: human, text: "third", at: "2026-10-10T10:02:00.000Z" }));
 		assert.equal(reopened.history("tg:4242", "tg:3", 1, 100)[0]!.text, "second");
+		assert.deepEqual(reopened.history("tg:4242", "tg:2", 10, 100).map((line) => line.messageId), ["tg:1", "tg:out:1"], "the lines name their messages, so the service can find the run that wrote one");
+	});
+
+	it("says which stored message a send became", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "tg-sent-"));
+		const store = new TelegramStore(dir, ME);
+		const sender = new TelegramSender({ api: (async () => ({})) as any, store, agentId: ME });
+		const sent = await sender.send({ recipients: [], conversationId: "tg:4242", text: "hello", key: "k" });
+		assert.equal(sent.conversationId, "tg:4242");
+		assert.match(sent.messageId!, /^tg:out:/);
+		assert.deepEqual(store.history("tg:4242", "tg:99", 10, 100).map((line) => [line.messageId, line.text]), [[sent.messageId, "hello"]]);
 	});
 });
 

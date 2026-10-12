@@ -8,6 +8,8 @@ import { telegramSettingsFrom, type TelegramSettings } from "./telegram/config.t
 export interface Config {
 	somework: { url: string; keyFile: string; caFile?: string; requireTls: boolean };
 	state: { dir: string; authFile: string };
+	/** The full record of every model run, kept on the agent's disk (`RUN_TRACE=0` turns it off; days and size bound how long it stays). */
+	trace?: { enabled: boolean; dir: string; keepDays: number; maxMegabytes: number };
 	model: ModelRef;
 	/** Models a job may ask for with `input.model`; the default model is always first. */
 	allowedModels: ModelRef[];
@@ -81,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	return {
 		somework: { url: required(env, "SOMEWORK_URL"), keyFile: required(env, "SOMEWORK_KEY_FILE"), caFile: env.SOMEWORK_CA_FILE, requireTls: env.SOMEWORK_REQUIRE_TLS === "1" },
 		state: { dir: env.PI_STATE_DIR ?? "/state", authFile: env.PI_AUTH_FILE ?? "/run/secrets/pi/auth.json" },
+		trace: { enabled: env.RUN_TRACE !== "0", dir: env.RUN_TRACE_DIR ?? `${env.PI_STATE_DIR ?? "/state"}/runs`, keepDays: integer(env, "RUN_TRACE_KEEP_DAYS", 30), maxMegabytes: integer(env, "RUN_TRACE_MAX_MB", 1024) },
 		model,
 		allowedModels: allowlist(model, parseModelList(env.PI_ALLOWED_MODELS)),
 		sandbox: { url: required(env, "SANDBOX_URL"), tokenFile: env.SANDBOX_TOKEN_FILE ?? "/run/secrets/sandbox-token", workspaceRoot: env.SANDBOX_WORKSPACES ?? "/workspace", caFile: env.SANDBOX_CA_FILE },

@@ -220,7 +220,7 @@ function createJobHandler(deps: HandlerDeps): Handler {
 			const outcome: AgentOutcome = resumed
 				? { status: "done", answer: resumed.answer, usage: emptyUsageValue() }
 				: await deps.runtime.execute(
-						{ requestId: `somework:${taskId}`, agentKey, instruction, workspace, budget, ...(model ? { model } : {}), ...(deps.requestTools ? { tools: deps.requestTools } : {}) },
+						{ requestId: `somework:${taskId}`, agentKey, instruction, workspace, budget, meta: runMeta(job, deps.source, instruction), ...(model ? { model } : {}), ...(deps.requestTools ? { tools: deps.requestTools } : {}) },
 						{
 							signal: control.signal,
 							onProgress: (update) => control.progress(update),
@@ -326,6 +326,23 @@ async function resumeFromPushedWork(session: GitSession, host: GitHost, hooks: R
 	if (typeof repoUrl !== "string" || (await host.findPullRequest({ repoUrl, head: pushed.branch }))) return undefined;
 	const recovered = await hooks.resume({ ...context, branch: pushed.branch, sha: pushed.sha });
 	return recovered ? { answer: recovered.answer, ...pushed } : undefined;
+}
+
+/** What ties a job's run to the conversation that asked for it, the job and the person, for the run record. */
+function runMeta(job: Job, source: HandlerDeps["source"], instruction: string): Record<string, unknown> {
+	const task = job.task ?? {};
+	const by = task.requestedBy && typeof task.requestedBy.id === "string" ? `${task.requestedBy.id} (${task.requestedBy.kind ?? "?"})` : undefined;
+	return {
+		kind: source ?? "job",
+		jobId: typeof task.jobId === "string" ? task.jobId : job.taskId,
+		...(typeof task.conversationId === "string" ? { conversationId: task.conversationId } : {}),
+		...(typeof task.replyTo === "string" ? { replyTo: task.replyTo } : {}),
+		...(typeof task.label === "string" ? { label: task.label } : {}),
+		...(typeof task.source === "string" ? { startedBy: task.source } : {}),
+		capability: `${job.capability?.id ?? "?"}@${job.capability?.version ?? "?"}`,
+		...(by ? { by } : {}),
+		asked: instruction.slice(0, 300),
+	};
 }
 
 const emptyUsageValue = (): Usage => ({ inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0 });
