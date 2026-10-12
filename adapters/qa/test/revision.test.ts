@@ -128,6 +128,20 @@ describe("the GitHub pull request finder", () => {
 		assert.ok(seen.every((call) => call.authorization === "Bearer tok-acme"));
 	});
 
+	it("falls back to the repository's recent pull requests when the search is refused", async () => {
+		const fetcher = (async (url: string) => {
+			const path = new URL(url).pathname + new URL(url).search;
+			if (path.startsWith("/search/issues")) return new Response("", { status: 422 });
+			if (path === "/repos/Acme/app/pulls?state=all&sort=updated&direction=desc&per_page=100") {
+				return new Response(JSON.stringify([{ number: 9, title: "SAD-70: other", body: "", head: { ref: "x" } }, { number: 8, title: "unrelated", body: "fixes sad-7 too", head: { ref: "y" } }, { number: 7, title: "x", body: "", head: { ref: "feature/SAD-7-fix" } }]), { status: 200 });
+			}
+			const number = /\/pulls\/(\d+)$/.exec(path)?.[1];
+			return number ? new Response(JSON.stringify(raw(Number(number))), { status: 200 }) : new Response("{}", { status: 404 });
+		}) as unknown as typeof fetch;
+		const f = new GitHubPullFinder({ token: () => "t", fetch: fetcher });
+		assert.deepEqual((await f.forTicket("https://github.com/Acme/app.git", "SAD-7")).map((p: PullInfo) => p.number), [8, 7], "SAD-70 is another ticket");
+	});
+
 	it("answers nothing for an address or a ticket it does not understand, and says nothing exists for a 404", async () => {
 		const { seen, finder: f } = finder({});
 		assert.deepEqual(await f.forTicket("https://example.test/r.git", "SAD-7"), []);

@@ -77,9 +77,25 @@ export class GitHubPullFinder implements PullFinder {
 
 	async forTicket(repoUrl: string, ticket: string): Promise<PullInfo[]> {
 		if (!TICKET.test(ticket)) return [];
-		const found = await this.#get(repoUrl, (owner, repo) => `/search/issues?q=${encodeURIComponent(`repo:${owner}/${repo} is:pr ${ticket} in:title,body,comments`)}&sort=updated&order=desc&per_page=8`);
-		const numbers: number[] = (found?.items ?? []).map((item: any) => item?.number).filter((n: unknown): n is number => Number.isInteger(n)).slice(0, 8);
+		let numbers: number[];
+		try {
+			const found = await this.#get(repoUrl, (owner, repo) => `/search/issues?q=${encodeURIComponent(`repo:${owner}/${repo} is:pr ${ticket} in:title,body,comments`)}&sort=updated&order=desc&per_page=8`);
+			numbers = (found?.items ?? []).map((item: any) => item?.number).filter((n: unknown): n is number => Number.isInteger(n)).slice(0, 8);
+		} catch {
+			// the search API refuses a fine-grained token that is limited to one repository (422); the repository's own list of recent pull requests does not
+			numbers = await this.#recentNaming(repoUrl, ticket);
+		}
 		const pulls = await Promise.all(numbers.map((number) => this.get(repoUrl, number).catch(() => undefined)));
 		return pulls.filter((pull): pull is PullInfo => pull !== undefined);
+	}
+
+	/** The newest pull requests whose title, description or branch names the ticket. */
+	async #recentNaming(repoUrl: string, ticket: string): Promise<number[]> {
+		const listed = await this.#get(repoUrl, (owner, repo) => `/repos/${owner}/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`);
+		const names = new RegExp(`(^|[^A-Za-z0-9])${ticket}(?![0-9])`, "i");
+		return (Array.isArray(listed) ? listed : [])
+			.filter((item: any) => Number.isInteger(item?.number) && names.test(`${text(item.title, 300)}\n${text(item.body, MAX_BODY)}\n${text(item.head?.ref, 200)}`))
+			.map((item: any) => item.number as number)
+			.slice(0, 8);
 	}
 }

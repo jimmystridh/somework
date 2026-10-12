@@ -44,6 +44,19 @@ const defaultSleep = (ms: number, signal: AbortSignal): Promise<void> =>
 export const backoffMs = (attempt: number): number => Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(attempt - 1, 6));
 
 /** The private-side pipeline: item in, event(s) published, item acknowledged. Every item ends published, dropped with a counted reason, forwarded, or in the dead-letter store. */
+const SHAPE_VALUES = ["transition", "status", "alert_transition", "alert_status", "event_type", "type", "action", "event"];
+
+/** What a delivery that produced no event looked like, for the log: its top-level key names and, for the few keys that say what kind of notification it is, a short value. Nothing else of the body. */
+export function shapeOf(body: unknown): { keys: string[]; values: Record<string, string> } | string {
+	if (typeof body !== "object" || body === null || Array.isArray(body)) return Array.isArray(body) ? "array" : typeof body;
+	const record = body as Record<string, unknown>;
+	const values: Record<string, string> = {};
+	for (const key of Object.keys(record)) {
+		if (SHAPE_VALUES.includes(key.toLowerCase()) && (typeof record[key] === "string" || typeof record[key] === "number")) values[key] = String(record[key]).replace(/[^\w .:/-]/g, "?").slice(0, 40);
+	}
+	return { keys: Object.keys(record).slice(0, 40).map((key) => key.slice(0, 40)), values };
+}
+
 export class Hub {
 	readonly metrics = new Metrics();
 	readonly clock: Clock | undefined;
@@ -138,7 +151,10 @@ export class Hub {
 			this.#dropped({ source: source.name, reason });
 			this.#log("warn", "event_dropped", { source: source.name, id: item.id, reason });
 		}
-		if (events.length === 0) return { kind: "dropped", reason: rejected[0] ?? "no_event" };
+		if (events.length === 0) {
+			if (rejected.length === 0) this.#log("info", "event_unmapped", { source: source.name, id: item.id, shape: shapeOf(input.body) });
+			return { kind: "dropped", reason: rejected[0] ?? "no_event" };
+		}
 		let duplicates = 0;
 		for (const event of events) {
 			const result = await this.#deps.publisher.publish(source.name, event, item.receivedAt);

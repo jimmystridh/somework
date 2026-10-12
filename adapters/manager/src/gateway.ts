@@ -107,6 +107,6 @@ export function createGateway(options: GatewayOptions): Server {
 			const { status: code, body } = errorAnswer(error);
 			status = send(response, code, body);
 		}
-		log("gateway_request", { route: `${method} ${url.pathname.replace(/\/(job-|c)[^/]+/, "/:id")}`, status, bytes });
+		log("gateway_request", { route: `${method} ${url.pathname.replace(/\/(job-[^/]+|c[0-9a-f]{8})(?=\/|$)/, "/:id")}`, status, bytes });
 	});
 }
