@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { before, describe, it } from "node:test";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { loadConfig } from "../src/config.ts";
-import { finalizeWorkspace, GitError, mirrorPathFor, prepareWorkspace, refreshMirror, startMirrorRefresh, workspaceFor, type GitSession } from "../src/git.ts";
+import { branchesNaming, finalizeWorkspace, GitError, mirrorPathFor, prepareWorkspace, refreshMirror, startMirrorRefresh, workspaceFor, type GitSession } from "../src/git.ts";
 import { FakeHost } from "../src/testing.ts";
 
 const identity = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
@@ -179,5 +179,28 @@ describe("GITHUB_API", () => {
 		await host.findPullRequest({ repoUrl: "https://github.com/o/r.git", head: "agent/x" });
 		assert.equal(seen.length, 1);
 		assert.ok(seen[0].startsWith("https://api.github.com/repos/o/r/pulls"), seen[0]);
+	});
+});
+
+describe("branches that name a ticket", () => {
+	it("finds them in the mirror by the whole key, newest first, and says which are not merged", async () => {
+		const base = sh(remote, "rev-parse", "refs/heads/main").trim();
+		sh(seed, "checkout", "-q", "-b", "fix/SAD-7-first", base);
+		writeFileSync(join(seed, "a.txt"), "a\n");
+		sh(seed, "add", "-A");
+		sh(seed, "commit", "-q", "-m", "a");
+		sh(seed, "push", "origin", "fix/SAD-7-first");
+		sh(seed, "checkout", "-q", "-b", "SAD-70-other", base);
+		writeFileSync(join(seed, "b.txt"), "b\n");
+		sh(seed, "add", "-A");
+		sh(seed, "commit", "-q", "-m", "b");
+		sh(seed, "push", "origin", "SAD-70-other");
+		sh(seed, "push", "origin", `${base}:refs/heads/merged/sad-7-done`);
+		sh(seed, "checkout", "-q", "main");
+
+		const found = await branchesNaming(session, remote, "SAD-7");
+		assert.deepEqual(found.map((branch) => [branch.name, branch.ahead]), [["fix/SAD-7-first", true], ["merged/sad-7-done", false]], "SAD-70 is another ticket; the branch with the newer commit comes first");
+		assert.equal(found.find((branch) => branch.name === "fix/SAD-7-first")!.sha, sh(remote, "rev-parse", "refs/heads/fix/SAD-7-first").trim());
+		assert.deepEqual(await branchesNaming(session, remote, "SAD-9"), []);
 	});
 });

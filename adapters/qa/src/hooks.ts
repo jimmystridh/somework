@@ -32,6 +32,8 @@ export interface QaHooksOptions {
 	hasTicketSystem: boolean;
 	/** The ticket's description and comments, oldest first, to find the pull request that holds the fix. */
 	ticketText?: (ticket: string) => Promise<string>;
+	/** The remote branches that name a ticket, read from the agent's mirror (git access only); without it only the pull request interface is asked. */
+	branches?: (repoUrl: string, ticket: string) => Promise<{ name: string; sha: string; committedAt: number; ahead: boolean }[]>;
 	/** The repository's pull requests, to tell which ones belong to the ticket (without it the last pull request the ticket's text names is taken). */
 	pulls?: PullFinder;
 	verifiedLabel: string;
@@ -114,10 +116,12 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 		const ticket = input.ticket.trim();
 		const repoUrl = input.repository?.url;
 		const numbers = pullRequestsInText(text).slice(0, 8);
+		let lookupFailed = false;
 		if (options.pulls && typeof repoUrl === "string") {
 			try {
 				// a failed search must not throw away the pull requests the ticket names itself
 				const [foundResult, mentioned] = await Promise.all([options.pulls.forTicket(repoUrl, ticket).then((pulls) => ({ pulls }), (error: unknown) => ({ error })), Promise.all(numbers.map((number) => options.pulls!.get(repoUrl, number).catch(() => undefined)))]);
+				if ("error" in foundResult) lookupFailed = true;
 				if ("error" in foundResult) log("warn", "pull_requests_failed", { ticket, error: scrub(foundResult.error instanceof Error ? foundResult.error.message : String(foundResult.error)).slice(0, 300) });
 				const found = "pulls" in foundResult ? foundResult.pulls : [];
 				const choice = chooseRevision(ticket, found, mentioned.filter((pull): pull is NonNullable<typeof pull> => pull !== undefined));
@@ -129,20 +133,40 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 					log("info", "revision_from_ticket", { ticket, pullRequest: choice.pullRequest, source: choice.source, ref: choice.ref });
 					return { ...input, repository: { ...input.repository, ref: choice.ref }, ...(choice.pullRequest ? { testedPullRequest: choice.pullRequest } : {}), revisionNote: choice.note, revisionSource: choice.source };
 				}
-				if (!("error" in foundResult) && pullRequestInText(text) === undefined) {
-					log("info", "revision_default", { ticket, named: numbers, found: 0 });
-					return { ...input, revisionSource: "default" };
-				}
 			} catch (error) {
+				lookupFailed = true;
 				log("warn", "pull_requests_failed", { ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
 			}
 		}
-		const pullRequest = pullRequestInText(text);
+		// the pull request interface can be closed to the token (it needs its own permission); the branches are in the repository itself, and a branch named for the ticket is the ticket's change
+		let mergedBranch: string | undefined;
+		if (options.branches && typeof repoUrl === "string") {
+			try {
+				const branches = await options.branches(repoUrl, ticket);
+				const unmerged = branches.find((branch) => branch.ahead);
+				if (unmerged) {
+					log("info", "revision_from_branch", { ticket, branch: unmerged.name, sha: unmerged.sha.slice(0, 12) });
+					return { ...input, repository: { ...input.repository, ref: unmerged.name }, revisionNote: `branch ${unmerged.name} (it names ${ticket} and holds commits the default branch lacks)`, revisionSource: "branch" };
+				}
+				mergedBranch = branches[0]?.name;
+			} catch (error) {
+				log("warn", "branches_failed", { ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
+			}
+		}
+		const pullRequest = mergedBranch === undefined ? pullRequestInText(text) : undefined;
 		if (pullRequest) {
 			log("info", "revision_from_ticket", { ticket: input.ticket, pullRequest });
 			return { ...input, repository: { ...input.repository, ref: `refs/pull/${pullRequest}/head` }, testedPullRequest: pullRequest };
 		}
+		if (mergedBranch !== undefined) {
+			log("info", "revision_default", { ticket, reason: "branch_merged", branch: mergedBranch });
+			return { ...input, revisionSource: "merged-branch", revisionBranch: mergedBranch };
+		}
 		if (saysNotMerged(text)) return { ...input, [UNTESTABLE_KEY]: `the ticket says its fix is not merged and names no pull request, so there is no revision to verify (the default branch does not have the change)` };
+		if (options.pulls || options.branches) {
+			log("info", "revision_default", { ticket, reason: lookupFailed ? "lookup_failed" : "nothing_found" });
+			return { ...input, revisionSource: lookupFailed ? "default-unchecked" : "default" };
+		}
 		return input;
 	}
 

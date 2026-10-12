@@ -241,6 +241,35 @@ export async function refreshMirror(session: GitSession, repoUrl: string): Promi
 	});
 }
 
+export interface BranchInfo {
+	name: string;
+	sha: string;
+	/** Seconds since the epoch of the branch's last commit. */
+	committedAt: number;
+	/** The branch holds commits the default branch lacks: it is not merged. */
+	ahead: boolean;
+}
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The remote branches whose name contains `ticket` (as a whole key: SAD-7 is not SAD-70), newest commit first, read from the persistent mirror
+ * after refreshing it. It needs the repository's contents only, no API: the branch of a held pull request is found even when the token cannot read pull requests.
+ */
+export async function branchesNaming(session: GitSession, repoUrl: string, ticket: string): Promise<BranchInfo[]> {
+	const dir = await refreshMirror(session, repoUrl);
+	const listed = await git(session, dir, ["for-each-ref", "--format=%(refname:short)%09%(objectname)%09%(committerdate:unix)", "refs/heads"]);
+	const names = new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(ticket)}(?![0-9])`, "i");
+	const found: BranchInfo[] = [];
+	for (const line of listed.output.split("\n")) {
+		const [name, sha, committed] = line.split("\t");
+		if (!name || !sha || !names.test(name)) continue;
+		const count = await git(session, dir, ["rev-list", "--count", `HEAD..${sha}`], { allow: [1, 128] });
+		found.push({ name, sha, committedAt: Number(committed) || 0, ahead: count.code === 0 && Number(count.output.trim()) > 0 });
+	}
+	return found.sort((a, b) => b.committedAt - a.committedAt);
+}
+
 /** The mirror to clone from, refreshed; a stale one when the remote cannot be reached right now (the fetch from origin that follows makes the clone current); none when there is no usable mirror. */
 async function usableMirror(session: GitSession, repoUrl: string): Promise<string | undefined> {
 	if (!session.mirrorDir) return undefined;

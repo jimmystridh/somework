@@ -27,7 +27,7 @@ import { resolveThreadSettings } from "./threads/settings.ts";
 import { DurableInbox, DurableTable } from "./threads/store.ts";
 import { createThreadTools, describeJob, threadKey, type RunContext } from "./threads/tools.ts";
 import { GitHubAppCredentials } from "./github-app.ts";
-import { prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
+import { branchesNaming as branchesNamingIn, prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
 import { createHandler, type HandlerDeps } from "./handler.ts";
 import { describeAgent, isoDateOrUndefined, withChangeMarker } from "./describe.ts";
@@ -125,7 +125,10 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const jobArtifacts = new JobArtifacts({ log });
 			const taskClient = jobArtifacts.wrap(client);
 			const timers = createTimers({ env, agentId: identity.agentId, log });
-			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}) }) : (options.hooks ?? {});
+			// the git session is built after the role's hooks (it needs the hooks' environment): a role that asks for branches reaches it through this
+			const gitSessionLate: { current?: GitSession } = {};
+			const branchesNaming = async (repoUrl: string, ticket: string) => (gitSessionLate.current ? branchesNamingIn(gitSessionLate.current, repoUrl, ticket) : []);
+			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}), branchesNaming }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
@@ -306,6 +309,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				identity: gitIdentity,
 				...(config.git.mirror ? { mirrorDir: config.git.mirror.dir } : {}),
 			};
+			gitSessionLate.current = session;
 			const taskRuntime = hooks.wrapRuntime ? hooks.wrapRuntime(runtime) : runtime;
 			const baseDeps: HandlerDeps = {
 				runtime: taskRuntime,

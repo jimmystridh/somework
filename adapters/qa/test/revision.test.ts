@@ -171,8 +171,9 @@ describe("the GitHub pull request finder", () => {
 });
 
 describe("choosing the revision with the repository's pull requests", () => {
-	const make = (text: string, pulls: PullFinder) =>
+	const make = (text: string, pulls: PullFinder, branches?: (repoUrl: string, ticket: string) => Promise<{ name: string; sha: string; committedAt: number; ahead: boolean }[]>) =>
 		createQaHooks({
+			...(branches ? { branches } : {}),
 			root: "/w",
 			ticketPattern: /^SAD-[0-9]+$/,
 			profiles: { default: { start: "x", health: ["http://127.0.0.1:1/"], stop: "y", startupTimeoutSeconds: 5 } as never },
@@ -222,6 +223,31 @@ describe("choosing the revision with the repository's pull requests", () => {
 		assert.equal(prepared.repository.ref, "HEAD");
 		assert.equal(prepared.revisionSource, "default");
 		assert.match(instructionOf(prepared), /No pull request that names this ticket was found.*do not report the ticket as failing on that evidence alone/s);
+	});
+
+	it("tests the branch that names the ticket when the token cannot read pull requests at all", async () => {
+		const closed: PullFinder = { forTicket: async () => { throw new Error("GitHub answered 403"); }, get: async () => undefined };
+		const branches = async (_url: string, ticket: string) => [{ name: `fix/${ticket}-registry-dialog`, sha: "e".repeat(40), committedAt: 1_790_000_000, ahead: true }];
+		const prepared = await make("Testa dialogen. Backend PR 4987 behövs också.", closed, branches).prepareInput!(job, { taskId: "t", log: () => {} });
+		assert.equal(prepared.repository.ref, "fix/SAD-2273-registry-dialog", "the ticket's own branch wins over a pull request the text merely mentions");
+		assert.equal(prepared.revisionSource, "branch");
+		assert.match(instructionOf(prepared), /revision under test is branch fix\/SAD-2273-registry-dialog \(it names SAD-2273 and holds commits the default branch lacks\)/);
+	});
+
+	it("tests the default branch when the ticket's branch is already merged into it", async () => {
+		const closed: PullFinder = { forTicket: async () => { throw new Error("GitHub answered 403"); }, get: async () => undefined };
+		const branches = async () => [{ name: "fix/SAD-2273-done", sha: "d".repeat(40), committedAt: 1, ahead: false }];
+		const prepared = await make("see PR 5252", closed, branches).prepareInput!(job, { taskId: "t", log: () => {} });
+		assert.equal(prepared.repository.ref, "HEAD");
+		assert.equal(prepared.revisionSource, "merged-branch");
+		assert.match(instructionOf(prepared), /fix\/SAD-2273-done that names this ticket is already merged/);
+	});
+
+	it("says the default branch is only a last resort when nothing could be read and no branch names the ticket", async () => {
+		const closed: PullFinder = { forTicket: async () => { throw new Error("GitHub answered 403"); }, get: async () => undefined };
+		const prepared = await make("Testa dialogen.", closed, async () => []).prepareInput!(job, { taskId: "t", log: () => {} });
+		assert.equal(prepared.revisionSource, "default-unchecked");
+		assert.match(instructionOf(prepared), /could not be read \(the access token lacks the permission\).*do not report the ticket as failing/s);
 	});
 
 	it("falls back to the text's last pull request when GitHub cannot be read", async () => {

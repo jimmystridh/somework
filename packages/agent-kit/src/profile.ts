@@ -140,6 +140,8 @@ export interface ServiceContext {
 	gitTokenSource?: () => Promise<string>;
 	/** Asks the event hub to wake this agent later; present only when `TIMERS_URL` is set. */
 	timers?: import("./timers/client.ts").TimersClient;
+	/** The remote branches of a repository that name a ticket, from the agent's mirror (git access only, no API); empty without a mirror. */
+	branchesNaming?: (repoUrl: string, ticket: string) => Promise<import("./git.ts").BranchInfo[]>;
 }
 
 /** Role-specific behaviour that is code rather than data. Every member is optional; the defaults are the developer role's. */
