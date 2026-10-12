@@ -25,6 +25,8 @@ export interface PullFinder {
 const REPO = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/;
 const TICKET = /^[A-Z][A-Z0-9]+-\d+$/;
 const MAX_BODY = 4000;
+/** 100 open pull requests a page: 500 is more than this repository has ever had open at once (157 at the time of writing). */
+const OPEN_PAGES = 5;
 
 const text = (value: unknown, max: number): string => (typeof value === "string" ? value.slice(0, max) : "");
 
@@ -75,27 +77,45 @@ export class GitHubPullFinder implements PullFinder {
 		return this.#info(await this.#get(repoUrl, (owner, repo) => `/repos/${owner}/${repo}/pulls/${number}`));
 	}
 
+	/**
+	 * The pull requests that name the ticket: the search first, and only when it finds none that really names the ticket, the repository's open
+	 * pull requests read page by page and filtered here. A held, approved pull request that nobody touches for weeks is open but not recent, and the
+	 * search does not reliably find it (it answers 422, or nothing, to a token limited to one repository).
+	 */
 	async forTicket(repoUrl: string, ticket: string): Promise<PullInfo[]> {
 		if (!TICKET.test(ticket)) return [];
-		let numbers: number[];
+		const names = new RegExp(`(^|[^A-Za-z0-9])${ticket}(?![0-9])`, "i");
+		const namesTicket = (pull: PullInfo) => names.test(`${pull.title}\n${pull.body}\n${pull.headRef}`);
+		const read = async (numbers: number[]) => (await Promise.all(numbers.slice(0, 8).map((number) => this.get(repoUrl, number).catch(() => undefined)))).filter((pull): pull is PullInfo => pull !== undefined);
+		let searchError: unknown;
 		try {
-			const found = await this.#get(repoUrl, (owner, repo) => `/search/issues?q=${encodeURIComponent(`repo:${owner}/${repo} is:pr ${ticket} in:title,body,comments`)}&sort=updated&order=desc&per_page=8`);
-			numbers = (found?.items ?? []).map((item: any) => item?.number).filter((n: unknown): n is number => Number.isInteger(n)).slice(0, 8);
-		} catch {
-			// the search API refuses a fine-grained token that is limited to one repository (422); the repository's own list of recent pull requests does not
-			numbers = await this.#recentNaming(repoUrl, ticket);
+			const searched = await read(await this.#searchNaming(repoUrl, ticket));
+			if (searched.some(namesTicket)) return searched;
+		} catch (error) {
+			searchError = error;
 		}
-		const pulls = await Promise.all(numbers.map((number) => this.get(repoUrl, number).catch(() => undefined)));
-		return pulls.filter((pull): pull is PullInfo => pull !== undefined);
+		try {
+			return await read(await this.#openNaming(repoUrl, ticket));
+		} catch (error) {
+			throw searchError ?? error;
+		}
 	}
 
-	/** The newest pull requests whose title, description or branch names the ticket. */
-	async #recentNaming(repoUrl: string, ticket: string): Promise<number[]> {
-		const listed = await this.#get(repoUrl, (owner, repo) => `/repos/${owner}/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=100`);
+	async #searchNaming(repoUrl: string, ticket: string): Promise<number[]> {
+		const found = await this.#get(repoUrl, (owner, repo) => `/search/issues?q=${encodeURIComponent(`repo:${owner}/${repo} is:pr ${ticket} in:title,body,comments`)}&sort=updated&order=desc&per_page=8`);
+		return (found?.items ?? []).map((item: any) => item?.number).filter((n: unknown): n is number => Number.isInteger(n)).slice(0, 8);
+	}
+
+	/** The open pull requests whose title, description or branch names the ticket, newest first. */
+	async #openNaming(repoUrl: string, ticket: string): Promise<number[]> {
 		const names = new RegExp(`(^|[^A-Za-z0-9])${ticket}(?![0-9])`, "i");
-		return (Array.isArray(listed) ? listed : [])
-			.filter((item: any) => Number.isInteger(item?.number) && names.test(`${text(item.title, 300)}\n${text(item.body, MAX_BODY)}\n${text(item.head?.ref, 200)}`))
-			.map((item: any) => item.number as number)
-			.slice(0, 8);
+		const numbers: number[] = [];
+		for (let page = 1; page <= OPEN_PAGES; page++) {
+			const listed = await this.#get(repoUrl, (owner, repo) => `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=100&page=${page}`);
+			const items: any[] = Array.isArray(listed) ? listed : [];
+			for (const item of items) if (Number.isInteger(item?.number) && names.test(`${text(item.title, 300)}\n${text(item.body, MAX_BODY)}\n${text(item.head?.ref, 200)}`)) numbers.push(item.number);
+			if (items.length < 100) break;
+		}
+		return numbers;
 	}
 }

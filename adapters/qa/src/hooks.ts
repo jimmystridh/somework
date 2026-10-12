@@ -116,7 +116,10 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 		const numbers = pullRequestsInText(text).slice(0, 8);
 		if (options.pulls && typeof repoUrl === "string") {
 			try {
-				const [found, mentioned] = await Promise.all([options.pulls.forTicket(repoUrl, ticket), Promise.all(numbers.map((number) => options.pulls!.get(repoUrl, number).catch(() => undefined)))]);
+				// a failed search must not throw away the pull requests the ticket names itself
+				const [foundResult, mentioned] = await Promise.all([options.pulls.forTicket(repoUrl, ticket).then((pulls) => ({ pulls }), (error: unknown) => ({ error })), Promise.all(numbers.map((number) => options.pulls!.get(repoUrl, number).catch(() => undefined)))]);
+				if ("error" in foundResult) log("warn", "pull_requests_failed", { ticket, error: scrub(foundResult.error instanceof Error ? foundResult.error.message : String(foundResult.error)).slice(0, 300) });
+				const found = "pulls" in foundResult ? foundResult.pulls : [];
 				const choice = chooseRevision(ticket, found, mentioned.filter((pull): pull is NonNullable<typeof pull> => pull !== undefined));
 				if (choice && "none" in choice) {
 					log("info", "revision_none", { ticket, named: numbers, found: found.map((pull) => pull.number) });
@@ -125,6 +128,10 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 				if (choice) {
 					log("info", "revision_from_ticket", { ticket, pullRequest: choice.pullRequest, source: choice.source, ref: choice.ref });
 					return { ...input, repository: { ...input.repository, ref: choice.ref }, ...(choice.pullRequest ? { testedPullRequest: choice.pullRequest } : {}), revisionNote: choice.note, revisionSource: choice.source };
+				}
+				if (!("error" in foundResult) && pullRequestInText(text) === undefined) {
+					log("info", "revision_default", { ticket, named: numbers, found: 0 });
+					return { ...input, revisionSource: "default" };
 				}
 			} catch (error) {
 				log("warn", "pull_requests_failed", { ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });

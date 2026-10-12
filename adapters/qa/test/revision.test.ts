@@ -128,18 +128,36 @@ describe("the GitHub pull request finder", () => {
 		assert.ok(seen.every((call) => call.authorization === "Bearer tok-acme"));
 	});
 
-	it("falls back to the repository's recent pull requests when the search is refused", async () => {
+	it("finds an open pull request that nobody has touched for weeks, however many are open and whatever the search answers", async () => {
+		const unrelated = Array.from({ length: 100 }, (_, i) => ({ number: 1000 + i, title: `other change ${i}`, body: "", head: { ref: `feature/${i}` } }));
+		const pages: Record<string, unknown[]> = {
+			"1": unrelated,
+			"2": [{ number: 9, title: "SAD-70: other", body: "", head: { ref: "x" } }, { number: 8, title: "unrelated", body: "fixes sad-7 too", head: { ref: "y" } }, { number: 7, title: "x", body: "", head: { ref: "feature/SAD-7-fix" } }],
+		};
 		const fetcher = (async (url: string) => {
-			const path = new URL(url).pathname + new URL(url).search;
-			if (path.startsWith("/search/issues")) return new Response("", { status: 422 });
-			if (path === "/repos/Acme/app/pulls?state=all&sort=updated&direction=desc&per_page=100") {
-				return new Response(JSON.stringify([{ number: 9, title: "SAD-70: other", body: "", head: { ref: "x" } }, { number: 8, title: "unrelated", body: "fixes sad-7 too", head: { ref: "y" } }, { number: 7, title: "x", body: "", head: { ref: "feature/SAD-7-fix" } }]), { status: 200 });
+			const target = new URL(url);
+			if (target.pathname === "/search/issues") return new Response("", { status: 422 });
+			if (target.pathname === "/repos/Acme/app/pulls") {
+				assert.equal(target.searchParams.get("state"), "open", "only open pull requests matter: a merged one is in its base branch");
+				return new Response(JSON.stringify(pages[target.searchParams.get("page") ?? "1"] ?? []), { status: 200 });
 			}
-			const number = /\/pulls\/(\d+)$/.exec(path)?.[1];
+			const number = /\/pulls\/(\d+)$/.exec(target.pathname)?.[1];
 			return number ? new Response(JSON.stringify(raw(Number(number))), { status: 200 }) : new Response("{}", { status: 404 });
 		}) as unknown as typeof fetch;
 		const f = new GitHubPullFinder({ token: () => "t", fetch: fetcher });
 		assert.deepEqual((await f.forTicket("https://github.com/Acme/app.git", "SAD-7")).map((p: PullInfo) => p.number), [8, 7], "SAD-70 is another ticket");
+	});
+
+	it("does not scan the open pull requests when the search already found one that names the ticket", async () => {
+		const q = encodeURIComponent("repo:Acme/app is:pr SAD-7 in:title,body,comments");
+		const { seen, finder: f } = finder({ [`/search/issues?q=${q}&sort=updated&order=desc&per_page=8`]: { items: [{ number: 5 }] }, "/repos/Acme/app/pulls/5": raw(5) });
+		assert.deepEqual((await f.forTicket("https://github.com/Acme/app.git", "SAD-7")).map((p: PullInfo) => p.number), [5]);
+		assert.ok(!seen.some((call) => call.url.includes("/pulls?state=open")), "the scan is the last resort");
+	});
+
+	it("only fails when both the scan and the search fail", async () => {
+		const f = new GitHubPullFinder({ token: () => "t", fetch: (async () => new Response("", { status: 403 })) as unknown as typeof fetch });
+		await assert.rejects(f.forTicket("https://github.com/Acme/app.git", "SAD-7"), /GitHub answered 403/);
 	});
 
 	it("answers nothing for an address or a ticket it does not understand, and says nothing exists for a 404", async () => {
@@ -171,6 +189,7 @@ describe("choosing the revision with the repository's pull requests", () => {
 		});
 	const info = (number: number, over: Partial<PullInfo> = {}): PullInfo => ({ number, title: "", body: "", state: "open", merged: false, headRef: `feature/${number}`, headSha: "a".repeat(40), baseRef: "tremendous", updatedAt: "2026-10-09T00:00:00Z", ...over });
 	const job = { ticket: "SAD-2273", repository: { url: "https://github.com/Visma-Administration/visma.administration.git", ref: "HEAD" } };
+	const instructionOf = (prepared: any) => make("", { forTicket: async () => [], get: async () => undefined }).instruction!(prepared, { taskId: "t" });
 
 	it("blocks, without running the model, a ticket whose only named pull request belongs to another ticket", async () => {
 		const pulls: PullFinder = { forTicket: async () => [], get: async (_url, n) => info(n, { title: "SAD-2227: backend", state: "closed", merged: true }) };
@@ -188,6 +207,21 @@ describe("choosing the revision with the repository's pull requests", () => {
 		assert.equal(prepared.repository.ref, "refs/pull/5058/head");
 		assert.equal(prepared.revisionSource, "linked");
 		assert.match(hooks.instruction!(prepared, { taskId: "t" }), /revision under test is pull request #5058 \(it names SAD-2273\)/);
+	});
+
+	it("keeps a pull request the ticket names even when the lookup for the ticket's own key fails", async () => {
+		const pulls: PullFinder = { forTicket: async () => { throw new Error("GitHub answered 422"); }, get: async (_url, n) => info(n, { title: "SAD-2273: series dropdown" }) };
+		const prepared = await make("preview at preview-pr-4987-85df54.pages.dev", pulls).prepareInput!(job, { taskId: "t", log: () => {} });
+		assert.equal(prepared.repository.ref, "refs/pull/4987/head");
+		assert.equal(prepared.revisionSource, "linked");
+	});
+
+	it("says in the brief when no pull request was found, so the default branch is not taken for the ticket's revision", async () => {
+		const pulls: PullFinder = { forTicket: async () => [], get: async () => undefined };
+		const prepared = await make("Testa gärna att dialogen laddas.", pulls).prepareInput!(job, { taskId: "t", log: () => {} });
+		assert.equal(prepared.repository.ref, "HEAD");
+		assert.equal(prepared.revisionSource, "default");
+		assert.match(instructionOf(prepared), /No pull request that names this ticket was found.*do not report the ticket as failing on that evidence alone/s);
 	});
 
 	it("falls back to the text's last pull request when GitHub cannot be read", async () => {
