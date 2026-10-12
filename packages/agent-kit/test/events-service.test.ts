@@ -90,7 +90,7 @@ describe("events end to end (real domain, real sandbox, real service process)", 
 		assert.equal(ran.handlers[0].errors, 0, JSON.stringify(ran.handlers[0]));
 		assert.ok(ran.events.dropped.some((sample: any) => sample.reason === "not interesting"), "drops are sampled");
 		assert.deepEqual(Object.keys(ran.tokenPools), ["tasks", "events", "chat"]);
-		assert.equal(ran.tokenPools.events.limit, 3_000_000);
+		assert.equal(ran.tokenPools.events.limit, 10_000_000, "the events pool is the whole daily limit: the daily limit is the one budget");
 
 		const inbox = await until("the owner's notice", async () => {
 			const response = JSON.stringify(await domain.author.get("/v1/inbox?unread=true&limit=50"));

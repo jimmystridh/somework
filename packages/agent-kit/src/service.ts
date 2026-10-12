@@ -158,10 +158,13 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				join(config.state.dir, "ledger.json"),
 				config.limits.dailyTokenLimit,
 				undefined,
-				eventsConfig.enabled ? { share: eventsConfig.tokenShare, weeklyTokens: eventsConfig.weeklyTokens, throttleAt: eventsConfig.throttleAt } : undefined,
-				{ share: threadSettings.share, throttleAt: threadSettings.throttleAt },
+				// the daily limit is the one budget: events and chat may use all of it, with no share or weekly cap of their own
+				eventsConfig.enabled ? { share: 1, throttleAt: eventsConfig.throttleAt } : undefined,
+				{ share: threadSettings.share > 0 ? 1 : 0, throttleAt: threadSettings.throttleAt },
 			);
 			ledgerRef = ledger;
+			// a woken run gets the fleet's caps as well, and follows a change of them while the agent runs
+			eventsConfig.wakeBudget = { get maxTokens() { return config.limits.maxTokensCap; }, get maxMinutes() { return config.limits.maxMinutesCap; } };
 			const journal = new JobJournal(join(config.state.dir, "jobs.json"));
 			let jobsRef: JobManager | undefined;
 			let engineRef: ThreadEngine | undefined;
@@ -380,6 +383,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				...(runRecall ? { recall: runRecall } : {}),
 				workspace: threadWorkspace,
 				ledger,
+				caps: () => config.limits,
 				setupKey: () => setup.conversationSuffix(),
 				intercept: async (message) => {
 					for (const intercept of intercepts) if (await intercept(message).catch(() => false)) return true;

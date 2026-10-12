@@ -129,14 +129,14 @@ describe("the handler under a profile", () => {
 		assert.equal((await run({ ...budget, repository: undefined })).failure.code, "invalid_input");
 	});
 
-	it("requires a budget unless the profile supplies one, and clamps whatever is used to the service caps", async () => {
+	it("requires a budget unless the profile supplies one, and runs every job under the service caps whatever is asked", async () => {
 		const strict = harness(base());
 		assert.equal((await strict.run({})).failure.code, "budget_required");
 		const lenient = harness(base({ requireBudget: false, defaultBudget: { maxTokens: 900_000, maxMinutes: 30 } }));
 		assert.equal((await lenient.run({})).type, "completed");
 		assert.deepEqual(lenient.requests[0]!.budget, { maxTokens: 10_000, maxMinutes: 5 });
 		assert.equal((await lenient.run({ budget: { maxTokens: 2000, maxMinutes: 1 } })).type, "completed");
-		assert.deepEqual(lenient.requests[1]!.budget, { maxTokens: 2000, maxMinutes: 1 });
+		assert.deepEqual(lenient.requests[1]!.budget, { maxTokens: 10_000, maxMinutes: 5 }, "the one budget is the fleet's: a smaller ask does not lower it");
 	});
 
 	it("lets the role shape the instruction and the pull request, and refuse bad input", async () => {

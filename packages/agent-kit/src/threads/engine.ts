@@ -32,6 +32,8 @@ export interface ThreadEngineDeps {
 	/** The working directory of a conversation run (a scratch directory of its own). */
 	workspace: (threadKey: string) => Promise<string>;
 	ledger: Pick<DailyLedger, "chatRemaining" | "chatState" | "record">;
+	/** The fleet's caps for one run; without them the role's own chat run budget applies. */
+	caps?: () => { maxTokensCap: number; maxMinutesCap: number };
 	/** The suffix every conversation key of a new run gets while an operator's setup shapes the conversation; empty when none does (see `Setup.conversationSuffix`). */
 	setupKey?: () => string;
 	/** Looks at a message before the engine does; true means it was dealt with (control messages of the event handlers, budget raises, setup documents). */
@@ -293,7 +295,8 @@ export class ThreadEngine {
 		const context: RunContext = { ...(message.conversationId ? { conversationId: message.conversationId } : {}), messageId: id, runId, sender: message.sender, audience: to };
 		const jobs = message.conversationId ? this.#deps.jobs.activeIn(message.conversationId).map((job) => describeJob(job, this.#now())) : [];
 		const instruction = frameThread({ self: this.#deps.agentId, state, history, message, text, boundary: (this.#deps.boundary ?? (() => randomBytes(8).toString("hex")))(), jobs, related: this.#related(message, runId), ...(describeAge(message.createdAt, this.#now()) ? { age: describeAge(message.createdAt, this.#now())! } : {}), now: new Date(this.#now()) });
-		const budget = { maxTokens: Math.min(settings.runBudget.maxTokens, settings.hardTokenCap, remaining), maxMinutes: settings.runBudget.maxMinutes };
+		const caps = this.#deps.caps?.();
+		const budget = caps ? { maxTokens: Math.min(caps.maxTokensCap, remaining), maxMinutes: caps.maxMinutesCap } : { maxTokens: Math.min(settings.runBudget.maxTokens, settings.hardTokenCap, remaining), maxMinutes: settings.runBudget.maxMinutes };
 		const stop = new AbortController();
 		const forward = (): void => stop.abort(this.#deps.signal.reason ?? "shutdown");
 		this.#deps.signal.addEventListener("abort", forward, { once: true });
