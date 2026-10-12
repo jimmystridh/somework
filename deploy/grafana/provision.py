@@ -91,7 +91,7 @@ def rules(ds, folder):
         rule(ds, folder, "somework-budget-refusals", "SomeWork jobs refused on budget grounds",
              'sum(count_over_time({event="job_refused"}[1h]))', 0, 3600, "info", "An agent refused a job because its daily token budget is used up"),
         rule(ds, folder, "somework-token-burn", "SomeWork token burn",
-             'sum(sum_over_time({event="job_finished"} | json | unwrap totalTokens | __error__="" [6h]))', 500000, 21600, "ticket", "More than 500k model tokens in 6 hours"),
+             'sum(sum_over_time({event="job_finished"} | json | unwrap totalTokens | __error__="" [6h]))', 15000000, 21600, "ticket", "More than 15M model tokens in 6 hours (the busiest 6 hours of a week was 9.3M)"),
         rule(ds, folder, "somework-agent-restarts", "SomeWork agent restarting repeatedly",
              'max(sum by (host, container, service_name) (count_over_time({event="service_started"}[30m])))', 3, 1800, "page", "An agent started more than 3 times in 30 minutes (crash loop)"),
         rule(ds, folder, "somework-nats-fallback", "SomeWork agents lost their NATS wake",
