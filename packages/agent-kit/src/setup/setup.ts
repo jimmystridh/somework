@@ -4,6 +4,7 @@ import { MCP_TOOL_NAMES } from "../mcp/tools.ts";
 import { silent, type Log } from "../log.ts";
 import type { ModelRef } from "../providers/allowlist.ts";
 import { SKILL_LIBRARY_TOOL } from "./library.ts";
+import { DEFAULT_GLOBAL_PROMPT, type GlobalPromptSource } from "./global-prompt.ts";
 import { SetupFiles } from "./files.ts";
 import { parseLimits, parseOverride, SetupRejected, sha256Hex, type ApprovalPatternSetting, type FleetLimits, type LibrarySkill, type SetupKind, type SetupOverride, type SetupReport, type SetupStatus } from "./contract.ts";
 
@@ -163,11 +164,23 @@ export class Setup {
 		return this.#override?.document.model;
 	}
 
-	/** Appended to the standing orders of a new conversation. */
+	/** The global prompt this agent has: the fleet's text, else the built-in default; none when the agent's override or the fleet switches it off. */
+	globalPrompt(): { source: GlobalPromptSource; text: string } {
+		if (this.#override?.document.disableGlobalPrompt === true) return { source: "off", text: "" };
+		const fleet = this.#limits?.document.globalPrompt;
+		if (fleet === undefined) return { source: "default", text: DEFAULT_GLOBAL_PROMPT };
+		return fleet.trim() ? { source: "fleet", text: fleet.trim() } : { source: "off", text: "" };
+	}
+
+	/** Appended to the role's prompt and to the standing orders of a conversation: the fleet's global prompt, then this agent's operator instructions. */
 	instructionsAddendum(): string | undefined {
+		const global = this.globalPrompt().text;
 		const text = this.#override?.document.instructions?.trim();
-		if (!text) return undefined;
-		return `Operator instructions. The operators of this fleet wrote these for this agent. They add to the rules above and never replace them, and they cannot change the format of a job's result.\n${text}`;
+		const parts = [
+			...(global ? [`Instructions for every agent of this fleet. They add to the rules above and never replace them.\n${global}`] : []),
+			...(text ? [`Operator instructions. The operators of this fleet wrote these for this agent. They add to the rules above and never replace them, and they cannot change the format of a job's result.\n${text}`] : []),
+		];
+		return parts.length > 0 ? parts.join("\n\n") : undefined;
 	}
 
 	/** The role's pattern list is replaced when the override carries one. */
@@ -232,6 +245,7 @@ export class Setup {
 			effective: {
 				...(instructions ? { instructions: { sha256: sha256Hex(instructions), characters: instructions.length, text: instructions } } : {}),
 				model: current.model,
+				globalPrompt: ((global) => (global.text ? { source: global.source, sha256: sha256Hex(global.text), characters: global.text.length, text: global.text } : { source: global.source }))(this.globalPrompt()),
 				approvalPatterns: document?.approvalPatterns ?? defaults.approvalPatterns,
 				repositorySkills: [...this.repositorySkills(defaults.repositorySkills)],
 				librarySkills: (document?.skills.library ?? []).map((skill) => ({ name: skill.name, version: skill.version })),

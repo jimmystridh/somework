@@ -112,6 +112,8 @@ fn patterns(items: &Option<Vec<ApprovalPatternSetting>>) -> Option<String> {
 pub fn diff_forms(before: &SetupForm, after: &SetupForm) -> Vec<DiffEntry> {
     let mut out = Vec::new();
     out.extend(text_entry("instructions", before.instructions.as_deref(), after.instructions.as_deref()));
+    let global = |form: &SetupForm| form.disable_global_prompt.then(|| "switched off for this agent".to_string());
+    out.extend(value_entry("disableGlobalPrompt", global(before), global(after)));
     let model = |form: &SetupForm| form.model.as_ref().map(|m| format!("{}/{}", m.provider, m.model_id));
     out.extend(value_entry("model", model(before), model(after)));
     out.extend(text_entry("approvalPatterns", patterns(&before.approval_patterns).as_deref(), patterns(&after.approval_patterns).as_deref()));
@@ -241,8 +243,8 @@ mod tests {
 
     #[test]
     fn a_limits_diff_lists_the_changed_numbers() {
-        let a = LimitsValues { max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4 };
-        let b = LimitsValues { max_minutes_cap: 20, ..a };
+        let a = LimitsValues { max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4, global_prompt: None };
+        let b = LimitsValues { max_minutes_cap: 20, ..a.clone() };
         let diff = diff_limits(Some(&a), &b);
         assert_eq!(diff.len(), 1);
         assert_eq!((diff[0].field.as_str(), diff[0].before.as_deref(), diff[0].after.as_deref()), ("limits.maxMinutesCap", Some("2"), Some("20")));

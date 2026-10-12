@@ -102,7 +102,7 @@ describe("who may send a setup document", () => {
 		assert.equal(w.downloads.length, 0);
 		assert.equal(w.posts.length, 0, "no acknowledgement either");
 		assert.equal(w.setup.status().override, null);
-		assert.equal(w.setup.instructionsAddendum(), undefined);
+		assert.ok(!w.setup.instructionsAddendum()!.includes("Operator instructions"), "no operator text of its own");
 	});
 
 	it("ignores the labels from the wrong sender whatever the message type", async () => {
@@ -228,7 +228,7 @@ describe("applying a setup override", () => {
 		await w.deliver(override(1, { instructions: "x", model: MODELS[1], approvalPatterns: [], mcp: [{ name: "docs", transport: "http", url: "https://docs.example.test/mcp", approval: "never" }] }));
 		assert.equal(w.setup.conversationSuffix() !== "", true);
 		await w.deliver(override(2));
-		assert.equal(w.setup.instructionsAddendum(), undefined);
+		assert.ok(!w.setup.instructionsAddendum()!.includes("Operator instructions"), "no operator text of its own");
 		assert.equal(w.setup.approvalPatterns(), undefined);
 		assert.deepEqual(w.setup.operatorTools(), []);
 		assert.equal(w.setup.conversationSuffix(), "");

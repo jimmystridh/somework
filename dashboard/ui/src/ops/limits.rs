@@ -8,14 +8,14 @@ use crate::{
     ops::{
         diff::{DiffView, summary},
         state::delivery_problem,
-        validate::{Problem, limits_from_text, note_counter, note_problem},
+        validate::{Problem, global_prompt_counter, limits_from_text, note_counter, note_problem},
     },
     session::use_session,
     shell::Gate,
     widgets::{CounterText, ErrorNotice, FieldMessage, Outcome, OutcomeNotice, Waiting, use_api},
 };
 use dioxus::prelude::*;
-use fleet_shared::operations::{AgentLimitsState, LimitsPut, LimitsRevision, LimitsRevisionList, LimitsValues, LimitsView};
+use fleet_shared::operations::{AgentLimitsState, DEFAULT_GLOBAL_PROMPT, LimitsPut, LimitsRevision, LimitsRevisionList, LimitsValues, LimitsView};
 
 const FIELDS: [(&str, &str, &str); 4] = [
     ("values.maxTokensCap", "Maximum tokens per job", "The most tokens one job may be given."),
@@ -26,6 +26,27 @@ const FIELDS: [(&str, &str, &str); 4] = [
 
 fn texts_of(values: &LimitsValues) -> [String; 4] {
     [values.max_tokens_cap.to_string(), values.max_minutes_cap.to_string(), values.daily_token_limit.to_string(), values.budget_raise_ceiling.to_string()]
+}
+
+/// What the global prompt editor holds: whether the agents' built-in text is used, and the text typed for a text of the fleet's own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PromptDraft {
+    built_in: bool,
+    text: String,
+}
+
+impl PromptDraft {
+    fn of(values: Option<&LimitsValues>) -> Self {
+        match values.and_then(|values| values.global_prompt.clone()) {
+            Some(text) => Self { built_in: false, text },
+            None => Self { built_in: true, text: DEFAULT_GLOBAL_PROMPT.to_string() },
+        }
+    }
+
+    /// What is sent: nothing keeps the agents' built-in text, an empty text means no global prompt.
+    fn value(&self) -> Option<String> {
+        (!self.built_in).then(|| self.text.trim().to_string())
+    }
 }
 
 /// How an agent stands against the saved limits, in words.
@@ -90,6 +111,8 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
     let session = use_session();
     let editable = session.is_admin();
     let start = current.as_ref().map(|current| texts_of(&current.values)).unwrap_or_default();
+    let start_prompt = PromptDraft::of(current.as_ref().map(|current| &current.values));
+    let mut prompt = use_signal(|| start_prompt.clone());
     let mut texts = use_signal(|| start.clone());
     let mut base = use_signal(|| current.as_ref().map_or(0, |current| current.revision));
     let mut note = use_signal(String::new);
@@ -99,12 +122,14 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
 
     use_effect(move || {
         texts.read();
+        prompt.read();
         if !server_problems.peek().is_empty() {
             server_problems.set(Vec::new());
         }
     });
     let typed = texts.read().clone();
-    let parsed = limits_from_text([&typed[0], &typed[1], &typed[2], &typed[3]]);
+    let typed_prompt = prompt.read().clone();
+    let parsed = limits_from_text([&typed[0], &typed[1], &typed[2], &typed[3]], typed_prompt.value());
     let mut problems: Vec<Problem> = match &parsed {
         Err(found) => found.iter().filter(|problem| !typed_empty_and_new(&typed, &problem.field, current.is_none())).cloned().collect(),
         Ok(_) => Vec::new(),
@@ -112,13 +137,13 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
     let note_text = note.read().clone();
     problems.extend(note_problem(&note_text));
     let all: Vec<Problem> = problems.iter().cloned().chain(server_problems.read().iter().cloned()).collect();
-    let changed = typed != start;
+    let changed = typed != start || typed_prompt != start_prompt;
     let blocked = parsed.is_err() || note_problem(&note_text).is_some();
     let note_count = note_counter(&note_text);
     let saved_by = current.as_ref().map(|current| format!("Revision {} saved by {}", current.revision, current.author));
 
     let save = move |_| {
-        let Ok(values) = limits_from_text([&texts.read()[0], &texts.read()[1], &texts.read()[2], &texts.read()[3]]) else { return };
+        let Ok(values) = limits_from_text([&texts.read()[0], &texts.read()[1], &texts.read()[2], &texts.read()[3]], prompt.read().value()) else { return };
         let body = LimitsPut { base_revision: base(), values, note: Some(note.read().trim().to_string()).filter(|text| !text.is_empty()) };
         busy.set(true);
         server_problems.set(Vec::new());
@@ -157,6 +182,27 @@ fn LimitsForm(current: Option<LimitsRevision>, on_saved: EventHandler<()>) -> El
                         FieldMessage { problems: all.clone(), field: field.to_string(), id: format!("limit-{index}-error") }
                     }
                 }
+            }
+            fieldset { class: "group", disabled: !editable,
+                legend { "Global prompt" }
+                p { class: "hint", "Added to every agent's prompt after its role's own prompt and before its operator instructions. An agent can switch it off on its own page. Applies from each agent's next model run." }
+                label { class: "check",
+                    input { r#type: "checkbox", checked: typed_prompt.built_in, onchange: move |event: Event<FormData>| {
+                        let built_in = event.checked();
+                        let mut next = prompt.read().clone();
+                        if built_in { next = PromptDraft { built_in: true, text: DEFAULT_GLOBAL_PROMPT.to_string() }; } else { next.built_in = false; }
+                        prompt.set(next);
+                    } }
+                    span { b { "Use the agents' built-in text" }, small { class: "wrap", " It tells an agent to ask the other agents for help and how (agents_list, agents_search, message_send). Untick it to write your own; an empty text means no global prompt at all." } }
+                }
+                label { r#for: "global-prompt", "Text" }
+                textarea {
+                    id: "global-prompt", class: "mono", rows: "12", value: "{typed_prompt.text}", disabled: !editable || typed_prompt.built_in, spellcheck: false,
+                    "aria-describedby": "global-prompt-count global-prompt-error",
+                    oninput: move |event| { let mut next = prompt.read().clone(); next.text = event.value(); prompt.set(next); },
+                }
+                div { class: "field-foot", CounterText { counter: global_prompt_counter(&typed_prompt.text), unit: "characters".to_string(), id: "global-prompt-count".to_string() } }
+                FieldMessage { problems: all.clone(), field: "values.globalPrompt".to_string(), id: "global-prompt-error".to_string() }
             }
             if editable {
                 label { r#for: "limits-note", "Note for this revision (optional)" }
@@ -209,9 +255,20 @@ mod tests {
 
     #[test]
     fn the_values_are_shown_as_typed_numbers() {
-        let values = LimitsValues { max_tokens_cap: 1_000_000, max_minutes_cap: 30, daily_token_limit: 5_000_000, budget_raise_ceiling: 8_000_000 };
+        let values = LimitsValues { max_tokens_cap: 1_000_000, max_minutes_cap: 30, daily_token_limit: 5_000_000, budget_raise_ceiling: 8_000_000, global_prompt: None };
         assert_eq!(texts_of(&values), ["1000000", "30", "5000000", "8000000"]);
-        assert_eq!(limits_from_text([&texts_of(&values)[0], &texts_of(&values)[1], &texts_of(&values)[2], &texts_of(&values)[3]]).unwrap(), values);
+        assert_eq!(limits_from_text([&texts_of(&values)[0], &texts_of(&values)[1], &texts_of(&values)[2], &texts_of(&values)[3]], None).unwrap(), values);
+    }
+
+    #[test]
+    fn the_global_prompt_is_the_built_in_text_until_the_fleet_writes_its_own() {
+        let with = |global_prompt: Option<&str>| LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: global_prompt.map(str::to_string) };
+        let built_in = PromptDraft::of(Some(&with(None)));
+        assert_eq!((built_in.built_in, built_in.text.as_str(), built_in.value()), (true, DEFAULT_GLOBAL_PROMPT, None), "nothing is sent for the built-in text");
+        assert_eq!(PromptDraft::of(None), built_in, "a fleet that saved nothing uses it too");
+        let own = PromptDraft::of(Some(&with(Some("Be kind."))));
+        assert_eq!((own.built_in, own.value().as_deref()), (false, Some("Be kind.")));
+        assert_eq!(PromptDraft { built_in: false, text: "  \n".into() }.value().as_deref(), Some(""), "an empty text is sent: it means no global prompt");
     }
 
     #[test]

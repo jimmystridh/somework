@@ -30,6 +30,10 @@ _Avoid_: config, settings, patch
 The operators' console for the fleet (the former fleet dashboard): it lists the agents, shows each one's metrics, jobs and history, and is where an operator edits an agent's setup override and the MCP catalog. It has its own database; the domain does not store any of it.
 _Avoid_: dashboard, admin UI (the domain's own UI is a separate thing)
 
+**Global prompt**:
+The text added to every agent's prompt after its role's built-in prompt and before its operator instructions, telling it what holds for all agents alike (initially: ask the other agents for help, and how). Administrators edit it with the *Fleet limits*; until they do, agents use a built-in text. Each agent's *Setup override* can switch it off for that agent alone.
+_Avoid_: system prompt (the role's built-in prompt is that), operator instructions (those belong to one agent)
+
 **Fleet limits**:
 The one set of budget limits (per-run caps, daily token limit, raise ceiling) that applies to every agent alike. Administrators edit it in Operations and it is sent to all agents; an agent falls back to its own environment values until it has received one. It is not part of any *Setup override*.
 _Avoid_: budget (a job's own budget is a different thing), quota

@@ -48,6 +48,7 @@ pub fn canonical(form: &SetupForm, defaults: Option<&RoleDefaults>) -> SetupForm
     let approval_patterns = form.approval_patterns.as_ref().map(|list| list.iter().map(|item| ApprovalPatternSetting { pattern: item.pattern.clone(), reason: item.reason.trim().to_string() }).collect::<Vec<_>>());
     SetupForm {
         instructions: form.instructions.as_deref().filter(|text| !text.trim().is_empty()).map(|text| text.trim_end().to_string()),
+        disable_global_prompt: form.disable_global_prompt,
         model: form.model.clone(),
         approval_patterns: approval_patterns.filter(|list| defaults.is_none_or(|defaults| !same_patterns(list, &defaults.approval_patterns))),
         repository_skills: form.repository_skills.as_ref().map(|names| sorted(names)).filter(|names| defaults.is_none_or(|defaults| !same_names(names, &defaults.repository_skills))),
@@ -67,6 +68,7 @@ pub fn changed_parts(saved: &SetupForm, draft: &SetupForm, defaults: Option<&Rol
     let mut parts = Vec::new();
     for (name, changed) in [
         ("operator instructions", saved.instructions != draft.instructions),
+        ("global prompt", saved.disable_global_prompt != draft.disable_global_prompt),
         ("model", saved.model != draft.model),
         ("approval patterns", saved.approval_patterns != draft.approval_patterns),
         ("repository skills", saved.repository_skills != draft.repository_skills),

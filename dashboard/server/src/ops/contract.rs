@@ -446,6 +446,7 @@ pub fn check_form(form: &SetupForm, known: &Known) -> Check<SetupForm> {
         }
         out.instructions = Some(text.trim_end().to_string());
     }
+    out.disable_global_prompt = form.disable_global_prompt;
     if let Some(model) = &form.model {
         let (provider, id) = (model.provider.trim(), model.model_id.trim());
         if provider.is_empty() || js_len(provider) > 80 || id.is_empty() || js_len(id) > 200 {
@@ -538,6 +539,7 @@ pub fn compose_override(revision: &SetupRevision, resolved: &Resolved) -> Check<
         saved_by: revision.author.clone(),
         saved_at: revision.created_at.clone(),
         instructions: form.instructions.clone(),
+        disable_global_prompt: form.disable_global_prompt,
         model: form.model.clone(),
         approval_patterns: form.approval_patterns.clone(),
         skills: SetupSkills { repository: form.repository_skills.clone(), library, overlays: form.overlays.clone() },
@@ -597,6 +599,14 @@ pub fn check_limits(values: &LimitsValues) -> Check<()> {
             return invalid(&format!("values.{field}"), format!("{field} must be a positive integer"));
         }
     }
+    if let Some(text) = &values.global_prompt {
+        if js_len(text) > MAX_GLOBAL_PROMPT_CHARS {
+            return invalid("values.globalPrompt", format!("the global prompt is longer than {MAX_GLOBAL_PROMPT_CHARS} characters"));
+        }
+        if contains_known_secret(text) {
+            return invalid("values.globalPrompt", "the global prompt looks like it holds a token or key; it is sent to every agent and shown in Operations");
+        }
+    }
     Ok(())
 }
 
@@ -611,6 +621,7 @@ pub fn compose_limits(revision: &LimitsRevision) -> FleetLimits {
         max_minutes_cap: revision.values.max_minutes_cap,
         daily_token_limit: revision.values.daily_token_limit,
         budget_raise_ceiling: revision.values.budget_raise_ceiling,
+        global_prompt: revision.values.global_prompt.as_deref().map(|text| text.trim().to_string()),
     }
 }
 
@@ -883,6 +894,44 @@ mod tests {
     }
 
     #[test]
+    fn the_global_prompt_travels_in_the_fleet_limits_and_its_switch_in_the_override() {
+        let limits = |global_prompt: Option<&str>| LimitsRevision {
+            revision: 2,
+            values: LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: global_prompt.map(str::to_string) },
+            note: String::new(),
+            author: "admin@example.com".into(),
+            created_at: "2026-10-12T10:00:00.000Z".into(),
+        };
+        assert!(serde_json::to_value(compose_limits(&limits(None))).unwrap().get("globalPrompt").is_none(), "no text sent keeps the agents' own default");
+        assert_eq!(serde_json::to_value(compose_limits(&limits(Some("  Be kind.\n")))).unwrap()["globalPrompt"], "Be kind.");
+        assert_eq!(serde_json::to_value(compose_limits(&limits(Some("")))).unwrap()["globalPrompt"], "", "an empty text is sent: it means none");
+
+        let empty = Resolved { library: &BTreeMap::new(), catalog: &BTreeMap::new() };
+        let off = serde_json::to_value(compose_override(&revision(SetupForm { disable_global_prompt: true, ..Default::default() }), &empty).unwrap()).unwrap();
+        assert_eq!(off["disableGlobalPrompt"], true);
+        assert!(serde_json::to_value(compose_override(&revision(SetupForm::default()), &empty).unwrap()).unwrap().get("disableGlobalPrompt").is_none());
+        assert!(check_form(&SetupForm { disable_global_prompt: true, ..Default::default() }, &known()).unwrap().disable_global_prompt, "the switch survives the canonical form");
+    }
+
+    #[test]
+    fn a_global_prompt_is_checked_like_instructions() {
+        let with = |text: String| check_limits(&LimitsValues { max_tokens_cap: 1, max_minutes_cap: 1, daily_token_limit: 1, budget_raise_ceiling: 1, global_prompt: Some(text) });
+        assert!(with("x".repeat(MAX_GLOBAL_PROMPT_CHARS)).is_ok());
+        assert_eq!(with("x".repeat(MAX_GLOBAL_PROMPT_CHARS + 1)).unwrap_err().field.as_deref(), Some("values.globalPrompt"));
+        assert!(with("use ghp_abcdefghijklmnopqrstuvwxyz0123456789 please".into()).unwrap_err().message.contains("token or key"));
+        assert!(with(String::new()).is_ok(), "an empty text switches the global prompt off for everyone");
+    }
+
+    #[test]
+    fn the_default_global_prompt_is_the_one_the_agents_carry() {
+        let kit = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/agent-kit/src/setup/global-prompt.ts")).expect("the kit's file");
+        for line in DEFAULT_GLOBAL_PROMPT.lines() {
+            assert!(kit.contains(&format!("\"{line}\"")), "the kit's default lacks: {line}");
+        }
+        assert_eq!(kit.matches("\n\t\"").count(), DEFAULT_GLOBAL_PROMPT.lines().count(), "the kit's default has the same number of lines");
+    }
+
+    #[test]
     fn a_reset_is_an_empty_document() {
         let document = compose_override(&revision(SetupForm::default()), &Resolved { library: &BTreeMap::new(), catalog: &BTreeMap::new() }).unwrap();
         let json = serde_json::to_value(&document).unwrap();
@@ -907,10 +956,10 @@ mod tests {
 
     #[test]
     fn limits_are_positive_integers_an_agent_can_read() {
-        let ok = LimitsValues { max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4 };
+        let ok = LimitsValues { max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4, global_prompt: None };
         assert!(check_limits(&ok).is_ok());
-        assert_eq!(check_limits(&LimitsValues { max_minutes_cap: 0, ..ok }).unwrap_err().field.as_deref(), Some("values.maxMinutesCap"));
-        assert!(check_limits(&LimitsValues { daily_token_limit: JS_INTEGER_MAX + 1, ..ok }).is_err());
+        assert_eq!(check_limits(&LimitsValues { max_minutes_cap: 0, ..ok.clone() }).unwrap_err().field.as_deref(), Some("values.maxMinutesCap"));
+        assert!(check_limits(&LimitsValues { daily_token_limit: JS_INTEGER_MAX + 1, ..ok.clone() }).is_err());
         let document = compose_limits(&LimitsRevision { revision: 2, values: ok, note: String::new(), author: "a@b".into(), created_at: "t".into() });
         assert_eq!(serde_json::to_value(&document).unwrap(), serde_json::json!({"schema": 1, "kind": "limits", "revision": 2, "savedBy": "a@b", "savedAt": "t", "maxTokensCap": 1, "maxMinutesCap": 2, "dailyTokenLimit": 3, "budgetRaiseCeiling": 4}));
     }

@@ -187,6 +187,7 @@ pub mod tests {
             saved_by: "a@example.com".into(),
             saved_at: "2026-10-10T10:00:00.000Z".into(),
             instructions: Some("Be brief".into()),
+            disable_global_prompt: false,
             model: None,
             approval_patterns: None,
             skills: SetupSkills::default(),
@@ -221,7 +222,7 @@ pub mod tests {
     #[tokio::test]
     async fn limits_go_the_same_way_with_their_own_kind_and_key() {
         let (base, domain) = fake_domain().await;
-        let limits = FleetLimits { schema: 1, kind: "limits".into(), revision: 2, saved_by: "a@b".into(), saved_at: "t".into(), max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4 };
+        let limits = FleetLimits { schema: 1, kind: "limits".into(), revision: 2, saved_by: "a@b".into(), saved_at: "t".into(), max_tokens_cap: 1, max_minutes_cap: 2, daily_token_limit: 3, budget_raise_ceiling: 4, global_prompt: None };
         deliverer(&base).send("agent/qa", Document::Limits(&limits), None).await.unwrap();
         let messages = domain.messages.lock().unwrap();
         assert_eq!(messages[0].1.as_deref(), Some("limits:agent/qa:2"));

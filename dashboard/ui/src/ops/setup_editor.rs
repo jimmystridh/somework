@@ -232,6 +232,10 @@ pub fn SetupEditor(detail: OpsAgentDetail, on_saved: EventHandler<()>) -> Elemen
                     Some(text) => rsx! { pre { class: "prompt", tabindex: "0", "aria-label": "Built-in prompt, read only", "{text}" } },
                     None => rsx! { p { class: "hint", "The agent does not show its prompt text (the hash identifies it)." } },
                 }
+                label { class: "check",
+                    input { r#type: "checkbox", checked: !current_form.disable_global_prompt, onchange: move |event: Event<FormData>| draft.write().disable_global_prompt = !event.checked() }
+                    span { b { "Include the fleet's global prompt" }, small { class: "wrap", " Added after the built-in prompt and before your instructions; the text is edited under Fleet limits. Untick it for this agent only." } }
+                }
                 label { r#for: "instructions", "Your instructions, appended after the built-in prompt" }
                 textarea {
                     id: "instructions", class: "mono", rows: "10", value: "{instructions_text}", disabled: !editable, spellcheck: false,

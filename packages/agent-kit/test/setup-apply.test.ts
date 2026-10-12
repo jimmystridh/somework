@@ -370,3 +370,47 @@ describe("the fleet limits", () => {
 		assert.equal(ledger.dailyLimit, 5300, "3000 and what was raised today (800 and 1500)");
 	});
 });
+
+describe("the global prompt", () => {
+	const limits = (revision: number, over: Record<string, unknown> = {}) => parseLimits({ schema: 1, kind: "limits", revision, savedBy: "admin", savedAt: "2026-10-12T10:00:00Z", maxTokensCap: 2000, maxMinutesCap: 2, dailyTokenLimit: 500, budgetRaiseCeiling: 900, ...over });
+	const send = (setup: Setup, document: ReturnType<typeof limits>) => setup.applyLimits(document, sha256Hex(JSON.stringify(document)));
+	const effective = (setup: Setup) => setup.report({ model: MODELS[0]! }).effective.globalPrompt;
+
+	it("tells every agent about the others until the fleet sends a text of its own", () => {
+		const { setup } = makeSetup();
+		assert.equal(effective(setup).source, "default");
+		const addendum = setup.instructionsAddendum()!;
+		assert.match(addendum, /^Instructions for every agent of this fleet\./);
+		for (const tool of ["agents_list", "agents_search", "message_send"]) assert.ok(addendum.includes(tool), tool);
+		assert.ok(!addendum.includes("Operator instructions"), "no operator text, no operator block");
+	});
+
+	it("puts the fleet's text before the agent's operator instructions, and the fleet's text replaces the default", async () => {
+		const { setup, apply } = makeSetup();
+		await send(setup, limits(1, { globalPrompt: "Always answer in Swedish." }));
+		await apply(1, { instructions: "Only review frontend code." });
+		const addendum = setup.instructionsAddendum()!;
+		assert.ok(addendum.indexOf("Always answer in Swedish.") < addendum.indexOf("Only review frontend code."));
+		assert.ok(!addendum.includes("agents_list"), "the default is gone");
+		assert.deepEqual([effective(setup).source, effective(setup).text, effective(setup).characters], ["fleet", "Always answer in Swedish.", 25]);
+	});
+
+	it("is switched off for one agent by its override, and for all by an empty fleet text", async () => {
+		const { setup, apply } = makeSetup();
+		await apply(1, { instructions: "Only review frontend code.", disableGlobalPrompt: true });
+		assert.equal(effective(setup).source, "off");
+		assert.ok(!setup.instructionsAddendum()!.includes("Instructions for every agent"));
+		assert.match(setup.instructionsAddendum()!, /Only review frontend code/);
+
+		const other = makeSetup();
+		await send(other.setup, limits(1, { globalPrompt: "  " }));
+		assert.equal(effective(other.setup).source, "off");
+		assert.equal(other.setup.instructionsAddendum(), undefined);
+	});
+
+	it("is checked when it arrives", () => {
+		assert.throws(() => limits(1, { globalPrompt: "x".repeat(16_001) }), /global prompt is longer/);
+		assert.throws(() => parseOverride(document(1, { disableGlobalPrompt: "yes" }), AGENT), /true or false/);
+		assert.equal(limits(1).globalPrompt, undefined, "a document without it keeps the default");
+	});
+});

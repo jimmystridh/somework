@@ -2,7 +2,7 @@
 //! again and has the last word (it also compiles the approval patterns and looks for secrets); its messages are shown next to the field.
 
 use fleet_shared::operations::{
-    ApprovalPatternSetting, LimitsValues, MAX_APPROVAL_PATTERNS, MAX_INSTRUCTIONS_CHARS, MAX_NOTE_CHARS, MAX_OVERLAY_BYTES, MAX_SKILL_BYTES, McpDownload, McpEntry, McpTransport, SetupForm,
+    ApprovalPatternSetting, LimitsValues, MAX_APPROVAL_PATTERNS, MAX_GLOBAL_PROMPT_CHARS, MAX_INSTRUCTIONS_CHARS, MAX_NOTE_CHARS, MAX_OVERLAY_BYTES, MAX_SKILL_BYTES, McpDownload, McpEntry, McpTransport, SetupForm,
 };
 use std::collections::BTreeSet;
 
@@ -54,6 +54,10 @@ pub fn thousands(value: usize) -> String {
 
 pub fn instructions_counter(text: &str) -> Counter {
     Counter { used: js_len(text), max: MAX_INSTRUCTIONS_CHARS }
+}
+
+pub fn global_prompt_counter(text: &str) -> Counter {
+    Counter { used: js_len(text), max: MAX_GLOBAL_PROMPT_CHARS }
 }
 
 pub fn note_counter(text: &str) -> Counter {
@@ -269,15 +273,18 @@ pub fn parse_positive(text: &str) -> Result<u64, String> {
 }
 
 /// The four fleet limits as typed; the problems are by field name as the server names them (`values.maxTokensCap`).
-pub fn limits_from_text(texts: [&str; 4]) -> Result<LimitsValues, Vec<Problem>> {
+pub fn limits_from_text(texts: [&str; 4], global_prompt: Option<String>) -> Result<LimitsValues, Vec<Problem>> {
     let names = ["values.maxTokensCap", "values.maxMinutesCap", "values.dailyTokenLimit", "values.budgetRaiseCeiling"];
     let parsed: Vec<Result<u64, String>> = texts.iter().map(|text| parse_positive(text)).collect();
-    let problems: Vec<Problem> = parsed.iter().zip(names).filter_map(|(result, name)| result.as_ref().err().map(|message| problem(name, message.clone()))).collect();
+    let mut problems: Vec<Problem> = parsed.iter().zip(names).filter_map(|(result, name)| result.as_ref().err().map(|message| problem(name, message.clone()))).collect();
+    if global_prompt.as_deref().is_some_and(|text| text.encode_utf16().count() > MAX_GLOBAL_PROMPT_CHARS) {
+        problems.push(problem("values.globalPrompt", format!("the global prompt is longer than {MAX_GLOBAL_PROMPT_CHARS} characters")));
+    }
     if !problems.is_empty() {
         return Err(problems);
     }
     let value = |index: usize| *parsed[index].as_ref().expect("checked above");
-    Ok(LimitsValues { max_tokens_cap: value(0), max_minutes_cap: value(1), daily_token_limit: value(2), budget_raise_ceiling: value(3) })
+    Ok(LimitsValues { max_tokens_cap: value(0), max_minutes_cap: value(1), daily_token_limit: value(2), budget_raise_ceiling: value(3), global_prompt })
 }
 
 /// The message for a field (or anything under it) out of a list of problems.
@@ -439,10 +446,13 @@ mod tests {
     fn limits_are_positive_whole_numbers() {
         assert_eq!(parse_positive(" 1,000 "), Ok(1000));
         assert!(parse_positive("0").is_err() && parse_positive("-3").is_err() && parse_positive("1.5").is_err() && parse_positive("").is_err());
-        let values = limits_from_text(["100", "30", "5000000", "200000"]).unwrap();
+        let values = limits_from_text(["100", "30", "5000000", "200000"], None).unwrap();
         assert_eq!((values.max_tokens_cap, values.max_minutes_cap, values.daily_token_limit, values.budget_raise_ceiling), (100, 30, 5_000_000, 200_000));
-        let problems = limits_from_text(["100", "x", "5", "0"]).unwrap_err();
+        let problems = limits_from_text(["100", "x", "5", "0"], None).unwrap_err();
         assert_eq!(fields(&problems), ["values.maxMinutesCap", "values.budgetRaiseCeiling"]);
+        let long = limits_from_text(["1", "1", "1", "1"], Some("x".repeat(MAX_GLOBAL_PROMPT_CHARS + 1))).unwrap_err();
+        assert_eq!(fields(&long), ["values.globalPrompt"]);
+        assert!(limits_from_text(["1", "1", "1", "1"], Some(String::new())).is_ok(), "an empty global prompt is allowed: it means none");
     }
 
     #[test]

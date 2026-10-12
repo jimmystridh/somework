@@ -81,6 +81,8 @@ export interface SetupOverride {
 	savedAt: string;
 	/** Appended to the role's built-in prompt. */
 	instructions?: string;
+	/** True keeps the fleet's global prompt out of this agent's prompt. */
+	disableGlobalPrompt?: boolean;
 	model?: { provider: string; modelId: string };
 	/** When present, replaces the role's own list of commands that need approval. */
 	approvalPatterns?: ApprovalPatternSetting[];
@@ -104,6 +106,8 @@ export interface FleetLimits {
 	maxMinutesCap: number;
 	dailyTokenLimit: number;
 	budgetRaiseCeiling: number;
+	/** The text every agent adds after its role's prompt; absent means the built-in default, empty means none. */
+	globalPrompt?: string;
 }
 
 /** What an agent reports of its applied setup. */
@@ -128,6 +132,8 @@ export interface SetupReport extends SetupStatus {
 	effective: {
 		instructions?: { sha256: string; characters: number; text: string };
 		model: { provider: string; modelId: string };
+		/** The global prompt in effect: from the fleet, the built-in default, or switched off for this agent or for the fleet. */
+		globalPrompt: { source: "fleet" | "default" | "off"; sha256?: string; characters?: number; text?: string };
 		approvalPatterns: ApprovalPatternSetting[];
 		repositorySkills: string[];
 		librarySkills: { name: string; version: number }[];
@@ -137,6 +143,7 @@ export interface SetupReport extends SetupStatus {
 }
 
 export const MAX_INSTRUCTIONS_CHARS = 16_000;
+export const MAX_GLOBAL_PROMPT_CHARS = 16_000;
 export const MAX_SKILL_BYTES = 64 * 1024;
 export const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 
@@ -245,6 +252,10 @@ export function parseOverride(raw: unknown, agent: string): SetupOverride {
 		mcp: [],
 	};
 	if (raw.instructions !== undefined && raw.instructions !== null) override.instructions = text(raw.instructions, MAX_INSTRUCTIONS_CHARS) ?? fail(`the instructions are longer than ${MAX_INSTRUCTIONS_CHARS} characters`);
+	if (raw.disableGlobalPrompt !== undefined && raw.disableGlobalPrompt !== null) {
+		if (typeof raw.disableGlobalPrompt !== "boolean") fail("disableGlobalPrompt must be true or false");
+		override.disableGlobalPrompt = raw.disableGlobalPrompt;
+	}
 	if (raw.model !== undefined && raw.model !== null) {
 		const model = raw.model;
 		if (!isRecord(model) || !text(model.provider, 80) || !text(model.modelId, 200)) fail("the model needs a provider and a model id");
@@ -303,6 +314,7 @@ export function parseLimits(raw: unknown): FleetLimits {
 		dailyTokenLimit: positive(raw.dailyTokenLimit) ?? fail("dailyTokenLimit must be a positive integer"),
 		budgetRaiseCeiling: positive(raw.budgetRaiseCeiling) ?? fail("budgetRaiseCeiling must be a positive integer"),
 	};
+	if (raw.globalPrompt !== undefined && raw.globalPrompt !== null) limits.globalPrompt = text(raw.globalPrompt, MAX_GLOBAL_PROMPT_CHARS) ?? fail(`the global prompt is longer than ${MAX_GLOBAL_PROMPT_CHARS} characters`);
 	return limits;
 }
 

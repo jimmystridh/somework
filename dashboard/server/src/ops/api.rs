@@ -730,7 +730,7 @@ mod tests {
         send(&app, "PUT", "/agents/pi-agent/setup", Some(json!({"baseRevision": 0, "form": {"instructions": "keep it short", "model": {"provider": "p", "modelId": "m"}}})), WRITE).await;
         let (status, reset, _) = send(&app, "DELETE", "/agents/pi-agent/setup", None, WRITE).await;
         assert_eq!((status, reset["revision"]["revision"].as_u64(), reset["revision"]["note"].as_str()), (S::OK, Some(2), Some("reset")));
-        assert_eq!(reset["revision"]["form"], json!({"instructions": null, "model": null, "approvalPatterns": null, "repositorySkills": null, "librarySkills": [], "overlays": {}, "mcp": []}), "a reset is the empty form");
+        assert_eq!(reset["revision"]["form"], json!({"instructions": null, "model": null, "disableGlobalPrompt": false, "approvalPatterns": null, "repositorySkills": null, "librarySkills": [], "overlays": {}, "mcp": []}), "a reset is the empty form");
         let (status, restored, _) = send(&app, "POST", "/agents/pi-agent/revisions/1/restore", None, WRITE).await;
         assert_eq!((status, restored["revision"]["revision"].as_u64(), restored["revision"]["note"].as_str()), (S::OK, Some(3), Some("restored revision 1")));
         assert_eq!(restored["revision"]["form"]["instructions"], "keep it short");
