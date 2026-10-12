@@ -97,11 +97,15 @@ use tokio::sync::{Notify, RwLock};
 use tower::ServiceExt;
 
 pub fn ops_with(store: &Store, auth: AuthMode, deliverer: Option<Arc<Deliverer>>, targets: Vec<AgentTarget>) -> Arc<Ops> {
+    ops_with_services(store, auth, deliverer, targets, Vec::new())
+}
+
+pub fn ops_with_services(store: &Store, auth: AuthMode, deliverer: Option<Arc<Deliverer>>, targets: Vec<AgentTarget>, service_tokens: Vec<super::service::ServiceToken>) -> Arc<Ops> {
     let observations = Arc::new(Observations::default());
     let nudge = Arc::new(Notify::new());
     let sending_configured = deliverer.is_some();
     let reconciler = Arc::new(Reconciler::new(store.clone(), deliverer, targets.clone(), crate::events::agent_http_client().unwrap(), observations.clone(), nudge.clone()));
-    Arc::new(Ops { store: store.clone(), auth, cookies: SignedCookies::new(b"test key test key test key test key"), observations, reconciler, sample: Arc::new(RwLock::new(Default::default())), targets, nudge, sending_configured })
+    Arc::new(Ops { store: store.clone(), auth, service_tokens, cookies: SignedCookies::new(b"test key test key test key test key"), observations, reconciler, sample: Arc::new(RwLock::new(Default::default())), targets, nudge, sending_configured })
 }
 
 pub fn stub_ops(store: &Store, role: Role, deliverer: Option<Arc<Deliverer>>, targets: Vec<AgentTarget>) -> Arc<Ops> {

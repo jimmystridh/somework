@@ -39,6 +39,10 @@ All under `/fleet/api/ops`, JSON, behind sign-in. Roles: `viewer` reads, `editor
 
 Postgres never holds agent secrets or job content. Free text is shown as text, never as markup. MCP entries are checked with the same rules as the agent contract before they are stored.
 
+## Service tokens
+
+A service of the fleet can call the same routes with a bearer token (`OPERATIONS_SERVICE_TOKENS_FILE`, digests only, role viewer or editor). It is the editor role in full, but the only caller today, the Manager, uses it for one thing: saving an agent's operator instructions after the owner confirmed the exact text in Telegram. Every such revision is authored by the service name (`agent/manager`) and is in the audit log; `GET /me` shows `auth: "service"`.
+
 ## Manager
 
 The manager is not a kit agent. It has no `/profile` of the kit's shape; it serves its applied `setup` the same way on its own health endpoint so that Operations can poll it.

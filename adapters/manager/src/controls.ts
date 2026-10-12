@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { DomainApi, RuleSummary } from "./domain.ts";
 import { call, type CallOptions, type CallResult } from "./http.ts";
 import { PolicyError, type ApprovalGrants } from "./policy.ts";
-import { clip, defang } from "./redact.ts";
+import { clip, defang, scrub } from "./redact.ts";
 import type { HostControls } from "./host.ts";
 import type { ManagerState, SaveState } from "./state.ts";
 
@@ -15,6 +15,8 @@ export interface ControlsConfig {
 	/** Health endpoint of each agent that runs handlers, by agent id. */
 	agentHealth: Record<string, string>;
 	agentCaFile?: string;
+	/** Operations (ADR 0004): its base URL, the file with the Manager's service token and the CA that verifies its TLS. Without it the Manager cannot read or change an agent's instructions. */
+	operations?: { url: string; tokenFile: string; caFile?: string };
 }
 
 export type ControlAction =
@@ -22,6 +24,8 @@ export type ControlAction =
 	| { action: "pause_source" | "resume_source"; source: string }
 	| { action: "kill_handler" | "unkill_handler"; agent: string; handler: string; reason?: string }
 	| { action: "raise_budget"; agent: string; pool: BudgetPool; tokens: number; reason?: string }
+	/** The whole operator addendum of an agent's prompt; an empty text clears it. */
+	| { action: "set_instructions"; agent: string; instructions: string; reason?: string }
 	/** Made by the approval gate only (`parseAction` never returns it): the owner lets one exact tool call of the model go ahead. */
 	| { action: "allow_call"; key: string; summary: string };
 
@@ -29,6 +33,9 @@ export const BUDGET_POOLS = ["tasks", "events", "chat"] as const;
 export type BudgetPool = (typeof BUDGET_POOLS)[number];
 /** The most one request can add; the agent has its own daily ceiling on top of this. */
 export const MAX_BUDGET_RAISE = 10_000_000;
+/** Operations refuses a longer addendum. */
+export const MAX_INSTRUCTIONS_CHARS = 16_000;
+const SHOWN_INSTRUCTIONS_CHARS = 1500;
 
 const RULE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const SOURCE = /^[a-z][a-z0-9-]{0,30}$/;
@@ -66,10 +73,20 @@ export function parseAction(raw: Record<string, unknown>): ControlAction {
 			const reason = text(raw.reason) ? clip(defang(text(raw.reason)), 200) : undefined;
 			return { action, agent: text(raw.agent), pool, tokens, ...(reason ? { reason } : {}) };
 		}
+		case "set_instructions": {
+			if (!AGENT.test(text(raw.agent))) return bad("agent must be an agent id such as agent/reviewer");
+			if (typeof raw.instructions !== "string") return bad("instructions must be the complete new text of the operator instructions (an empty text clears them)");
+			if (raw.instructions.length > MAX_INSTRUCTIONS_CHARS) return bad(`instructions can be at most ${MAX_INSTRUCTIONS_CHARS} characters`);
+			const reason = text(raw.reason) ? clip(defang(text(raw.reason)), 200) : undefined;
+			return { action, agent: text(raw.agent), instructions: raw.instructions.trim(), ...(reason ? { reason } : {}) };
+		}
 		default:
-			return bad("action must be pause_rule, resume_rule, pause_source, resume_source, kill_handler, unkill_handler or raise_budget");
+			return bad("action must be pause_rule, resume_rule, pause_source, resume_source, kill_handler, unkill_handler, raise_budget or set_instructions");
 	}
 }
+
+/** Text the model wrote, shown to the owner whole and in its own lines, but with secrets hidden and no `/word` that Telegram would make tappable. */
+const quoted = (value: string, max: number): string => clip(scrub(value).replace(/(^|[\s([{"'])\/(?=[A-Za-z0-9_])/g, "$1\u2215"), max);
 
 export const describeAction = (a: ControlAction): string => {
 	switch (a.action) {
@@ -79,6 +96,7 @@ export const describeAction = (a: ControlAction): string => {
 		case "resume_source": return `resume event source ${a.source}`;
 		case "kill_handler": return `switch off ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
 		case "raise_budget": return `give ${a.agent} ${a.tokens} more ${a.pool} tokens for today${a.reason ? ` (${a.reason})` : ""}`;
+		case "set_instructions": return a.instructions === "" ? `clear the operator instructions of ${a.agent}${a.reason ? ` (${a.reason})` : ""}` : `set the operator instructions of ${a.agent} to the following ${a.instructions.length} characters${a.reason ? ` (${a.reason})` : ""}:\n${quoted(a.instructions, SHOWN_INSTRUCTIONS_CHARS)}`;
 		case "unkill_handler": return `switch on ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
 		case "allow_call": return `let one tool call go ahead: ${a.summary}`;
 	}
@@ -189,7 +207,7 @@ export class Controls {
 
 	// ---- the hub ---------------------------------------------------------------------------------------------------
 	/** One request to a service this one does not own: a connection that fails is a 502 with the service named, never an unexplained 500. */
-	async #reach(who: string, code: "hub_unavailable" | "agent_unavailable", url: string, options: Parameters<NonNullable<ControlsDeps["http"]>>[1]) {
+	async #reach(who: string, code: "hub_unavailable" | "agent_unavailable" | "operations_unavailable", url: string, options: Parameters<NonNullable<ControlsDeps["http"]>>[1]) {
 		try {
 			return await this.#http(url, options);
 		} catch (error) {
@@ -276,6 +294,64 @@ export class Controls {
 		if (reason) labels.budgetReason = reason;
 		await this.#deps.domain.sendMessage({ to: agent, text: `budget control: raise ${pool} by ${tokens} tokens for today`, labels });
 		return `Asked ${agent} to add ${tokens} tokens to its ${pool} pool for today. It confirms by message and the raise ends tomorrow; the pools are in somework_handlers.`;
+	}
+
+	// ---- Operations: an agent's instructions --------------------------------------------------------------------------
+	get operationsConfigured(): boolean {
+		return this.#deps.config.operations !== undefined;
+	}
+
+	async #operations(method: "GET" | "PUT", agent: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+		const operations = this.#deps.config.operations;
+		if (!operations) throw new PolicyError(503, "operations_not_configured", "Operations is not configured for the Manager (MANAGER_OPERATIONS_URL and MANAGER_OPERATIONS_TOKEN_FILE)");
+		const token = (await (this.#deps.readToken ?? ((file) => readFile(file, "utf8")))(operations.tokenFile)).trim();
+		const slug = agent.replace(/^agent\//, "");
+		const answer = await this.#reach("Operations", "operations_unavailable", `${operations.url.replace(/\/$/, "")}/fleet/api/ops/agents/${encodeURIComponent(slug)}${path}`, {
+			method,
+			headers: { authorization: `Bearer ${token}`, ...(method === "GET" ? {} : { "x-operations-request": "1" }) },
+			caFile: operations.caFile,
+			...(body === undefined ? {} : { body }),
+			maxBytes: 4_000_000,
+		});
+		let json: any;
+		try {
+			json = JSON.parse(answer.text);
+		} catch {
+			json = undefined;
+		}
+		if (answer.status === 401 || answer.status === 403) throw new PolicyError(502, "operations_refused", `Operations refused the Manager's token (${answer.status}); the service token needs the editor role`);
+		if (answer.status === 404) throw new PolicyError(404, "unknown_agent", `Operations does not know ${agent}`);
+		return { status: answer.status, json };
+	}
+
+	/** What the agent runs on now: the operator instructions Operations holds for it, the role's own prompt (read only) and whether the last save has reached it. */
+	async agentSetup(agent: string): Promise<unknown> {
+		const { status, json } = await this.#operations("GET", agent, "");
+		if (status !== 200 || !json) throw new PolicyError(502, "operations_unavailable", `Operations answered ${status}`);
+		const prompt: string | undefined = json.roleDefaults?.prompt ?? undefined;
+		return {
+			agent: json.agent?.id ?? agent,
+			savedRevision: json.agent?.savedRevision ?? 0,
+			appliedRevision: json.agent?.appliedRevision ?? null,
+			pending: json.agent?.pending ?? false,
+			...(json.agent?.rejected ? { rejected: json.agent.rejected } : {}),
+			instructions: json.form?.instructions ?? "",
+			rolePrompt: prompt === undefined ? "(not reported by the agent)" : clip(prompt, 2500),
+			note: "instructions is the operator addendum appended to the role's built-in prompt, which cannot be edited. To change it, ask the owner with somework_control set_instructions and the complete new text.",
+		};
+	}
+
+	/** Saves the new addendum as one more revision from the current one, keeping skills, tool servers, model and approvals as they are. */
+	async setInstructions(agent: string, instructions: string, reason?: string): Promise<string> {
+		const { status: read, json: detail } = await this.#operations("GET", agent, "");
+		if (read !== 200 || !detail) throw new PolicyError(502, "operations_unavailable", `Operations answered ${read}`);
+		const note = clip(`by the Manager at the owner's request${reason ? `: ${reason}` : ""}`, 250);
+		const form = { ...(detail.form ?? {}), instructions: instructions === "" ? null : instructions };
+		const { status, json } = await this.#operations("PUT", agent, "/setup", { baseRevision: detail.agent?.savedRevision ?? 0, form, note });
+		if (status === 409) throw new PolicyError(409, "revision_conflict", `${agent}'s setup was saved by someone else first (revision ${json?.current?.revision ?? "?"}); read it again before asking`);
+		if (status === 400 || status === 422) throw new PolicyError(400, "invalid_setup", clip(defang(String(json?.message ?? "Operations refused the instructions")), 200));
+		if (status !== 200) throw new PolicyError(502, "operations_unavailable", `Operations answered ${status}`);
+		return `Saved revision ${json?.revision?.revision ?? "?"} of ${agent}'s operator instructions (${instructions === "" ? "cleared" : `${instructions.length} characters`}). Operations sends it to the agent now; the agent applies it from its next model run and confirms.`;
 	}
 
 	allowCall(key: string): string {
@@ -418,6 +494,7 @@ export class Controls {
 			case "kill_handler": return this.setHandler(action.agent, action.handler, true, action.reason);
 			case "unkill_handler": return this.setHandler(action.agent, action.handler, false);
 			case "raise_budget": return this.raiseBudget(action.agent, action.pool, action.tokens, action.reason);
+			case "set_instructions": return this.setInstructions(action.agent, action.instructions, action.reason);
 			case "allow_call": return this.allowCall(action.key);
 		}
 	}

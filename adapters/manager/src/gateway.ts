@@ -77,6 +77,7 @@ export function createGateway(options: GatewayOptions): Server {
 		}
 		if (method === "GET" && path === "/v1/control/rules") return service.rules();
 		if (method === "GET" && path === "/v1/control/sources") return service.sources();
+		if (method === "GET" && path === "/v1/setup") return service.setup(url.searchParams.get("agent") ?? "");
 		if (method === "GET" && path === "/v1/control/handlers") return service.handlers(url.searchParams.get("agent") ?? "");
 		if (method === "POST" && path === "/v1/control/request") return service.controlRequest(await readJson(request));
 		if (method === "POST" && path === "/v1/approval/check") return service.checkCall(await readJson(request));

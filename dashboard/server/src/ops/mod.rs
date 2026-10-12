@@ -9,6 +9,7 @@ pub mod diff;
 pub mod keygen;
 pub mod oidc;
 pub mod reconcile;
+pub mod service;
 pub mod session;
 pub mod store;
 #[cfg(test)]
@@ -32,6 +33,10 @@ use tokio::sync::{Notify, RwLock};
 /// The header every write must carry. A cross-site form or fetch cannot add it without a CORS preflight, which this server never allows.
 pub const WRITE_HEADER: &str = "x-operations-request";
 
+/// How a service of the fleet identifies itself instead of signing in (`OPERATIONS_SERVICE_TOKENS_FILE`). `Authorization` stays with the dashboard's
+/// own gateway, so this travels in a header of its own; the gateway lets such a request through to `/fleet/api/ops` only, where it is checked.
+pub const SERVICE_TOKEN_HEADER: &str = "x-operations-service-token";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StubUser {
     pub email: String,
@@ -47,6 +52,8 @@ pub enum AuthMode {
 pub struct Ops {
     pub store: Store,
     pub auth: AuthMode,
+    /// Services that call with a bearer token instead of a session (`OPERATIONS_SERVICE_TOKENS_FILE`).
+    pub service_tokens: Vec<service::ServiceToken>,
     pub cookies: SignedCookies,
     pub observations: Arc<Observations>,
     pub reconciler: Arc<Reconciler>,
@@ -155,13 +162,17 @@ pub async fn start(inputs: StartInputs<'_>) -> Result<Option<Arc<Ops>>, String> 
             SignedCookies::random()
         }
     };
+    let service_tokens = match get("OPERATIONS_SERVICE_TOKENS_FILE") {
+        Some(file) => service::parse(&read_secret_file(&file)?)?,
+        None => Vec::new(),
+    };
     let deliverer = deliverer_from_env(inputs.secrets, &get).await?;
     let sending_configured = deliverer.is_some();
     let observations = Arc::new(Observations::default());
     let nudge = Arc::new(Notify::new());
     let reconciler = Arc::new(Reconciler::new(store.clone(), deliverer, inputs.targets.clone(), crate::events::agent_http_client()?, observations.clone(), nudge.clone()));
     tokio::spawn(reconciler.clone().run());
-    Ok(Some(Arc::new(Ops { store, auth, cookies, observations, reconciler, sample: inputs.sample, targets: inputs.targets, nudge, sending_configured })))
+    Ok(Some(Arc::new(Ops { store, auth, service_tokens, cookies, observations, reconciler, sample: inputs.sample, targets: inputs.targets, nudge, sending_configured })))
 }
 
 /// The `operations` service principal's key and the domain it signs for. `None` when there is no key or no `SOMEWORK_URL`.
@@ -228,6 +239,12 @@ impl Failure {
 impl Ops {
     /// Cookie, expiry and allow list. The role is read now, not from the cookie.
     pub async fn session(&self, headers: &HeaderMap) -> Result<Session, Failure> {
+        if let Some(presented) = headers.get(SERVICE_TOKEN_HEADER) {
+            return match presented.to_str().ok().and_then(|presented| service::find(&self.service_tokens, presented.trim())) {
+                Some(token) => Ok(Session { email: token.name.clone(), role: token.role, auth: "service" }),
+                None => Err(Failure::new(StatusCode::UNAUTHORIZED, "unauthorized", "the service token is not one of this console's")),
+            };
+        }
         match &self.auth {
             AuthMode::Stub(user) => Ok(Session { email: user.email.clone(), role: user.role, auth: "stub" }),
             AuthMode::Entra(_) => {

@@ -26,10 +26,12 @@ export interface Calls {
 	url: string;
 	method?: string;
 	authorization?: string;
+	headers?: Record<string, string>;
+	body?: unknown;
 }
 
 /** Everything wired as in main.ts, with fakes for Telegram, Pi, the domain, the hub and the agents' health endpoints. */
-export function build(options: { paired?: boolean; controls?: Partial<ControlsConfig>; events?: Partial<EventIntakeConfig>; http?: (url: string, method?: string) => { status: number; text: string }; now?: () => number } = {}) {
+export function build(options: { paired?: boolean; controls?: Partial<ControlsConfig>; events?: Partial<EventIntakeConfig>; http?: (url: string, method?: string, body?: unknown) => { status: number; text: string }; now?: () => number } = {}) {
 	const domain = new FakeDomain();
 	const telegram = recordingApi();
 	const notifications = new Notifications();
@@ -46,8 +48,8 @@ export function build(options: { paired?: boolean; controls?: Partial<ControlsCo
 		config: { agentHealth: {}, ...options.controls },
 		pendingQuestions: () => service.pendingRequests() + Object.keys(state.chatApprovals ?? {}).length,
 		http: async (url, opts) => {
-			httpCalls.push({ url, method: opts?.method, authorization: opts?.headers?.authorization });
-			return (options.http ?? (() => ({ status: 404, text: "" })))(url, opts?.method);
+			httpCalls.push({ url, method: opts?.method, authorization: opts?.headers?.authorization, headers: opts?.headers, body: opts?.body });
+			return (options.http ?? (() => ({ status: 404, text: "" })))(url, opts?.method, opts?.body);
 		},
 		readToken: async () => "hub-admin-token\n",
 	});

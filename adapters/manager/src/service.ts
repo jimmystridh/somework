@@ -135,13 +135,21 @@ export class ManagerService {
 		return this.#controls().sources();
 	}
 
+	/** An agent's operator instructions and the role's prompt, as Operations holds them. */
+	async setup(agent: string): Promise<unknown> {
+		if (!/^agent\/[a-z0-9][a-z0-9._-]{0,48}$/.test(agent)) throw new PolicyError(400, "invalid_request", "agent must be an agent id such as agent/reviewer");
+		return this.#controls().agentSetup(agent);
+	}
+
 	async handlers(agent: string): Promise<unknown> {
 		return this.#controls().handlers(agent);
 	}
 
 	/** A switch the model asked for: nothing changes until the owner confirms it in Telegram. */
 	async controlRequest(raw: Record<string, unknown>): Promise<unknown> {
-		const request = await this.#askOwner(parseAction(raw));
+		const action = parseAction(raw);
+		if (action.action === "set_instructions" && !this.#controls().operationsConfigured) throw new PolicyError(503, "operations_not_configured", "the Manager has no access to Operations, so it cannot change instructions (MANAGER_OPERATIONS_URL and MANAGER_OPERATIONS_TOKEN_FILE)");
+		const request = await this.#askOwner(action);
 		return { status: "awaiting_owner", requestId: request.id, note: "The owner has been asked on Telegram. Nothing changes until they confirm. Tell them what you asked for." };
 	}
 

@@ -101,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			hubCaFile: env.MANAGER_HUB_CA_FILE ?? env.MANAGER_CA_FILE,
 			agentHealth: parseAgentHealth(env.MANAGER_AGENT_HEALTH),
 			agentCaFile: env.MANAGER_AGENT_CA_FILE,
+			...(env.MANAGER_OPERATIONS_URL && env.MANAGER_OPERATIONS_TOKEN_FILE ? { operations: { url: env.MANAGER_OPERATIONS_URL, tokenFile: env.MANAGER_OPERATIONS_TOKEN_FILE, caFile: env.MANAGER_OPERATIONS_CA_FILE ?? env.MANAGER_CA_FILE } } : {}),
 		},
 	};
 }

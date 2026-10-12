@@ -13,6 +13,10 @@ Decisions that follow:
 - **Fleet limits** (per-run caps, daily token limit, raise ceiling) are one admin-edited set for every agent, sent separately from any override. An agent's environment values are the fallback.
 - **Library skills** appear as `library/<name>` and never replace a repository skill; the per-agent overlay moves from a file on the host into the override. The **MCP catalog** follows Pi's `mcpServers` shape with checksummed per-OS downloads and secret names only; the kit gets its own MCP client because Pi Durable has none.
 
+## Amendment (2026-10-12): the Manager edits instructions through Operations
+
+The owner wants the Manager to adjust other agents' prompts. Agents still accept an override only from `service:operations`; what changed is who may write to Operations. A service token (digest in `OPERATIONS_SERVICE_TOKENS_FILE`, role editor at most) lets the Manager save revisions through the same routes as a signed-in editor, so every change is a numbered revision authored `agent/manager`, shows in the audit log, and reaches the agent through the same delivery and acknowledgement. The Manager's tool covers the instructions only, asks the owner in Telegram with the full new text before saving, and cannot touch skills, tool servers, model or approvals. The token carries the editor role, so the Manager's host and the confirmation step are now part of the security boundary alongside the allow list.
+
 ## Considered options
 
 - **Keep full trust: any principal may send overrides.** Rejected: a compromised or misled agent could rewrite another agent's behaviour and tools.

@@ -318,6 +318,9 @@ async fn gateway(State(state): State<Arc<AppState>>, request: Request, next: Nex
         true
     } else if path == "/ingest/pi" {
         auth::authorized(bearer, &state.heartbeat_token)
+    } else if path.starts_with("/fleet/api/ops/") && request.headers().contains_key(ops::SERVICE_TOKEN_HEADER) {
+        // a service of the fleet (the Manager) calls Operations directly; the Operations routes check the token themselves and refuse an unknown one
+        true
     } else {
         state.preview || auth::authorized(bearer, &state.proxy_token)
     };
@@ -548,6 +551,25 @@ mod tests {
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "the heartbeat route keeps its small limit");
         let too_big = serde_json::json!({"baseVersion": 0, "content": "x".repeat(2 * 1024 * 1024)}).to_string();
         assert_eq!(call(&app, "PUT", "/fleet/api/ops/library/huge", &signed_in, too_big).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+        let _ = fs::remove_dir_all(&public).await;
+    }
+
+    #[tokio::test]
+    async fn a_service_token_reaches_only_the_operations_routes_without_the_proxy_token() {
+        let Some(pg) = ops::testing::postgres("a_service_token_reaches_only_the_operations_routes_without_the_proxy_token") else { return };
+        let store = pg.store("service_routing").await;
+        let public = public_dir().await;
+        let digest = ops::contract::sha256_hex(b"manager-token");
+        let tokens = ops::service::parse(&format!(r#"[{{"name": "agent/manager", "sha256": "{digest}", "role": "editor"}}]"#)).unwrap();
+        let stub = ops::AuthMode::Stub(ops::StubUser { email: "viewer@example.com".into(), role: fleet_shared::operations::Role::Viewer });
+        let app = application(test_state(&public), public.clone(), Some(ops::testing::ops_with_services(&store, stub, None, vec![], tokens)));
+
+        let (status, body) = call(&app, "GET", "/fleet/api/ops/me", &[("x-operations-service-token", "manager-token")], String::new()).await;
+        assert_eq!(status, StatusCode::OK, "no proxy token is needed with a service token");
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&body).unwrap()["email"], "agent/manager");
+        assert_eq!(call(&app, "GET", "/fleet/api/ops/me", &[("x-operations-service-token", "guess")], String::new()).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(call(&app, "GET", "/fleet/api/somework", &[("x-operations-service-token", "manager-token")], String::new()).await.0, StatusCode::FORBIDDEN, "the old routes still need the proxy token");
+        assert_eq!(call(&app, "GET", "/fleet/api/ops/me", &[], String::new()).await.0, StatusCode::FORBIDDEN);
         let _ = fs::remove_dir_all(&public).await;
     }
 

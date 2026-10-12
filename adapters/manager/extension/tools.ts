@@ -9,8 +9,10 @@ interface Env {
 }
 
 const MAX_RESULT_CHARS = 8000;
+/** An agent's operator instructions can be 16 000 characters; the model has to read all of them to change them. */
+const MAX_SETUP_CHARS = 24_000;
 
-async function callGateway(env: Env, fetchApi: typeof fetch, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<string> {
+async function callGateway(env: Env, fetchApi: typeof fetch, method: string, path: string, body?: unknown, signal?: AbortSignal, maxChars = MAX_RESULT_CHARS): Promise<string> {
 	if (!env.MANAGER_GATEWAY_URL || !env.MANAGER_GATEWAY_TOKEN) throw new Error("The SomeWork gateway is not configured in this container");
 	const response = await fetchApi(`${env.MANAGER_GATEWAY_URL}${path}`, {
 		method,
@@ -20,7 +22,7 @@ async function callGateway(env: Env, fetchApi: typeof fetch, method: string, pat
 	});
 	const text = await response.text();
 	// refusals are answers the model should read and act on (for example "waiting for the owner"), not crashes
-	return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}... [truncated]` : text;
+	return text.length > maxChars ? `${text.slice(0, maxChars)}... [truncated]` : text;
 }
 
 export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchApi: typeof fetch = fetch): void {
@@ -101,20 +103,33 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 	});
 
 	pi.registerTool({
+		name: "somework_setup",
+		label: "Read Agent Instructions",
+		description: "Read what an agent's prompt is made of: the operator instructions that Operations appends to the role's own prompt (instructions), the role's built-in prompt (rolePrompt, shortened; it cannot be edited), the saved and applied revision, and whether the last change has reached the agent. Read only. Always read this before proposing a change, because a change replaces the whole text.",
+		promptSnippet: "Read an agent's operator instructions before changing them",
+		promptGuidelines: [untrusted],
+		parameters: Type.Object({ agent: Type.String({ description: "agent id such as agent/reviewer" }) }),
+		async execute(_id: string, params: { agent: string }, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "GET", `/v1/setup?agent=${encodeURIComponent(params.agent)}`, undefined, signal, MAX_SETUP_CHARS));
+		},
+	});
+
+	pi.registerTool({
 		name: "somework_control",
-		label: "Ask To Pause, Switch Off Or Raise A Budget",
+		label: "Ask To Pause, Switch Off, Raise A Budget Or Change Instructions",
 		description:
-			"Ask the owner to pause or resume an event rule, pause or resume an event source, switch an agent's handler (or all) off or on, or give an agent more tokens for today (raise_budget with agent, pool and tokens; pool tasks is the daily limit for jobs, events and chat are their own pools; the raise ends tomorrow). This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. Creating rules is not possible.",
-		promptSnippet: "Ask the owner to pause or resume a rule or source, switch a handler off, or raise an agent's token budget for today",
+			"Ask the owner to pause or resume an event rule, pause or resume an event source, switch an agent's handler (or all) off or on, or give an agent more tokens for today (raise_budget with agent, pool and tokens; pool tasks is the daily limit for jobs, events and chat are their own pools; the raise ends tomorrow). This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. set_instructions replaces an agent's operator instructions (the part of its prompt that comes after the role's own, which cannot be edited) with the complete new text in instructions, an empty text clears it; read the current text with somework_setup first and keep what should stay. Creating rules is not possible.",
+		promptSnippet: "Ask the owner to pause or resume a rule or source, switch a handler off, raise an agent's token budget for today, or change an agent's operator instructions",
 		promptGuidelines: ["Tell the owner what you asked for and why, then stop; never say it has taken effect before they confirm."],
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("pause_rule"), Type.Literal("resume_rule"), Type.Literal("pause_source"), Type.Literal("resume_source"), Type.Literal("kill_handler"), Type.Literal("unkill_handler"), Type.Literal("raise_budget")]),
+			action: Type.Union([Type.Literal("pause_rule"), Type.Literal("resume_rule"), Type.Literal("pause_source"), Type.Literal("resume_source"), Type.Literal("kill_handler"), Type.Literal("unkill_handler"), Type.Literal("raise_budget"), Type.Literal("set_instructions")]),
 			rule: Type.Optional(Type.String()),
 			source: Type.Optional(Type.String()),
 			agent: Type.Optional(Type.String()),
 			handler: Type.Optional(Type.String({ description: "handler name, or all" })),
 			pool: Type.Optional(Type.Union([Type.Literal("tasks"), Type.Literal("events"), Type.Literal("chat")], { description: "raise_budget: which pool to raise" })),
 			tokens: Type.Optional(Type.Integer({ description: "raise_budget: how many tokens to add for today" })),
+			instructions: Type.Optional(Type.String({ description: "set_instructions: the complete new operator instructions (at most 16000 characters); an empty text clears them" })),
 			reason: Type.Optional(Type.String()),
 		}),
 		async execute(_id: string, params: Record<string, unknown>, signal?: AbortSignal) {

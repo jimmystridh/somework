@@ -634,6 +634,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_service_token_acts_as_its_service_with_its_role() {
+        let Some(pg) = postgres("a_service_token_acts_as_its_service_with_its_role") else { return };
+        let store = pg.store("service").await;
+        let (target, _) = fake_agent("agent/pi-agent", Some(profile("developer", None, None))).await;
+        let digest = crate::ops::contract::sha256_hex(b"manager-token");
+        let tokens = crate::ops::service::parse(&format!(r#"[{{"name": "agent/manager", "sha256": "{digest}", "role": "editor"}}]"#)).unwrap();
+        let ops = crate::ops::testing::ops_with_services(&store, AuthMode::Stub(crate::ops::StubUser { email: "nobody@example.com".into(), role: Role::Viewer }), None, vec![target], tokens);
+        let app = router(ops);
+        let body = Some(json!({"baseRevision": 0, "form": {"instructions": "be brief"}, "note": "asked on Telegram"}));
+        let bearer = |token: &str| [("x-operations-request", "1"), ("x-operations-service-token", if token == "good" { "manager-token" } else { "guess" })].map(|(name, value)| (name, value.to_string()));
+
+        let as_viewer = send(&app, "PUT", "/agents/pi-agent/setup", body.clone(), WRITE).await;
+        assert_eq!(as_viewer.0, S::FORBIDDEN, "without the token the caller is only the viewer the stub signs in");
+        let guessed = bearer("bad");
+        let (status, answer, _) = send(&app, "PUT", "/agents/pi-agent/setup", body.clone(), &guessed.iter().map(|(n, v)| (*n, v.as_str())).collect::<Vec<_>>()).await;
+        assert_eq!((status, answer["code"].as_str()), (S::UNAUTHORIZED, Some("unauthorized")));
+        assert!(store.latest_setup("agent/pi-agent").await.unwrap().is_none());
+
+        let good = bearer("good");
+        let headers: Vec<(&str, &str)> = good.iter().map(|(n, v)| (*n, v.as_str())).collect();
+        let (status, saved, _) = send(&app, "PUT", "/agents/pi-agent/setup", body, &headers).await;
+        assert_eq!(status, S::OK, "{saved}");
+        assert_eq!((saved["revision"]["author"].as_str(), saved["revision"]["revision"].as_u64()), (Some("agent/manager"), Some(1)));
+        let (_, me, _) = send(&app, "GET", "/me", None, &headers[1..]).await;
+        assert_eq!((me["email"].as_str(), me["role"].as_str(), me["auth"].as_str()), (Some("agent/manager"), Some("editor"), Some("service")));
+        let (status, _, _) = send(&app, "PUT", "/limits", Some(json!({"baseRevision": 0, "values": {"maxTokensCap": 1, "maxMinutesCap": 1, "dailyTokenLimit": 1, "budgetRaiseCeiling": 1}})), &headers).await;
+        assert_eq!(status, S::FORBIDDEN, "an editor token cannot change the fleet limits");
+    }
+
+    #[tokio::test]
     async fn a_write_needs_the_request_header() {
         let Some(pg) = postgres("a_write_needs_the_request_header") else { return };
         let store = pg.store("csrf").await;

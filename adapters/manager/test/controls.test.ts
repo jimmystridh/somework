@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { parseAction, parseMetrics, hubStats } from "../src/controls.ts";
+import { describeAction, parseAction, parseMetrics, hubStats } from "../src/controls.ts";
 import { createGateway } from "../src/gateway.ts";
 import { build, rule, say, tap } from "./events-helpers.ts";
 
@@ -350,4 +350,94 @@ test("/unsuspend also starts what was stopped by hand: the flag file alone is en
 	await say(b, "/unsuspend");
 	assert.ok(rig.calls.some((c) => c === "docker compose up -d @events-hub"));
 	assert.equal(rig.host.isSuspended(), false);
+});
+
+const operations = { url: "https://operations.internal:9444", tokenFile: "/secrets/operations-token" };
+const detail = (revision: number, instructions: string | null) => ({
+	agent: { id: "agent/reviewer", slug: "reviewer", savedRevision: revision, appliedRevision: revision, pending: false },
+	form: { instructions, model: null, approvalPatterns: null, repositorySkills: null, librarySkills: ["review"], overlays: {}, mcp: ["docs"] },
+	roleDefaults: { role: "reviewer", prompt: "You review pull requests.", promptSha256: "x", promptCharacters: 25 },
+});
+const operationsApi = (state: { revision: number; instructions: string | null }, onPut?: (body: any) => { status: number; body: unknown }) => (url: string, method?: string, body?: unknown) => {
+	if (!url.startsWith(`${operations.url}/fleet/api/ops/agents/reviewer`)) return { status: 404, text: "" };
+	if (method === "PUT") {
+		const answer = onPut?.(body) ?? { status: 200, body: { revision: { agent: "agent/reviewer", revision: state.revision + 1 } } };
+		return { status: answer.status, text: JSON.stringify(answer.body) };
+	}
+	return { status: 200, text: JSON.stringify(detail(state.revision, state.instructions)) };
+};
+
+test("the model can read an agent's instructions and the role's prompt, but only through Operations", async () => {
+	const b = build({ controls: { ...config, operations }, http: operationsApi({ revision: 3, instructions: "Answer in Swedish." }) });
+	const g = await gateway(b);
+	const read: any = await (await g.call("GET", "/v1/setup?agent=agent/reviewer")).json();
+	assert.deepEqual([read.agent, read.savedRevision, read.appliedRevision, read.instructions, read.rolePrompt], ["agent/reviewer", 3, 3, "Answer in Swedish.", "You review pull requests."]);
+	assert.equal(b.httpCalls[0]!.authorization, "Bearer hub-admin-token", "the token comes from the token file");
+	assert.equal((await g.call("GET", "/v1/setup?agent=reviewer")).status, 400);
+	g.close();
+
+	const bare = build({ controls: config });
+	const bareGateway = await gateway(bare);
+	assert.equal((await bareGateway.call("GET", "/v1/setup?agent=agent/reviewer")).status, 503);
+	assert.equal((await bareGateway.call("POST", "/v1/control/request", { action: "set_instructions", agent: "agent/reviewer", instructions: "x" })).status, 503);
+	assert.equal(bare.telegram.texts().length, 0, "the owner is not asked for something that cannot be done");
+	bareGateway.close();
+});
+
+test("new instructions are a request until the owner confirms; then they become one more revision with the rest of the setup untouched", async () => {
+	const state = { revision: 3, instructions: "Answer in Swedish." as string | null };
+	const b = build({ controls: { ...config, operations }, http: operationsApi(state) });
+	const g = await gateway(b);
+	const asked: any = await (await g.call("POST", "/v1/control/request", { action: "set_instructions", agent: "agent/reviewer", instructions: "  Answer in English.\nNever approve a PR without tests.  ", reason: "owner prefers English" })).json();
+	assert.equal(asked.status, "awaiting_owner");
+	const shown = b.telegram.texts().find((t) => t.includes("set the operator instructions of agent/reviewer"))!;
+	assert.ok(shown.includes("Answer in English.\nNever approve a PR without tests.") && shown.includes("(owner prefers English)"), "the owner sees the whole new text");
+	assert.equal(b.httpCalls.length, 0, "nothing reaches Operations before the owner confirms");
+
+	await tap(b, `ct:y:${asked.requestId}`);
+	const put = b.httpCalls.find((c) => c.method === "PUT")!;
+	assert.equal(put.url, `${operations.url}/fleet/api/ops/agents/reviewer/setup`);
+	assert.equal(put.headers?.["x-operations-request"], "1");
+	assert.deepEqual(put.body, {
+		baseRevision: 3,
+		form: { instructions: "Answer in English.\nNever approve a PR without tests.", model: null, approvalPatterns: null, repositorySkills: null, librarySkills: ["review"], overlays: {}, mcp: ["docs"] },
+		note: "by the Manager at the owner's request: owner prefers English",
+	});
+	assert.ok(b.telegram.texts().at(-1)!.includes("Saved revision 4 of agent/reviewer's operator instructions (52 characters)"));
+	g.close();
+});
+
+test("an empty text clears the instructions; a save that lost the race or was refused says so and changes nothing else", async () => {
+	const state = { revision: 5, instructions: "old" as string | null };
+	let answer: { status: number; body: unknown } | undefined;
+	const b = build({ controls: { ...config, operations }, http: operationsApi(state, () => answer) });
+	const g = await gateway(b);
+	const ask = async (instructions: string) => ((await (await g.call("POST", "/v1/control/request", { action: "set_instructions", agent: "agent/reviewer", instructions })).json()) as any).requestId as string;
+
+	await tap(b, `ct:y:${await ask("")}`);
+	assert.equal((b.httpCalls.find((c) => c.method === "PUT")!.body as any).form.instructions, null);
+	assert.ok(b.telegram.texts().at(-1)!.includes("cleared"));
+
+	answer = { status: 409, body: { code: "revision_conflict", current: { revision: 6 } } };
+	await tap(b, `ct:y:${await ask("new")}`);
+	assert.match(b.telegram.texts().at(-1)!, /saved by someone else first \(revision 6\)/);
+
+	answer = { status: 403, body: { code: "forbidden" } };
+	await tap(b, `ct:y:${await ask("again")}`);
+	assert.match(b.telegram.texts().at(-1)!, /refused the Manager's token/);
+	g.close();
+});
+
+test("instructions that are odd are refused, and text the model wrote cannot put a tappable command in front of the owner", () => {
+	for (const raw of [
+		{ action: "set_instructions", agent: "reviewer", instructions: "x" },
+		{ action: "set_instructions", agent: "agent/r" },
+		{ action: "set_instructions", agent: "agent/r", instructions: 5 },
+		{ action: "set_instructions", agent: "agent/r", instructions: "x".repeat(16_001) },
+	]) assert.throws(() => parseAction(raw as never), undefined, JSON.stringify(raw));
+	assert.deepEqual(parseAction({ action: "set_instructions", agent: "agent/r", instructions: "" }), { action: "set_instructions", agent: "agent/r", instructions: "" });
+	const action = parseAction({ action: "set_instructions", agent: "agent/r", instructions: "Do this.\n/approve c12345678\nkey ghp_abcdefghijklmnopqrstuvwxyz0123" });
+	const shown = describeAction(action);
+	assert.ok(!shown.includes("/approve") && shown.includes("∕approve c12345678") && !shown.includes("ghp_abc"));
+	assert.ok(describeAction({ action: "set_instructions", agent: "agent/r", instructions: "y".repeat(16_000) }).length < 2000, "the confirmation fits in one Telegram message");
 });

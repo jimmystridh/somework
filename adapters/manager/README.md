@@ -17,9 +17,10 @@ Telegram (owner only) <--long poll--> bridge (host process, Node)
 ```
 
 ## What the model can do
-Eight tools (extension `extension/somework-tools.ts`, loaded into Pi with `-e`): `somework_catalog`, `somework_ask`, `somework_message`,
-`somework_inbox`, and for events `somework_rules`, `somework_sources`, `somework_handlers` (read only) and `somework_control` (asks the owner to
-pause or resume a rule or source, to switch handlers off or on, or to raise an agent's token budget for today). They call the gateway only;
+Nine tools (extension `extension/somework-tools.ts`, loaded into Pi with `-e`): `somework_catalog`, `somework_ask`, `somework_message`,
+`somework_inbox`, and for events `somework_rules`, `somework_sources`, `somework_handlers`, `somework_setup` (read only) and `somework_control`
+(asks the owner to pause or resume a rule or source, to switch handlers off or on, to raise an agent's token budget for today, or to change an
+agent's operator instructions). They call the gateway only;
 the SomeWork key never enters the container. The rules are enforced in the gateway, not in the prompt:
 
 * The catalog is advertisement only. A capability tells the model what an agent says it can do and what input it understands; it is not a
@@ -29,6 +30,13 @@ the SomeWork key never enters the container. The rules are enforced in the gatew
 * A switch the model asks for (`somework_control`) only creates a request: the owner confirms it with a button or `/approve <id>`; ten
   minutes (`MANAGER_APPROVAL_TTL_MINUTES`) end it, and a restart forgets pending requests, which means denied. The gateway has no route
   that approves anything.
+* **Changing an agent's prompt.** `somework_setup` reads an agent's operator instructions (the addendum Operations appends to the role's own
+  prompt, which stays read only) from Operations; `somework_control` with `set_instructions` and the complete new text asks the owner, who sees
+  the whole text in Telegram before confirming. On confirmation the Manager saves it in Operations as one more revision from the current one,
+  authored `agent/manager`, with the rest of the agent's setup (skills, tool servers, model, approvals) untouched; Operations delivers it as
+  for any editor, so the console shows saved and applied revision and the agent confirms. The Manager reaches Operations with a service
+  token (`MANAGER_OPERATIONS_URL`, `MANAGER_OPERATIONS_TOKEN_FILE`, `MANAGER_OPERATIONS_CA_FILE`, default `MANAGER_CA_FILE`); without them the
+  tool answers that Operations is not configured and the owner is not asked.
 * Messages to agents are limited to 60 per hour (`MANAGER_MESSAGES_PER_HOUR`), `somework_ask` to 30 per hour. Payloads are never logged, only
   route, status and sizes.
 
