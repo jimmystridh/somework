@@ -58,6 +58,23 @@ describe("roll-agent.sh", () => {
 		assert.deepEqual(r.started().map((line) => line.split(" ")[0]), ["pilot-2", "pilot-1"], "the old version was started again");
 	});
 
+	it("waits for the agent's running jobs to finish before it restarts it, and rolls anyway when they never do", () => {
+		const r = rig({ readyWhen: () => true });
+		writeFileSync(join(r.root, "polls"), "0");
+		writeFileSync(join(r.root, "bin", "curl"), `#!/bin/sh\ncase "$*" in\n  */metrics*) n=$(cat "${r.root}/polls"); echo $((n + 1)) > "${r.root}/polls"; if [ "$n" -lt 2 ]; then echo 'somework_jobs{agent="agent/qa",state="running"} 1'; echo 'somework_jobs{agent="agent/qa",state="waiting"} 3'; else echo 'somework_jobs{agent="agent/qa",state="running"} 0'; fi; exit 0;;\nesac\nexit 0\n`, { mode: 0o755 });
+		const out = r.run([r.stack, "AGENT_VERSION", "pilot-2", "http://agent/ready"]);
+		assert.equal(out.status, 0, out.stderr);
+		assert.match(out.stderr, /the agent runs 1 job\(s\): waiting/);
+		assert.equal(readFileSync(join(r.root, "polls"), "utf8").trim(), "3", "it looked until the jobs were gone, and queued jobs did not count");
+		assert.deepEqual(r.started().map((line) => line.split(" ")[0]), ["pilot-2"]);
+
+		const stuck = rig({ readyWhen: () => true });
+		writeFileSync(join(stuck.root, "bin", "curl"), `#!/bin/sh\ncase "$*" in\n  */metrics*) echo 'somework_jobs{agent="agent/qa",state="running"} 1'; exit 0;;\nesac\nexit 0\n`, { mode: 0o755 });
+		const forced = stuck.run([stuck.stack, "AGENT_VERSION", "pilot-2", "http://agent/ready"], { IDLE_SECONDS: "30" });
+		assert.equal(forced.status, 0, forced.stderr);
+		assert.match(forced.stderr, /rolling anyway/);
+	});
+
 	it("keeps the first backup when the same tag is rolled twice", () => {
 		const r = rig({ readyWhen: () => true });
 		assert.equal(r.run([r.stack, "AGENT_VERSION", "pilot-2", "http://agent/ready"]).status, 0);

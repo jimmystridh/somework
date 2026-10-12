@@ -187,8 +187,13 @@ function Wait-AgentIdle([int]$seconds) {
     while ((Get-Date) -lt $deadline) {
         try {
             $metrics = (Invoke-WebRequest -UseBasicParsing -Uri "http://${bind}:$port/metrics" -TimeoutSec 5).Content
+            # the jobs of the agent are `somework_jobs{agent=...,state="running"}` since the cut-over; the old gauge `somework_pi_active_jobs` is never set any more and read 0 while a verification ran
+            $running = [regex]::Matches($metrics, '(?m)^somework_jobs\{[^}]*state="running"[^}]*\}\s+([0-9.]+)')
             $active = [regex]::Match($metrics, '(?m)^somework_pi_active_jobs\s+([0-9.]+)')
-            if (-not $active.Success -or [double]$active.Groups[1].Value -eq 0) { return }
+            $count = 0.0
+            foreach ($row in $running) { $count += [double]$row.Groups[1].Value }
+            if ($active.Success) { $count += [double]$active.Groups[1].Value }
+            if ($count -eq 0) { return }
             if (-not $announced) { Write-Host 'the agent is running a job: waiting for it to finish before it is replaced'; $announced = $true }
         } catch { return }
         Start-Sleep -Seconds 15

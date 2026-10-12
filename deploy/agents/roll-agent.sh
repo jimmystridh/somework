@@ -50,6 +50,23 @@ wait_ready() {
   return 1
 }
 
+# a restart ends the jobs the agent runs (a verification or a fix takes minutes): wait for them, up to IDLE_SECONDS (default 600), then roll anyway
+# because the agent takes its unfinished jobs up again when it starts
+wait_idle() {
+  [ -n "$ready_url" ] || return 0
+  metrics_url=${ready_url%/ready}/metrics
+  idle_waited=0
+  while [ "$idle_waited" -lt "${IDLE_SECONDS:-600}" ]; do
+    running=$(curl -fsS -m 5 "$metrics_url" 2>/dev/null | awk '/^somework_jobs\{[^}]*state="running"/ { n += $NF } END { print n + 0 }') || running=0
+    [ "${running:-0}" = 0 ] && return 0
+    [ "$idle_waited" -eq 0 ] && echo "$dir: the agent runs $running job(s): waiting up to ${IDLE_SECONDS:-600}s for them to finish" >&2
+    sleep 10
+    idle_waited=$((idle_waited + 10))
+  done
+  echo "$dir: jobs are still running: rolling anyway, the agent takes them up again when it starts" >&2
+}
+
+wait_idle
 docker compose up -d
 if wait_ready; then
   echo "rolled $dir: $variable $previous -> $tag"
