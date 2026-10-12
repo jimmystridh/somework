@@ -13,15 +13,22 @@
 # Before it changes anything it keeps compose.yaml and .env as *.before-TAG (an earlier backup of the same tag is kept as it is). A rollout
 # that does not report ready within READY_SECONDS (default 90) puts both files back and starts the old version again; the exit status is then 1.
 # Extra settings for one start only (for example AIKIDO_RESEED_HANDLER=1) go in the environment of this command.
+#
+# DRAIN_SERVICE=agent drains the agent first: the file `drain` is made in the state directory of that compose service (DRAIN_STATE_DIR, default /state), the
+# agent then starts no new job, and the wait for its running jobs ends when those are done. The file is removed again as soon as the new container runs and
+# on every way out of this script (the state is a volume: left behind, it would keep the new agent drained). Without DRAIN_SERVICE nothing is drained.
 set -eu
 
-[ "$#" -ge 3 ] || { sed -n 2,17p "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+[ "$#" -ge 3 ] || { sed -n 2,19p "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 dir=$1
 variable=$2
 tag=$3
 ready_url=${4:-}
 new_compose=${5:-}
 ready_seconds=${READY_SECONDS:-90}
+drain_service=${DRAIN_SERVICE:-}
+drain_file=${DRAIN_STATE_DIR:-/state}/drain
+drained=0
 
 case "$variable" in *[!A-Z0-9_,]*|""|,*|*,|*,,*) echo "the version variable must be an upper-case .env name (several separated by commas)" >&2; exit 2;; esac
 case "$tag" in *[!A-Za-z0-9._-]*|"") echo "the tag may only hold letters, digits, dot, underscore and hyphen" >&2; exit 2;; esac
@@ -66,8 +73,39 @@ wait_idle() {
   echo "$dir: jobs are still running: rolling anyway, the agent takes them up again when it starts" >&2
 }
 
+start_drain() {
+  [ -n "$drain_service" ] || return 0
+  if docker compose exec -T "$drain_service" touch "$drain_file" >/dev/null 2>&1; then
+    drained=1
+    echo "$dir: draining: the agent starts no new job until the roll is done" >&2
+  else
+    echo "$dir: could not drain ($drain_service is not running?): only waiting for its jobs" >&2
+  fi
+}
+
+stop_drain() {
+  [ "$drained" = 1 ] || return 0
+  drain_tries=0
+  until docker compose exec -T "$drain_service" rm -f "$drain_file" >/dev/null 2>&1; do
+    drain_tries=$((drain_tries + 1))
+    [ "$drain_tries" -lt 10 ] || break
+    sleep 3
+  done
+  if [ "$drain_tries" -ge 10 ]; then
+    docker compose run --rm --no-deps -T --entrypoint rm "$drain_service" -f "$drain_file" >/dev/null 2>&1 \
+      || echo "$dir: the drain file $drain_file could not be removed: remove it by hand, the agent starts no new job while it exists" >&2
+  fi
+  drained=0
+}
+
+trap stop_drain EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+start_drain
 wait_idle
 docker compose up -d
+stop_drain
 if wait_ready; then
   echo "rolled $dir: $variable $previous -> $tag"
   exit 0

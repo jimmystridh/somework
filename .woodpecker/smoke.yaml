@@ -1,0 +1,22 @@
+when:
+  - event: manual
+
+# The smoke test of a deployed cluster (scripts/smoke-cluster.sh), started by hand after a deployment. The addresses are not in the repository: the secret
+# smoke_inventory holds the inventory (deploy/README.md, "Smoke test"; its Operations line says token_file=/tmp/ops.token) and smoke_ops_token the service token
+# of an Operations viewer. SMOKE_VERSION, a variable of the manual run, is the image tag every agent has to report (ci-0123456); without it the versions are not
+# compared. The runner has to reach every address in the inventory: the agents' health ports are open to the dashboard host and the agents VM only
+# (deploy/agents/agent-health-firewall.sh), so this step belongs on a runner that is allowed there; the agents VM runs the same script itself at the end of each
+# deployment when it has an inventory of its own (deploy/agents/deploy-from-ci.sh).
+steps:
+  - name: smoke
+    image: node:22.19.0-bookworm
+    environment:
+      SMOKE_INVENTORY:
+        from_secret: smoke_inventory
+      OPS_TOKEN:
+        from_secret: smoke_ops_token
+    commands:
+      - umask 077
+      - printf '%s\n' "$SMOKE_INVENTORY" > /tmp/smoke.inventory
+      - printf '%s' "$OPS_TOKEN" > /tmp/ops.token
+      - if [ -n "$SMOKE_VERSION" ]; then version="--version $SMOKE_VERSION"; else version=""; fi; sh scripts/smoke-cluster.sh /tmp/smoke.inventory $version

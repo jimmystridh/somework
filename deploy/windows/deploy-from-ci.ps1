@@ -5,7 +5,9 @@
 #
 # It unpacks the tar from stdin, keeps a backup of what it replaces, installs the shared kit, the SDK and this machine's role (QA or the Windows developer;
 # the role is read from agent.env) over C:\somework\agent, installs the role's profiles.pilot.json as profiles.json, runs `npm ci` when the lockfile
-# changed, restarts the service and waits for /ready. When the service does not become ready it puts the backup back and starts the old code again
+# changed, restarts the service and waits for /ready. Before it waits for the agent's running jobs it drains the agent (a file `drain` in the agent's
+# state directory, PI_STATE_DIR of agent.env): the agent then starts no new job, so the wait ends when the jobs it has are done, and the file is removed
+# on every way out of this script. When the service does not become ready it puts the backup back and starts the old code again
 # (exit status 1). Install this file by hand once (C:\somework\bin, writable by administrators only): a key that could replace it could run anything as
 # an administrator. Windows PowerShell 5.1, ASCII only.
 $ErrorActionPreference = 'Stop'
@@ -13,7 +15,9 @@ $root = 'C:\somework'
 $agent = "$root\agent"
 $deploy = "$root\deploy"
 
-function Fail([string]$message, [int]$code = 1) { [Console]::Error.WriteLine($message); exit $code }
+$drainFile = $null
+function Remove-Drain { if ($script:drainFile) { Remove-Item $script:drainFile -Force -ErrorAction SilentlyContinue } }
+function Fail([string]$message, [int]$code = 1) { [Console]::Error.WriteLine($message); Remove-Drain; exit $code }
 
 # the size is given because Windows OpenSSH does not pass the end of the client's input on to the program: reading "until the end" would wait forever
 if ($env:SSH_ORIGINAL_COMMAND -notmatch '^deploy ([0-9a-f]{40}) ([0-9]{1,9})$') { Fail 'only "deploy COMMIT_SHA SIZE" (the full lower-case hash, the archive size in bytes) is allowed' 2 }
@@ -174,8 +178,17 @@ function Update-FirewallAllowList {
 }
 Update-FirewallAllowList
 
+function Start-Drain {
+    $state = $settings['PI_STATE_DIR']
+    if (-not $state -or -not (Test-Path $state)) { Write-Host 'PI_STATE_DIR of agent.env is not set or does not exist: the agent is not drained, only waited for'; return }
+    $script:drainFile = Join-Path $state 'drain'
+    New-Item -ItemType File -Force $script:drainFile | Out-Null
+    Write-Host "draining the $role agent: it starts no new job until the deployment is done"
+}
+
 trap {
     [Console]::Error.WriteLine("unexpected error: $($_.Exception.Message)")
+    Remove-Drain
     try { Restore-Backup } catch { }
     try { Start-ScheduledTask -TaskName $task } catch { }
     exit 1
@@ -200,12 +213,14 @@ function Wait-AgentIdle([int]$seconds) {
     }
     Fail "the $role agent has been busy for $([int]($seconds / 60)) minutes: it is not replaced in the middle of a job; run the deployment again when it is idle"
 }
+Start-Drain
 Wait-AgentIdle 1500
 # the owner's kill switch (fleet-control.ps1 suspend) disables the agent's task: deploying would only start it again or fail half way
 if ((Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue).State -eq 'Disabled') { Fail "the $role agent's task is disabled (the fleet is suspended): nothing was deployed; resume the fleet and deploy again" 4 }
 Backup-QaApp
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
+Remove-Drain
 Install-Files
 if ($lockChanged) {
     Write-Host "the lockfile changed: npm ci for $package"
@@ -215,6 +230,7 @@ Start-ScheduledTask -TaskName $task
 if (Wait-Ready 120) {
     Remove-Item $stage -Recurse -Force
     Write-Host "deployed $sha ($role): ready"
+    Remove-Drain
     exit 0
 }
 Write-Host "the $role agent did not become ready in 120 s: putting the old code back"

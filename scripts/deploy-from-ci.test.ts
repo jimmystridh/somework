@@ -9,7 +9,7 @@ const SCRIPT = join(import.meta.dirname, "..", "deploy", "agents", "deploy-from-
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 /** A pilot directory with a fake roll-agent.sh, and fake `docker` and `flock` that record what they were asked to do. */
-function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean } = {}) {
+function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean; smokeInventory?: boolean; smokeFails?: boolean } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "deploy-"));
 	const bin = join(root, "bin");
 	const pilot = join(root, "pilot");
@@ -25,18 +25,22 @@ function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean }
 	};
 	write(join(bin, "docker"), `#!/bin/sh\necho "docker $*" >> "${root}/calls.log"\n`);
 	write(join(bin, "flock"), options.busy ? "#!/bin/sh\nexit 1\n" : "#!/bin/sh\nexit 0\n");
-	write(join(pilot, "bin", "roll-agent.sh"), `#!/bin/sh\necho "roll $(basename "$1") $2 $3 $4 $(cat "$5")" >> "${root}/calls.log"\n[ "$(basename "$1")" != "${options.failRoll ?? "-"}" ]\n`);
+	write(join(pilot, "bin", "roll-agent.sh"), `#!/bin/sh\necho "roll $(basename "$1") $2 $3 $4 $(cat "$5")" >> "${root}/calls.log"\necho "$(basename "$1") \${DRAIN_SERVICE:-none}" >> "${root}/drain.log"\n[ "$(basename "$1")" != "${options.failRoll ?? "-"}" ]\n`);
 	const repository = join(root, "repository");
 	for (const dir of ["adapters/pi", "adapters/reviewer", "adapters/aikido-fixer", "adapters/datadog-triage", "adapters/jira-triage", "packages/events-hub"]) {
 		mkdirSync(join(repository, dir, "deploy"), { recursive: true });
 		writeFileSync(join(repository, dir, "deploy", "compose.yaml"), `# ${dir.split("/")[1]}\n`);
 	}
+	mkdirSync(join(repository, "scripts"));
+	write(join(repository, "scripts", "smoke-cluster.sh"), `#!/bin/sh\necho "smoke $*" >> "${root}/calls.log"\n${options.smokeFails ? "echo 'FAIL pi-agent: not ready'; exit 1" : "exit 0"}\n`);
+	if (options.smokeInventory) writeFileSync(join(pilot, "smoke.inventory"), "agent pi-agent http://10.10.10.11:8081\n");
 	const archive = join(root, "repository.tgz");
 	spawnSync("tar", ["czf", archive, "-C", repository, "."]);
 	const run = (command: string, input = readFileSync(archive)) =>
 		spawnSync("sh", [SCRIPT], { encoding: "utf8", input, env: { PATH: `${bin}:${process.env.PATH}`, PILOT_DIR: pilot, SSH_ORIGINAL_COMMAND: command } });
 	const calls = () => (existsSync(join(root, "calls.log")) ? readFileSync(join(root, "calls.log"), "utf8").trim().split("\n") : []);
-	return { run, calls, pilot };
+	const drains = () => (existsSync(join(root, "drain.log")) ? readFileSync(join(root, "drain.log"), "utf8").trim().split("\n") : []);
+	return { run, calls, drains, pilot };
 }
 
 describe("deploy-from-ci.sh", () => {
@@ -55,6 +59,12 @@ describe("deploy-from-ci.sh", () => {
 		);
 		assert.match(calls.find((call) => call.startsWith("roll reviewer")) ?? "", /http:\/\/10\.10\.10\.11:8082\/ready/);
 		assert.match(calls.find((call) => call.startsWith("roll events-hub")) ?? "", /http:\/\/10\.10\.10\.11:8090\/healthz/);
+	});
+
+	it("has the agent stacks drain while they are replaced, in their `agent` service, and the hub not", () => {
+		const r = rig({ jiraStack: true });
+		assert.equal(r.run(`deploy ${SHA}`).status, 0);
+		assert.deepEqual(r.drains(), ["events-hub none", "datadog-triage agent", "reviewer agent", "aikido-fixer agent", "jira-triage agent", "pi-agent agent"]);
 	});
 
 	it("skips the Jira triage stack until it exists on the host: no image is built for it and nothing is rolled", () => {
@@ -76,6 +86,39 @@ describe("deploy-from-ci.sh", () => {
 			["roll events-hub HUB_VERSION ci-0123456 # events-hub", "roll datadog-triage DATADOG_VERSION ci-0123456 # datadog-triage", "roll reviewer REVIEWER_VERSION,SANDBOX_VERSION ci-0123456 # reviewer", "roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION ci-0123456 # aikido-fixer", "roll jira-triage TRIAGE_VERSION,SANDBOX_VERSION ci-0123456 # jira-triage", "roll pi-agent PI_VERSION ci-0123456 # pi"],
 		);
 		assert.match(calls.find((call) => call.startsWith("roll jira-triage")) ?? "", /http:\/\/10\.10\.10\.11:8085\/ready/);
+	});
+
+	it("runs the smoke test after the last roll, for the tag it just rolled, when the host has an inventory", () => {
+		const r = rig({ smokeInventory: true });
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 0, out.stderr);
+		const calls = r.calls();
+		assert.equal(calls.filter((call) => call.startsWith("smoke")).length, 1);
+		assert.equal(calls.at(-1), `smoke ${r.pilot}/smoke.inventory --version ci-0123456`);
+		assert.ok(calls.findIndex((call) => call.startsWith("roll pi-agent")) < calls.findIndex((call) => call.startsWith("smoke")));
+		assert.match(out.stdout, /deployed ci-0123456/);
+	});
+
+	it("fails with status 5 and says the code is deployed when the smoke test fails", () => {
+		const r = rig({ smokeInventory: true, smokeFails: true });
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 5);
+		assert.match(out.stderr, /deployed ci-0123456, but the smoke test failed/);
+		assert.equal(r.calls().filter((call) => call.startsWith("roll")).length, 5, "every stack was rolled: the smoke test does not undo anything");
+	});
+
+	it("skips the smoke test, and says so, without an inventory on the host", () => {
+		const r = rig();
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 0, out.stderr);
+		assert.match(out.stdout, /smoke test skipped/);
+		assert.ok(!r.calls().some((call) => call.startsWith("smoke")));
+	});
+
+	it("does not run the smoke test when a stack did not become ready", () => {
+		const r = rig({ smokeInventory: true, failRoll: "reviewer" });
+		assert.notEqual(r.run(`deploy ${SHA}`).status, 0);
+		assert.ok(!r.calls().some((call) => call.startsWith("smoke")));
 	});
 
 	it("deploys nothing while the fleet is suspended", () => {
