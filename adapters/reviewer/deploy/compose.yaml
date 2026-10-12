@@ -42,6 +42,7 @@ services:
       PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
       PI_MODEL: ${PI_MODEL:-gpt-5.5}
       PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
+      PI_EFFORT: ${PI_EFFORT:-}
       PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}
       PI_AUTH_FILE: /run/secrets/pi/auth.json
       PI_STATE_DIR: /state
