@@ -66,17 +66,18 @@ export function createGateway(options: GatewayOptions): Server {
 		if (method === "GET" && path === "/v1/catalog") return service.catalog(url.searchParams.get("query") ?? "");
 		if (method === "POST" && path === "/v1/messages") {
 			const body = await readJson(request);
-			return service.message({ to: String(body.to ?? ""), text: String(body.text ?? ""), conversationId: body.conversationId });
+			return service.message({ to: Array.isArray(body.to) ? body.to.map(String) : String(body.to ?? ""), text: String(body.text ?? ""), conversationId: body.conversationId });
 		}
 		if (method === "GET" && path === "/v1/inbox") {
 			return service.inbox({ conversationId: url.searchParams.get("conversationId") ?? undefined, limit: Number(url.searchParams.get("limit") ?? 20) || 20 });
 		}
 		if (method === "POST" && path === "/v1/chat/ask") {
 			const body = await readJson(request);
-			return service.ask({ agent: String(body.agent ?? ""), text: String(body.text ?? "") });
+			return service.ask({ agent: String(body.agent ?? ""), ...(Array.isArray(body.agents) ? { agents: body.agents.map(String) } : {}), text: String(body.text ?? ""), ...(typeof body.then === "string" ? { then: body.then } : {}) });
 		}
 		if (method === "GET" && path === "/v1/control/rules") return service.rules();
 		if (method === "GET" && path === "/v1/control/sources") return service.sources();
+		if (method === "GET" && path === "/v1/status") return service.status(url.searchParams.get("agent") ?? undefined);
 		if (method === "GET" && path === "/v1/setup") return service.setup(url.searchParams.get("agent") ?? "");
 		if (method === "GET" && path === "/v1/control/handlers") return service.handlers(url.searchParams.get("agent") ?? "");
 		if (method === "POST" && path === "/v1/control/request") return service.controlRequest(await readJson(request));

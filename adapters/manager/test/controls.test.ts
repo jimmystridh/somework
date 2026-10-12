@@ -442,3 +442,47 @@ test("instructions that are odd are refused, and text the model wrote cannot put
 	assert.ok(!shown.includes("/approve") && shown.includes("∕approve c12345678") && !shown.includes("ghp_abc"));
 	assert.ok(describeAction({ action: "set_instructions", agent: "agent/r", instructions: "y".repeat(16_000) }).length < 2000, "the confirmation fits in one Telegram message");
 });
+
+const statusApi = () => (url: string) => {
+	const path = url.replace(`${operations.url}/fleet/api/ops`, "");
+	const job = (over: Record<string, unknown>) => ({ id: "\u2026abc", agent: "agent/qa", label: "qa.verify for jira.issue.transitioned", capability: "qa.verify@1", requestedBy: "event:jira.issue.transitioned", state: "running", since: "2026-10-12T14:31:30.332Z", ...over });
+	if (path === "/limits") return { status: 200, text: JSON.stringify({ current: { revision: 1, values: { maxTokensCap: 2_000_000, maxMinutesCap: 120, dailyTokenLimit: 10_000_000, budgetRaiseCeiling: 10_000_000 } } }) };
+	if (path === "/agents") return { status: 200, text: JSON.stringify({ agents: [{ id: "agent/qa" }, { id: "agent/reviewer" }] }) };
+	if (path === "/agents/qa") {
+		return { status: 200, text: JSON.stringify({
+			agent: { id: "agent/qa", liveness: "alive", savedRevision: 2, appliedRevision: 2, reachable: true },
+			liveJobs: [
+				job({}),
+				job({ id: "\u2026def", label: "verify SAD-1338", state: "waiting", waitingFor: "app-stack", requestedBy: "telegram/327148078" }),
+				job({ id: "\u2026fin", label: "verify SAD-2081 /approve c12345678", state: "finished", result: "completed", finishedAt: "2026-10-12T13:20:55.746Z", seconds: 776.1 }),
+			],
+			history: [{ job: "\u2026fin", summary: "Tested revision 4c9c03d. Video attached." }],
+			usage: [{ provider: "openai-codex", model: "gpt-5.5", day: { costUsd: 9.3657 } }],
+		}) };
+	}
+	if (path === "/agents/reviewer") return { status: 404, text: "" };
+	return { status: 404, text: "" };
+};
+
+test("the model can see what the agents are doing: running and waiting jobs with what they wait for, what finished, spend, and the fleet limits", async () => {
+	const b = build({ controls: { ...config, operations }, http: statusApi() });
+	const g = await gateway(b);
+	const all: any = await (await g.call("GET", "/v1/status")).json();
+	assert.deepEqual(all.fleetLimits, { perJobTokens: 2_000_000, perJobMinutes: 120, dailyTokens: 10_000_000, raiseCeiling: 10_000_000, note: all.fleetLimits.note });
+	const qa = all.agents.find((entry: any) => entry.agent === "agent/qa");
+	assert.equal(qa.state, "alive");
+	assert.deepEqual(qa.running.map((job: any) => [job.what, job.by, job.since]), [["qa.verify for jira.issue.transitioned", "event:jira.issue.transitioned", "14:31Z"]]);
+	assert.deepEqual(qa.waiting.map((job: any) => [job.what, job.waitingFor]), [["verify SAD-1338", "app-stack"]]);
+	assert.equal(qa.recentlyFinished[0].result, "completed");
+	assert.equal(qa.recentlyFinished[0].summary, "Tested revision 4c9c03d. Video attached.");
+	assert.ok(!JSON.stringify(qa).includes("/approve"), "text from an agent never carries a tappable command");
+	assert.equal(qa.spendTodayUsd, 9.37);
+	assert.ok(all.agents.some((entry: any) => entry.agent === "agent/reviewer" && entry.error), "an agent Operations does not know is reported, not fatal");
+	assert.equal((await g.call("GET", "/v1/status?agent=agent/qa")).status, 200);
+	assert.equal((await g.call("GET", "/v1/status?agent=qa")).status, 400);
+	g.close();
+	const bare = build({ controls: config });
+	const bareGateway = await gateway(bare);
+	assert.equal((await bareGateway.call("GET", "/v1/status")).status, 503);
+	bareGateway.close();
+});

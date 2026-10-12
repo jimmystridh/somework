@@ -17,8 +17,8 @@ Telegram (owner only) <--long poll--> bridge (host process, Node)
 ```
 
 ## What the model can do
-Nine tools (extension `extension/somework-tools.ts`, loaded into Pi with `-e`): `somework_catalog`, `somework_ask`, `somework_message`,
-`somework_inbox`, and for events `somework_rules`, `somework_sources`, `somework_handlers`, `somework_setup` (read only) and `somework_control`
+Ten tools (extension `extension/somework-tools.ts`, loaded into Pi with `-e`): `somework_catalog`, `somework_ask`, `somework_message`,
+`somework_inbox`, and for events `somework_rules`, `somework_sources`, `somework_handlers`, `somework_status`, `somework_setup` (read only) and `somework_control`
 (asks the owner to pause or resume a rule or source, to switch handlers off or on, to raise an agent's token budget for today, or to change an
 agent's operator instructions). They call the gateway only;
 the SomeWork key never enters the container. The rules are enforced in the gateway, not in the prompt:
@@ -37,6 +37,12 @@ the SomeWork key never enters the container. The rules are enforced in the gatew
   for any editor, so the console shows saved and applied revision and the agent confirms. The Manager reaches Operations with a service
   token (`MANAGER_OPERATIONS_URL`, `MANAGER_OPERATIONS_TOKEN_FILE`, `MANAGER_OPERATIONS_CA_FILE`, default `MANAGER_CA_FILE`); without them the
   tool answers that Operations is not configured and the owner is not asked.
+* **What the agents are doing.** `somework_status` reads Operations (which follows the agents' job events): per agent whether it is alive, the jobs
+  that run and those that wait and for what (a resource such as app-stack), the last jobs that finished with their result and summary, today's
+  spend and model, and the fleet limits. Text that comes from agents is flattened to plain text.
+* **Chains and groups.** `somework_ask` takes `agents` (two or more: one group conversation in which each agent also sees what the others answer)
+  and `then` (what to do when the answer comes). The answer is shown to the owner as before and the Manager's model is woken once with it, as data
+  between markers, to do the second step; at most eight such follow-ups an hour.
 * Messages to agents are limited to 60 per hour (`MANAGER_MESSAGES_PER_HOUR`), `somework_ask` to 30 per hour. Payloads are never logged, only
   route, status and sizes.
 

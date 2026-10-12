@@ -103,7 +103,7 @@ async function main(): Promise<void> {
 		save,
 		pendingQuestions: () => service.pendingRequests() + Object.keys(state.chatApprovals ?? {}).length,
 	});
-	const chats = new ChatSessions({ domain, owner: bridge, state, save, knownAgents: () => service.knownAgentIds() });
+	const chats = new ChatSessions({ domain, owner: bridge, state, save, knownAgents: () => service.knownAgentIds(), followUp: (prompt) => bridge.wake(prompt) });
 	const service: ManagerService = new ManagerService({ domain, policy: config.policy, owner: bridge, controls, chats, approvals: { rules, grants } });
 	const eventIntake = new EventIntake({ domain, owner: bridge, state, save, config: config.events, digest: () => controls.digest(), log });
 	bridge.service = service;

@@ -84,12 +84,12 @@ test("logs carry routes, statuses and sizes, never payload content or the token"
 	close();
 });
 
-test("the Pi extension registers its nine tools (four to talk to agents, five to watch, read and switch) that call the gateway with the token", async () => {
+test("the Pi extension registers its ten tools (four to talk to agents, six to watch, read and switch) that call the gateway with the token", async () => {
 	const { url, domain, close } = await start();
 	const tools = new Map<string, any>();
 	const Type = new Proxy({}, { get: (_t, kind) => (value?: unknown) => ({ kind, value }) });
 	registerSomeworkTools({ registerTool: (tool) => tools.set(tool.name as string, tool) }, Type, { MANAGER_GATEWAY_URL: url, MANAGER_GATEWAY_TOKEN: TOKEN });
-	assert.deepEqual([...tools.keys()].sort(), ["somework_ask", "somework_catalog", "somework_control", "somework_handlers", "somework_inbox", "somework_message", "somework_rules", "somework_setup", "somework_sources"]);
+	assert.deepEqual([...tools.keys()].sort(), ["somework_ask", "somework_catalog", "somework_control", "somework_handlers", "somework_inbox", "somework_message", "somework_rules", "somework_setup", "somework_sources", "somework_status"]);
 	const catalog = await tools.get("somework_catalog").execute("1", { query: "review" });
 	assert.match(catalog.content[0].text, /agent\/reviewer/);
 	assert.match(tools.get("somework_catalog").description, /advertisement/);

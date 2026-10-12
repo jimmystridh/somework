@@ -163,6 +163,34 @@ export function hubStats(samples: Sample[]): HubStats {
 	return stats;
 }
 
+const shortJob = (job: any) => ({ job: defang(String(job.id ?? "")), what: clip(defang(String(job.label ?? "")), 120), by: defang(String(job.requestedBy ?? "")) || undefined, since: typeof job.since === "string" ? job.since.slice(11, 16) + "Z" : undefined });
+
+/** One agent's Operations detail as the few facts the model needs: everything from an agent is flattened to plain text. */
+export function summariseStatus(id: string, detail: any, full: boolean) {
+	const jobs: any[] = Array.isArray(detail.liveJobs) ? detail.liveJobs : [];
+	const finished = jobs.filter((job) => job.state === "finished").sort((a, b) => String(b.finishedAt ?? "").localeCompare(String(a.finishedAt ?? ""))).slice(0, full ? 8 : 3);
+	const history: any[] = Array.isArray(detail.history) ? detail.history : [];
+	const summaries = new Map(history.map((entry) => [String(entry.job), entry]));
+	const usage: any[] = Array.isArray(detail.usage) ? detail.usage : [];
+	const today = usage.reduce((sum, row) => sum + (Number(row?.day?.costUsd) || 0), 0);
+	const agent = detail.agent ?? {};
+	return {
+		agent: id,
+		state: agent.liveness ?? "unknown",
+		...(agent.reachable === false ? { unreachable: "Operations cannot read its health endpoint" } : {}),
+		setup: { savedRevision: agent.savedRevision ?? 0, appliedRevision: agent.appliedRevision ?? null, ...(agent.rejected ? { rejected: clip(defang(String(agent.rejected.reason ?? "")), 160) } : {}) },
+		running: jobs.filter((job) => job.state === "running").map(shortJob),
+		waiting: jobs.filter((job) => job.state === "waiting").map((job) => ({ ...shortJob(job), waitingFor: clip(defang(String(job.waitingFor ?? "a free slot")), 80) })),
+		recentlyFinished: finished.map((job) => {
+			const known = summaries.get(String(job.id));
+			return { ...shortJob(job), result: job.result ?? "unknown", ...(typeof job.finishedAt === "string" ? { at: job.finishedAt.slice(11, 16) + "Z" } : {}), ...(typeof job.seconds === "number" ? { seconds: Math.round(job.seconds) } : {}), ...(known?.summary || job.summary ? { summary: clip(defang(String(known?.summary ?? job.summary)), full ? 400 : 160) } : {}) };
+		}),
+		spendTodayUsd: Math.round(today * 100) / 100,
+		...(usage[0]?.model ? { model: `${usage[0].provider ?? ""}/${usage[0].model}` } : {}),
+		...(Array.isArray(detail.notes) && detail.notes.length > 0 ? { notes: detail.notes.slice(0, 3).map((note: unknown) => clip(defang(String(note)), 160)) } : {}),
+	};
+}
+
 export interface ControlsDeps {
 	domain: DomainApi;
 	config: ControlsConfig;
@@ -302,11 +330,18 @@ export class Controls {
 	}
 
 	async #operations(method: "GET" | "PUT", agent: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+		const slug = agent.replace(/^agent\//, "");
+		const answer = await this.#operationsCall(method, `/agents/${encodeURIComponent(slug)}${path}`, body);
+		if (answer.status === 404) throw new PolicyError(404, "unknown_agent", `Operations does not know ${agent}`);
+		return answer;
+	}
+
+	/** One call to a route of Operations (`/fleet/api/ops` + `path`) with the Manager's service token. */
+	async #operationsCall(method: "GET" | "PUT", path: string, body?: unknown): Promise<{ status: number; json: any }> {
 		const operations = this.#deps.config.operations;
 		if (!operations) throw new PolicyError(503, "operations_not_configured", "Operations is not configured for the Manager (MANAGER_OPERATIONS_URL and MANAGER_OPERATIONS_TOKEN_FILE)");
 		const token = (await (this.#deps.readToken ?? ((file) => readFile(file, "utf8")))(operations.tokenFile)).trim();
-		const slug = agent.replace(/^agent\//, "");
-		const answer = await this.#reach("Operations", "operations_unavailable", `${operations.url.replace(/\/$/, "")}/fleet/api/ops/agents/${encodeURIComponent(slug)}${path}`, {
+		const answer = await this.#reach("Operations", "operations_unavailable", `${operations.url.replace(/\/$/, "")}/fleet/api/ops${path}`, {
 			method,
 			headers: { "x-operations-service-token": token, ...(method === "GET" ? {} : { "x-operations-request": "1" }) },
 			caFile: operations.caFile,
@@ -320,8 +355,28 @@ export class Controls {
 			json = undefined;
 		}
 		if (answer.status === 401 || answer.status === 403) throw new PolicyError(502, "operations_refused", `Operations refused the Manager's token (${answer.status}); the service token needs the editor role`);
-		if (answer.status === 404) throw new PolicyError(404, "unknown_agent", `Operations does not know ${agent}`);
 		return { status: answer.status, json };
+	}
+
+	/**
+	 * What the agents are doing right now, from Operations (which follows their job events): per agent whether it is alive, the jobs that run and
+	 * those that wait (and for what), the last jobs that finished, today's spend; and the fleet limits every run is held to.
+	 */
+	async agentStatus(agent?: string): Promise<unknown> {
+		const [limits, list] = await Promise.all([this.#operationsCall("GET", "/limits").catch(() => undefined), agent ? undefined : this.#operationsCall("GET", "/agents")]);
+		if (list && (list.status !== 200 || !list.json)) throw new PolicyError(502, "operations_unavailable", `Operations answered ${list.status}`);
+		const ids: string[] = agent ? [agent] : (list!.json.agents ?? []).map((entry: any) => String(entry.id));
+		const one = async (id: string) => {
+			const answer = await this.#operations("GET", id, "");
+			if (answer.status !== 200 || !answer.json) throw new PolicyError(502, "operations_unavailable", `Operations answered ${answer.status}`);
+			return summariseStatus(id, answer.json, agent !== undefined);
+		};
+		const agents = await Promise.all(ids.map((id) => one(id).catch((error: unknown) => ({ agent: id, error: error instanceof PolicyError ? error.message : "could not be read" }))));
+		const current = limits?.json?.current?.values;
+		return {
+			...(current ? { fleetLimits: { perJobTokens: current.maxTokensCap, perJobMinutes: current.maxMinutesCap, dailyTokens: current.dailyTokenLimit, raiseCeiling: current.budgetRaiseCeiling, note: "set by the owner in Operations (Fleet limits); every agent is held to them, raise_budget adds extra tokens for one agent for today only" } } : {}),
+			agents,
+		};
 	}
 
 	/** What the agent runs on now: the operator instructions Operations holds for it, the role's own prompt (read only) and whether the last save has reached it. */

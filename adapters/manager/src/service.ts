@@ -135,6 +135,12 @@ export class ManagerService {
 		return this.#controls().sources();
 	}
 
+	/** What the agents are doing now (jobs running and waiting, what they wait for, what finished lately, spend today), and the fleet limits, from Operations. */
+	async status(agent?: string): Promise<unknown> {
+		if (agent !== undefined && !/^agent\/[a-z0-9][a-z0-9._-]{0,48}$/.test(agent)) throw new PolicyError(400, "invalid_request", "agent must be an agent id such as agent/qa, or left out for all agents");
+		return this.#controls().agentStatus(agent);
+	}
+
 	/** An agent's operator instructions and the role's prompt, as Operations holds them. */
 	async setup(agent: string): Promise<unknown> {
 		if (!/^agent\/[a-z0-9][a-z0-9._-]{0,48}$/.test(agent)) throw new PolicyError(400, "invalid_request", "agent must be an agent id such as agent/reviewer");
@@ -187,11 +193,14 @@ export class ManagerService {
 	}
 
 	/** A chat message to an agent whose answer comes back to the owner in Telegram. Sending is the only effect; no approval is needed. */
-	async ask(request: { agent: string; text: string }): Promise<unknown> {
+	async ask(request: { agent?: string; agents?: string[]; text: string; then?: string }): Promise<unknown> {
 		if (!this.chats) throw new PolicyError(503, "not_configured", "chat is not configured");
-		const sent = await this.chats.ask(String(request.agent ?? ""), String(request.text ?? ""));
-		await this.#owner.tell(`Asked ${sent.agent}: ${clip(defang(sent.text), 300)}\nSent, waiting for a reply (I will tell you if nothing comes back in 3 minutes).`).catch(() => {});
-		return { status: "sent", agent: sent.agent, conversationId: sent.conversationId, note: "Sent. The agent's answer, if any, is shown to the owner in Telegram; it does not come back to you. Tell the owner you asked and stop." };
+		const several = Array.isArray(request.agents) && request.agents.length > 0 ? request.agents.map(String) : undefined;
+		const sent = await this.chats.ask(several ?? String(request.agent ?? ""), String(request.text ?? ""), typeof request.then === "string" ? request.then : undefined);
+		const who = sent.agents ? `${sent.agents.join(", ")} (one conversation, each sees the others' answers)` : sent.agent;
+		await this.#owner.tell(`Asked ${who}: ${clip(defang(sent.text), 300)}\nSent, waiting for a reply (I will tell you if nothing comes back in 3 minutes).`).catch(() => {});
+		const later = request.then?.trim() ? " You will be woken with the answer to do what you said (once); do not wait for it." : " The agent's answer, if any, is shown to the owner in Telegram; it does not come back to you.";
+		return { status: "sent", agent: sent.agent, ...(sent.agents ? { agents: sent.agents } : {}), conversationId: sent.conversationId, note: `Sent.${later} Tell the owner you asked and stop.` };
 	}
 
 	/** Agent ids from the catalog, for resolving short names. */
@@ -199,8 +208,8 @@ export class ManagerService {
 		return [...new Set((await this.agents()).map((a) => a.agentId).filter((id): id is string => typeof id === "string"))];
 	}
 
-	async message(request: { to: string; text: string; conversationId?: string }): Promise<unknown> {
-		if (!request.to || !request.text) throw new PolicyError(400, "invalid_request", "to and text are required");
+	async message(request: { to: string | string[]; text: string; conversationId?: string }): Promise<unknown> {
+		if (!request.to || request.to.length === 0 || !request.text) throw new PolicyError(400, "invalid_request", "to and text are required");
 		if (request.text.length > MAX_MESSAGE_CHARS) throw new PolicyError(413, "message_too_long", `messages are limited to ${MAX_MESSAGE_CHARS} characters`);
 		if (!this.#messages.take()) throw new PolicyError(429, "rate_limited", "message limit for this hour reached");
 		const sent = await this.#domain.sendMessage(request);

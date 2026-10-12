@@ -48,8 +48,13 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 			"Ask an agent for something on the owner's behalf: sends it a message (max 2000 characters, 30 per hour) to an agent given by its id or a short name such as reviewer or aikido-fixer. Ask in plain words, like a colleague: a question, or a request (\"verify SAD-123\", \"review PR 42\"). The agent decides what to do. Long work runs as its background job: its result is posted back as a message, and the owner is told when a job finishes. The agent's answer is shown to the owner in Telegram, not returned to you.",
 		promptSnippet: "Ask another agent something, or ask it to do something, on the owner's behalf",
 		promptGuidelines: ["After asking, tell the owner what you asked and stop; the answer reaches them directly and may take a while or not come."],
-		parameters: Type.Object({ agent: Type.String({ description: "agent id or short name" }), text: Type.String() }),
-		async execute(_id: string, params: { agent: string; text: string }, signal?: AbortSignal) {
+		parameters: Type.Object({
+			agent: Type.String({ description: "agent id or short name; with `agents` it can be left empty" }),
+			agents: Type.Optional(Type.Array(Type.String(), { description: "two or more agents for ONE group conversation: each gets the message and sees what the others answer" })),
+			text: Type.String(),
+			then: Type.Optional(Type.String({ description: "what the owner wants done when the answer comes, for example \"hand it to the windows developer to find the cause in the code\"; you are woken once with the answer to do it. Use it whenever the owner's request has a second step that depends on the answer" })),
+		}),
+		async execute(_id: string, params: { agent: string; agents?: string[]; text: string; then?: string }, signal?: AbortSignal) {
 			return reply(await callGateway(env, fetchApi, "POST", "/v1/chat/ask", params, signal));
 		},
 	});
@@ -60,8 +65,8 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 		description: "Send a message to another SomeWork agent by its exact id (for example agent/reviewer). Prefer somework_ask, which also routes the answer to the owner.",
 		promptSnippet: "Chat with another agent",
 		promptGuidelines: [untrusted],
-		parameters: Type.Object({ to: Type.String({ description: "agent id" }), text: Type.String(), conversationId: Type.Optional(Type.String()) }),
-		async execute(_id: string, params: { to: string; text: string; conversationId?: string }, signal?: AbortSignal) {
+		parameters: Type.Object({ to: Type.Union([Type.String(), Type.Array(Type.String())], { description: "agent id, or a list of agent ids for a group conversation" }), text: Type.String(), conversationId: Type.Optional(Type.String()) }),
+		async execute(_id: string, params: { to: string | string[]; text: string; conversationId?: string }, signal?: AbortSignal) {
 			return reply(await callGateway(env, fetchApi, "POST", "/v1/messages", params, signal));
 		},
 	});
@@ -99,6 +104,18 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 		parameters: Type.Object({ agent: Type.String({ description: "agent id such as agent/reviewer" }) }),
 		async execute(_id: string, params: { agent: string }, signal?: AbortSignal) {
 			return reply(await callGateway(env, fetchApi, "GET", `/v1/control/handlers?agent=${encodeURIComponent(params.agent)}`, undefined, signal));
+		},
+	});
+
+	pi.registerTool({
+		name: "somework_status",
+		label: "Agent Status",
+		description: "What the agents are doing now: for every agent (or one, with agent) whether it is alive, the jobs that run and the jobs that wait and for what (a resource such as app-stack), the last jobs that finished with their result and summary, today's spend and model, and the fleet limits every run is held to. Read only. Use it whenever the owner asks how an agent is doing, whether something is running, what is queued or why something takes long, instead of guessing from messages.",
+		promptSnippet: "See what every agent is doing now: running and waiting jobs, recent results, spend",
+		promptGuidelines: [untrusted],
+		parameters: Type.Object({ agent: Type.Optional(Type.String({ description: "agent id such as agent/qa; leave out for all agents" })) }),
+		async execute(_id: string, params: { agent?: string }, signal?: AbortSignal) {
+			return reply(await callGateway(env, fetchApi, "GET", `/v1/status${params.agent ? `?agent=${encodeURIComponent(params.agent)}` : ""}`, undefined, signal, MAX_SETUP_CHARS));
 		},
 	});
 

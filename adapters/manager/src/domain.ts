@@ -16,7 +16,8 @@ export interface InboundMessage {
 }
 
 export interface OutgoingMessage {
-	to: string;
+	/** One recipient, or several for a group conversation. */
+	to: string | string[];
 	/** Kind of the recipient's principal; `agent` unless said otherwise. */
 	recipientKind?: string;
 	text: string;
@@ -130,7 +131,7 @@ export class RestDomain implements DomainApi {
 			"/v1/messages",
 			{
 				...(message.type ? { type: message.type } : {}),
-				recipients: [{ kind: message.recipientKind ?? "agent", id: message.to }],
+				recipients: (Array.isArray(message.to) ? message.to : [message.to]).map((id) => ({ kind: message.recipientKind ?? "agent", id })),
 				content: { mediaType: "text/plain", data: message.text },
 				conversationId: message.conversationId,
 				...(message.replyTo ? { replyTo: message.replyTo, causationId: message.replyTo } : {}),

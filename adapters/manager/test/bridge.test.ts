@@ -211,3 +211,14 @@ test("says what it cannot read instead of a flat refusal, and takes a caption as
 	assert.equal(promptsOf(calls)[0], "[telegram] waits for app-stack, what is that?");
 	stopTyping(bridge);
 });
+
+test("a follow-up reaches the model as it is, not as the owner's words, and waits for the run in progress", async () => {
+	const { api, texts } = recordingApi();
+	const { rpc, calls } = stubRpc();
+	const bridge = new TelegramBridge({ state: owner(), api, rpc, save: async () => {} });
+	await bridge.wake("You asked agent/qa something.\n<<<ANSWER-x\nit is done\nANSWER-x>>>");
+	const [prompt] = promptsOf(calls);
+	assert.ok(prompt!.endsWith("it is done\nANSWER-x>>>") && !prompt!.includes("[telegram]"), prompt);
+	stopTyping(bridge);
+	assert.deepEqual(texts(), []);
+});

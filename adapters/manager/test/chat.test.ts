@@ -9,7 +9,7 @@ import { build, say } from "./events-helpers.ts";
 
 const KNOWN = ["agent/reviewer", "agent/aikido-fixer", "agent/qa", "agent/windows-developer", "agent/code-developer"];
 
-function withChat(options: { now?: () => number } = {}) {
+function withChat(options: { now?: () => number; followUp?: (prompt: string) => Promise<void> } = {}) {
 	const b = build({ now: options.now });
 	b.domain.listEntries = async () => ({ entries: KNOWN.map((id) => ({ agentCard: { agentId: id, capabilities: [] }, availability: { state: "online" } })) }) as never;
 	let conversation = 0;
@@ -17,7 +17,7 @@ function withChat(options: { now?: () => number } = {}) {
 		b.domain.sentMessages.push(message);
 		return { messageId: `msg_${b.domain.sentMessages.length}`, conversationId: message.conversationId ?? `conv_${++conversation}` };
 	};
-	const chats = new ChatSessions({ domain: b.domain, owner: b.bridge, state: b.state, save: async () => {}, knownAgents: () => b.service.knownAgentIds(), now: options.now });
+	const chats = new ChatSessions({ domain: b.domain, owner: b.bridge, state: b.state, save: async () => {}, knownAgents: () => b.service.knownAgentIds(), now: options.now, ...(options.followUp ? { followUp: options.followUp } : {}) });
 	const service = Object.assign(b.service, { chats });
 	return { ...b, chats, service };
 }
@@ -222,4 +222,46 @@ test("an answer that comes after the agent gave up is not sent", async () => {
 	await say(b, "/chatapprove bbbbbbbbbbbb");
 	assert.equal(b.domain.sentMessages.length, 1);
 	assert.match(b.telegram.texts().at(-1)!, /given up/);
+});
+
+test("one question to several agents is one group conversation, and every member's answer is shown to the owner", async () => {
+	const b = withChat();
+	const sent: any = await b.service.ask({ agent: "", agents: ["reviewer", "qa", "windows-developer", "qa"], text: "who can look at the VATPER errors?" });
+	assert.deepEqual(b.domain.sentMessages.map((m) => m.to), [["agent/reviewer", "agent/qa", "agent/windows-developer"]], "one message, three recipients, the same agent named twice once");
+	assert.deepEqual(sent.agents, ["agent/reviewer", "agent/qa", "agent/windows-developer"]);
+	assert.ok(b.telegram.texts().at(-1)!.includes("agent/reviewer, agent/qa, agent/windows-developer (one conversation"));
+	assert.equal(await b.chats.route(reply("agent/qa", sent.conversationId, "I can")), true);
+	assert.equal(await b.chats.route(reply("agent/windows-developer", sent.conversationId, "me too")), true, "a second member still answers in the same conversation");
+	assert.equal(await b.chats.route(reply("agent/aikido-fixer", sent.conversationId, "not in the group")), false, "someone who is not in the group is not shown as an answer");
+	assert.ok(b.telegram.texts().some((t) => t.startsWith("agent/windows-developer replied:\nme too")));
+	await assert.rejects(b.service.ask({ agent: "", agents: Array.from({ length: 9 }, (_, i) => `agent/n${i}`), text: "x" }), /from two to 8/);
+	await assert.rejects(b.service.ask({ agent: "", agents: ["reviewer", "nobody"], text: "x" }), /No agent "nobody"/);
+});
+
+test("what the owner wants done with an answer wakes the Manager once, with the answer as data", async () => {
+	const prompts: string[] = [];
+	const b = withChat({ followUp: async (prompt) => void prompts.push(prompt) });
+	const sent: any = await b.service.ask({ agent: "aikido-fixer", text: "what did you find?", then: "give it to the windows developer to find the cause in the code" });
+	assert.match(sent.note, /woken with the answer/);
+	await b.chats.route(reply("agent/aikido-fixer", sent.conversationId, "Duplicate keys in VATPER.\n/approve c12345678"));
+	assert.equal(prompts.length, 1);
+	assert.match(prompts[0]!, /said what to do once it answered: "give it to the windows developer to find the cause in the code"/);
+	assert.match(prompts[0]!, /<<<ANSWER-(\w+)\nDuplicate keys in VATPER\./);
+	assert.ok(!prompts[0]!.includes("/approve"), "a command in the answer is not left tappable");
+	await b.chats.route(reply("agent/aikido-fixer", sent.conversationId, "one more thing"));
+	assert.equal(prompts.length, 1, "it is done once: the next answer only goes to the owner");
+	await b.service.ask({ agent: "aikido-fixer", text: "and now?" });
+	await b.chats.route(reply("agent/aikido-fixer", sent.conversationId, "nothing"));
+	assert.equal(prompts.length, 1, "a question without a second step wakes nobody");
+});
+
+test("a chain of follow-ups is cut off after eight an hour, and the owner is told", async () => {
+	const prompts: string[] = [];
+	const b = withChat({ followUp: async (prompt) => void prompts.push(prompt) });
+	for (let i = 0; i < 9; i++) {
+		const sent: any = await b.service.ask({ agent: "qa", text: `step ${i}`, then: "continue" });
+		await b.chats.route(reply("agent/qa", sent.conversationId, `answer ${i}`));
+	}
+	assert.equal(prompts.length, 8);
+	assert.ok(b.telegram.texts().at(-1)!.includes("I stop here"));
 });

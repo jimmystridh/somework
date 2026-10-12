@@ -50,6 +50,9 @@ export interface BridgeDeps {
 }
 
 /** What Telegram showed the owner that the Manager's model has not read yet: agents' answers, notices, job results, questions. */
+/** How long a follow-up waits for the Manager's run in progress, and how often it looks. */
+const WAKE_WAIT_MS = 120_000;
+const WAKE_POLL_MS = 3000;
 const SHOWN_KEEP = 8;
 const SHOWN_CHARS = 700;
 const SHOWN_MAX_AGE_MS = 6 * 3_600_000;
@@ -365,7 +368,22 @@ export class TelegramBridge implements Owner {
 		}
 	}
 
-	async prompt(chatId: number, text: string, original?: any): Promise<void> {
+	/**
+	 * Gives the Manager's model something to continue with that did not come from the owner (the answer to a question it was asked to follow up).
+	 * Waits, up to two minutes, for the run in progress to end; the owner is told when it cannot be done.
+	 */
+	async wake(text: string): Promise<void> {
+		const chatId = this.state.chatId;
+		if (chatId === undefined) return;
+		for (let waited = 0; waited <= WAKE_WAIT_MS; waited += WAKE_POLL_MS) {
+			const busy = this.active !== undefined || (await this.rpc.command("get_state").catch(() => ({ isStreaming: true }))).isStreaming;
+			if (!busy) return this.prompt(chatId, text, undefined, true);
+			await new Promise((resolve) => setTimeout(resolve, WAKE_POLL_MS));
+		}
+		await this.reply(chatId, "An agent answered the question you asked me to follow up, but I was busy. Tell me to carry on.").catch(() => {});
+	}
+
+	async prompt(chatId: number, text: string, original?: any, own = false): Promise<void> {
 		if (this.active || (await this.rpc.command("get_state")).isStreaming) {
 			await this.reply(chatId, "The Manager is busy. Wait for its reply, or send /stop first.");
 			return;
@@ -376,7 +394,7 @@ export class TelegramBridge implements Owner {
 		this.typingTimer = setInterval(typing, 4500);
 		try {
 			const context = this.#context(original);
-			await this.rpc.command("prompt", { message: `${context.text}[telegram] ${text}` });
+			await this.rpc.command("prompt", { message: own ? `${context.text}${text}` : `${context.text}[telegram] ${text}` });
 			this.#shown.splice(0, context.taken);
 		} catch {
 			this.active = undefined;

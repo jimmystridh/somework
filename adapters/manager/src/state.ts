@@ -44,6 +44,10 @@ export interface ChatApprovalRecord {
 
 export interface ChatRecord {
 	agent: string;
+	/** All the agents of a group conversation (several recipients in one conversation); absent for a chat with one agent. */
+	agents?: string[];
+	/** What the owner wants done when the answer comes: the Manager is woken with the answer and this, once. */
+	then?: string;
 	startedAt: string;
 	lastSentAt: string;
 	/** Set while the last message has no answer yet; cleared by a reply. */
