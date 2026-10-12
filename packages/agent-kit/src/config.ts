@@ -33,6 +33,8 @@ export interface Config {
 	limits: { maxTokensCap: number; maxMinutesCap: number; dailyTokenLimit: number; budgetRaiseCeiling: number; budgetControllers?: string[] };
 	shards?: ShardTable;
 	healthPort: number;
+	/** Minutes between the role's preflight checks (`PREFLIGHT_MINUTES`); 0 runs them at start only. */
+	preflight: { minutes: number };
 	concurrency: number;
 	leaseSeconds: number;
 	approvalPatterns: string[];
@@ -52,6 +54,12 @@ const required = (env: NodeJS.ProcessEnv, name: string): string => {
 const integer = (env: NodeJS.ProcessEnv, name: string, fallback: number): number => {
 	const value = env[name] === undefined ? fallback : Number(env[name]);
 	if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+	return value;
+};
+
+const minutes = (env: NodeJS.ProcessEnv, name: string, fallback: number): number => {
+	const value = env[name] === undefined || env[name] === "" ? fallback : Number(env[name]);
+	if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a whole number of minutes, 0 or more`);
 	return value;
 };
 
@@ -93,6 +101,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			...(env.BUDGET_CONTROLLERS ? { budgetControllers: env.BUDGET_CONTROLLERS.split(/[\s,]+/).filter(Boolean) } : {}) },
 		shards,
 		healthPort: integer(env, "HEALTH_PORT", 8081),
+		preflight: { minutes: minutes(env, "PREFLIGHT_MINUTES", 15) },
 		concurrency: integer(env, "PI_CONCURRENCY", 2),
 		leaseSeconds: integer(env, "SOMEWORK_LEASE_SECONDS", 60),
 		approvalPatterns: (env.APPROVAL_PATTERNS ?? "").split("\n").filter(Boolean),

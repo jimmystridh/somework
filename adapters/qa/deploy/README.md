@@ -53,7 +53,7 @@ breaks one of them): device-code login for this agent (`node node_modules\@earen
 install directory, approve the code in a browser anywhere) and put the resulting `auth.json` at `C:\somework\state\auth.json`.
 
 **Git token.** Needed only when the repository under test is private: a fine-grained token for that repository with read access
-(Contents), in `C:\somework\secrets\git-token`. `GIT_TOKEN_HOSTS` is the only place the service will send it. Without it, leave
+(Contents) and Pull requests (read: without it every pull request lookup answers 403 and the agent falls back to branches, and the preflight says so), in `C:\somework\secrets\git-token`. `GIT_TOKEN_HOSTS` is the only place the service will send it. Without it, leave
 `GIT_TOKEN_FILE` out of `agent.env`.
 
 **Mirror and PATH.** For a large repository set `GIT_MIRROR_DIR`, `GIT_MIRROR_REPOS` and `GIT_MIRROR_REFRESH_MINUTES` (see `agent.env.example`): the kit keeps a bare mirror on the data volume and each task clones from it instead of downloading the repository again (the first refresh takes as long as one full clone). A profile's start and stop commands run in Git Bash with `WINDOWS_PATH_DIRS` as the whole `PATH`; if they call `powershell.exe`, that list must include `C:\Windows\System32\WindowsPowerShell\v1.0` (a missing entry shows up as `powershell.exe: command not found`, exit 127).
@@ -102,7 +102,7 @@ Get-Content C:\somework\logs\supervisor.log -Tail 5
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8082/ready | Select-Object -ExpandProperty Content
 ```
 `/ready` includes the application profiles and, with a ticket system, a real call to it (`/myself`), so a wrong certificate or token shows
-up here. Then ask the agent in a message to verify a ticket on a practice setup (it starts a `verify_ticket` job), answer the approvals it asks for, and read the result message and
+up here. `/ready` also lists `preflight` (every 15 minutes, `PREFLIGHT_MINUTES`; they never make the agent not ready): `github-repository` (the git token reads the repository), `github-pull-requests` (the token has Pull requests: read; a failed warning says "the token lacks Pull requests: read; branches are found through git instead") and `jira` (`/myself` answers). The GitHub checks cover the repositories in `CHAT_REPOSITORY_URL` and `GIT_MIRROR_REPOS`, so set one of them. A turn to bad is logged once as `preflight_failed` and alerts in Grafana; `somework_preflight_ok{check}` holds the standing state. Then ask the agent in a message to verify a ticket on a practice setup (it starts a `verify_ticket` job), answer the approvals it asks for, and read the result message and
 the ticket.
 
 ## If it does not work

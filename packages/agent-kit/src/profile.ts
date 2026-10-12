@@ -8,6 +8,7 @@ import { validateEventsProfile } from "./events/config.ts";
 import type { EventsProfile } from "./events/types.ts";
 import type { FinalizeResult } from "./git.ts";
 import type { Log } from "./log.ts";
+import type { PreflightCheck, PreflightContext } from "./preflight.ts";
 import type { AgentRuntime, Budget, Usage } from "./runtime.ts";
 import type { ObserveProfile } from "./observe/config.ts";
 
@@ -163,6 +164,14 @@ export interface RoleHooks {
 	extensions?: Extension<any>[];
 	/** Extra readiness checks next to the sandbox: name to ok. */
 	readinessChecks?: Record<string, () => Promise<boolean>>;
+	/**
+	 * What the role needs in order to do its work well and cannot see until a job goes wrong: a credential's permissions, a system that must
+	 * answer. Run at start and every `PREFLIGHT_MINUTES` (default 15, 0 = at start only). The results are `preflight` in `/ready` and
+	 * `/profile`, the gauge `somework_preflight_ok{check}`, and a `preflight_failed` warning once each time a check turns bad. A failed check
+	 * never takes the agent down unless it is an `error` marked `blocking: true`, which makes `/ready` answer 503. Return only statuses and
+	 * words in `detail`, no secret.
+	 */
+	preflight?(context: PreflightContext): Promise<PreflightCheck[]>;
 	/**
 	 * The role's own execution environment for the model's tools and the git steps (a role that runs on a machine without the container
 	 * sandbox). When set, the kit neither needs a sandbox URL token nor checks the sandbox's health.

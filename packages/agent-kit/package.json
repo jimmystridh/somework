@@ -25,6 +25,7 @@
     "./metrics": "./src/metrics.ts",
     "./observe": "./src/observe/index.ts",
     "./pi-runtime": "./src/pi-runtime.ts",
+    "./preflight": "./src/preflight.ts",
     "./policy": "./src/policy.ts",
     "./profile": "./src/profile.ts",
     "./providers": "./src/providers/index.ts",

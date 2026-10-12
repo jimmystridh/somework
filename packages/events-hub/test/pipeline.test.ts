@@ -9,6 +9,7 @@ import { forwardUrl } from "../src/forwarder.ts";
 import { MappingEngine } from "../src/mapping.ts";
 import { ReceiverClient, type ReceiverApi } from "../src/receiver-client.ts";
 import { createHubServer } from "../src/server.ts";
+import { jsonLogger } from "../src/log.ts";
 import { githubPr, MAPPINGS, post, removeDir, SECRET, startEdge, startWorld, tempDir, waitFor, type World } from "./support.ts";
 
 const worlds: World[] = [];
@@ -84,6 +85,23 @@ describe("from webhook to published event", () => {
 		await waitFor(() => w.edge.queue.stats().queued === 0, 8000, "the ping to be acknowledged");
 		assert.equal(w.domain.calls.length, 0);
 		assert.match(w.hub.metrics.render(), /hub_events_dropped_total\{reason="no_event",source="github"\} 1/);
+	});
+
+	it("counts a webhook that maps to nothing as unmapped, and the log names its keys instead of '[object]'", async () => {
+		const lines: string[] = [];
+		const w = await world({ log: jsonLogger((line) => lines.push(line)) });
+		await post(w.edge.hook("github"), { headers: { "x-github-event": "ping", "x-github-delivery": "p2", "content-type": "application/json" }, body: JSON.stringify({ zen: "Keep it logically awesome.", hook_id: 1 }) });
+		await post(w.edge.hook("github"), githubPr("mapped-1"));
+		w.hub.start();
+		await waitFor(() => w.domain.uniqueEvents === 1 && w.edge.queue.stats().queued === 0, 8000, "the ping to be acknowledged and the pull request published");
+		const metrics = w.hub.metrics.render();
+		assert.match(metrics, /hub_events_unmapped_total\{source="github"\} 1\n/, "only the ping");
+		const unmapped = lines.map((line) => JSON.parse(line)).filter((line) => line.event === "event_unmapped");
+		assert.equal(unmapped.length, 1);
+		assert.equal(unmapped[0].source, "github");
+		assert.equal(unmapped[0].keys, "zen,hook_id");
+		assert.ok(!lines.join("\n").includes("logically awesome"), "key names, never values of other keys");
+		assert.ok(!lines.join("\n").includes("[object]"));
 	});
 });
 
@@ -442,7 +460,7 @@ describe("operating the hub", () => {
 		await waitFor(() => w.domain.uniqueEvents === 1, 8000, "an event");
 		assert.equal((await fetch(`${base}/healthz`)).status, 200);
 		const metrics = await (await fetch(`${base}/metrics`)).text();
-		for (const name of ["hub_events_received_total", "hub_events_published_total", "hub_events_duplicate_total", "hub_events_dropped_total", "hub_events_dead_lettered_total", "hub_dead_letters", "hub_receiver_oldest_pending_age_seconds", "hub_receiver_up"]) assert.match(metrics, new RegExp(`# TYPE ${name} `), name);
+		for (const name of ["hub_events_received_total", "hub_events_published_total", "hub_events_duplicate_total", "hub_events_dropped_total", "hub_events_unmapped_total", "hub_events_dead_lettered_total", "hub_dead_letters", "hub_receiver_oldest_pending_age_seconds", "hub_receiver_up"]) assert.match(metrics, new RegExp(`# TYPE ${name} `), name);
 		assert.match(metrics, /hub_events_received_total\{source="github"\} 1/);
 		assert.match(metrics, /hub_events_published_total\{source="github"\} 1/);
 		await waitFor(() => /hub_receiver_up 1/.test(w.hub.metrics.render()), 5000, "receiver up gauge");

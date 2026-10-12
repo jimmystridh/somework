@@ -1,4 +1,4 @@
-import { runAgentService, type AgentProfile, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
+import { githubPreflightFor, runAgentService, type AgentProfile, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
 import { windowsExecutionHooks } from "@somework/agent-kit/windows";
 import { windowsDeveloperChat } from "./chat.ts";
 import { profile as defaultProfile } from "./profile.ts";
@@ -14,9 +14,11 @@ export function windowsHooksFor(settings: WindowsSettings, context: ServiceConte
 	const profiles = loadProfiles(settings.profilesFile);
 	const role = createRole({ profiles, secrets: [context.gitToken, ...Object.values(context.ownerTokens ?? {})].filter((value): value is string => Boolean(value)), log: context.log });
 	context.log("info", "windows_profiles_loaded", { root: settings.root, build: Object.keys(profiles.build), test: Object.keys(profiles.test) });
+	const preflight = githubPreflightFor(context, { withoutPullRequests: "pull requests cannot be found or opened" });
 	return {
 		...role.hooks,
 		chat: windowsDeveloperChat(context.env),
+		...(preflight ? { preflight } : {}),
 		...windowsExecutionHooks(settings),
 	};
 }

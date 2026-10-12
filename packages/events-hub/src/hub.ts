@@ -57,6 +57,13 @@ export function shapeOf(body: unknown): { keys: string[]; values: Record<string,
 	return { keys: Object.keys(record).slice(0, 40).map((key) => key.slice(0, 40)), values };
 }
 
+/** `shapeOf` as flat log fields: the logger turns an object into "[object]", which is how the key names of an unmapped delivery once never reached the log. */
+export function shapeFields(body: unknown): { shape: string } | { keys: string; values: string } {
+	const shape = shapeOf(body);
+	if (typeof shape === "string") return { shape };
+	return { keys: shape.keys.join(","), values: Object.entries(shape.values).map(([key, value]) => `${key}=${value}`).join(",") };
+}
+
 export class Hub {
 	readonly metrics = new Metrics();
 	readonly clock: Clock | undefined;
@@ -71,6 +78,7 @@ export class Hub {
 	readonly #published;
 	readonly #duplicates;
 	readonly #dropped;
+	readonly #unmapped;
 	readonly #deadLettered;
 	readonly #failures;
 	readonly #forwarded;
@@ -95,6 +103,7 @@ export class Hub {
 		this.#published = m.counter("hub_events_published_total", "Events accepted by the domain, by source.");
 		this.#duplicates = m.counter("hub_events_duplicate_total", "Events the domain already had (same key), by source.");
 		this.#dropped = m.counter("hub_events_dropped_total", "Webhooks that produced no event, by source and reason.");
+		this.#unmapped = m.counter("hub_events_unmapped_total", "Webhooks the mapping turned into no event without naming a reason (also counted in hub_events_dropped_total{reason=\"no_event\"}), by source.");
 		this.#deadLettered = m.counter("hub_events_dead_lettered_total", "Webhooks moved to the dead-letter store, by source and kind.");
 		this.#failures = m.counter("hub_publish_failures_total", "Failed attempts to publish or forward, by source and kind (transient or permanent).");
 		this.#forwarded = m.counter("hub_forwarded_total", "Webhooks replayed to a private target, by source.");
@@ -152,7 +161,10 @@ export class Hub {
 			this.#log("warn", "event_dropped", { source: source.name, id: item.id, reason });
 		}
 		if (events.length === 0) {
-			if (rejected.length === 0) this.#log("info", "event_unmapped", { source: source.name, id: item.id, shape: shapeOf(input.body) });
+			if (rejected.length === 0) {
+				this.#unmapped({ source: source.name });
+				this.#log("info", "event_unmapped", { source: source.name, id: item.id, ...shapeFields(input.body) });
+			}
 			return { kind: "dropped", reason: rejected[0] ?? "no_event" };
 		}
 		let duplicates = 0;

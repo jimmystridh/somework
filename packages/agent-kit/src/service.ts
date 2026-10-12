@@ -39,6 +39,7 @@ import { jsonLogger } from "./log.ts";
 import { Metrics } from "./metrics.ts";
 import { PiDurableRuntime } from "./pi-runtime.ts";
 import { approvalPolicy } from "./policy.ts";
+import { Preflight } from "./preflight.ts";
 import { McpHub } from "./mcp/hub.ts";
 import { createMcpTools, MCP_CALL_TOOL, MCP_TOOL_NAMES } from "./mcp/tools.ts";
 import { libraryExtension, SKILL_LIBRARY_TOOL } from "./setup/library.ts";
@@ -400,6 +401,9 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			engineRef = engine;
 
 
+			const preflight = hooks.preflight
+				? new Preflight({ checks: (checkContext) => hooks.preflight!(checkContext), log, metrics, secrets: [gitToken, ...Object.values(ownerTokens)].filter((value): value is string => Boolean(value)), everyMs: config.preflight.minutes * 60_000 })
+				: undefined;
 			const describe = () => withChangeMarker(
 				describeAgent({
 					profile,
@@ -426,6 +430,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					telegram: { enabled: Boolean(telegram), allowedUsers: telegram?.start.allowed.size ?? 0 },
 					slack: { enabled: Boolean(slack), allowedUsers: slack?.start.allowedUsers.size ?? 0, channels: slack?.start.allowedChannels.size ?? 0 },
 					setup: setup.report({ model: runtime.model }),
+					...(preflight ? { preflight: { everyMinutes: config.preflight.minutes, checks: preflight.results() } } : {}),
 					includePrompt: env.PROFILE_PROMPT !== "0",
 				}),
 				join(config.state.dir, "profile-hash.json"),
@@ -435,10 +440,12 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				metrics,
 				profile: describe,
 				history: (limit) => journal.recent(limit),
+				...(preflight ? { preflight } : {}),
 				status: () => ({ ...(events ? events.status() : { handlers: [], tokenPools: ledger.usage() }), chat: { mode: threadSettings.enabled ? "threads" : "off", approvers: threadSettings.approvers, jobs: jobs.active().length, conversations: engine.active, queued: engine.queued }, ...(observe ? { observe: observe.status() } : {}) }),
 				checks: { ...(hooks.envFactory ? {} : { sandbox: async () => (await fetch(`${config.sandbox.url}/healthz`, { signal: AbortSignal.timeout(2000) })).ok }), ...hooks.readinessChecks },
 			});
 			health.listen(config.healthPort, hooks.healthBind ?? "0.0.0.0");
+			preflight?.start(stop.signal);
 
 			if (config.git.mirror && config.git.mirror.repositories.length > 0) {
 				startMirrorRefresh({ session, repositories: config.git.mirror.repositories, everyMinutes: config.git.mirror.refreshMinutes, signal: stop.signal, log: (level, event, fields) => log(level, event, fields) });

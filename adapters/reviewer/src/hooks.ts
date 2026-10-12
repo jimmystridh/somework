@@ -1,4 +1,4 @@
-import { InvalidInput, silent, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
+import { githubPreflightFor, InvalidInput, silent, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
 import type { SomeWorkClient } from "@somework/sdk";
 import { reviewerChat } from "./chat.ts";
 import { fetchPullRequestContext } from "./context.ts";
@@ -81,6 +81,8 @@ async function invalidOutput(context: ResultContext, reason: string, raw: string
 	return { failure: { code: "invalid_review_output", message: `the review could not be turned into a result: ${reason}`, retryable: false, details: { rawAnswer: { artifactId: artifact.artifactId, uri: artifact.uri } } } };
 }
 
+const preflightOf = (preflight: RoleHooks["preflight"] | undefined): Pick<RoleHooks, "preflight"> => (preflight ? { preflight } : {});
+
 /** For `runAgentService`: the hooks of the service being composed (its client, log and optional read-only token). */
 export function reviewerHooksFor(context: ServiceContext): RoleHooks {
 	seedHandler({ stateDir: context.config.state.dir, settings: loadReviewEventSettings(context.env), log: context.log, reseed: context.env.REVIEWER_RESEED_HANDLER === "1" });
@@ -89,6 +91,7 @@ export function reviewerHooksFor(context: ServiceContext): RoleHooks {
 
 const reviewerHooks = (context: ServiceContext): RoleHooks => ({
 	chat: reviewerChat(context.env),
+	...preflightOf(githubPreflightFor(context, { withoutPullRequests: "reviews run without the pull request's description, files and checks" })),
 	...createReviewerHooks({
 		client: context.client,
 		log: context.log,

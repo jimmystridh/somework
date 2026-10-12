@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { Metrics } from "./metrics.ts";
+import type { PreflightResult } from "./preflight.ts";
 import type { AgentRuntime } from "./runtime.ts";
 
 export interface HealthOptions {
@@ -13,6 +14,8 @@ export interface HealthOptions {
 	profile?: () => unknown;
 	/** The agent's recent jobs, newest first (names, outcomes, counts and short redacted text, see `journal.ts`): served on `/history?limit=N`. */
 	history?: (limit: number) => unknown[];
+	/** The role's preflight results (see `preflight.ts`): shown in `/ready`, where a failed blocking check makes the answer 503. */
+	preflight?: { results(): PreflightResult[]; blocking(): string[] };
 }
 
 /** `/live`: the process is up. `/ready`: it can accept a job (storage open and resumed, dependencies reachable). `/status`: handlers and token pools. `/profile`: how the agent is set up. `/history`: its recent jobs. `/metrics`: Prometheus. */
@@ -31,7 +34,8 @@ export function createHealthServer(options: HealthOptions): Server {
 			const runtime = options.runtime.health();
 			const failed: string[] = runtime.ready ? [] : [`runtime: ${runtime.reason}`];
 			for (const [name, check] of Object.entries(options.checks ?? {})) if (!(await check().catch(() => false))) failed.push(name);
-			return void res.writeHead(failed.length ? 503 : 200, { "content-type": "application/json" }).end(JSON.stringify({ ready: failed.length === 0, failed, ...(options.status?.() ?? {}) }));
+			if (options.preflight) failed.push(...options.preflight.blocking().map((name) => `preflight: ${name}`));
+			return void res.writeHead(failed.length ? 503 : 200, { "content-type": "application/json" }).end(JSON.stringify({ ready: failed.length === 0, failed, ...(options.preflight ? { preflight: options.preflight.results() } : {}), ...(options.status?.() ?? {}) }));
 		}
 		res.writeHead(404).end();
 	});

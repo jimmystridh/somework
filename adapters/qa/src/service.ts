@@ -8,6 +8,7 @@ import { qaChat } from "./chat.ts";
 import { createQaHooks } from "./hooks.ts";
 import { JiraClient } from "./jira.ts";
 import { createJiraTools, jiraToolApprovals } from "./jira-tools.ts";
+import { qaPreflight } from "./preflight.ts";
 import { qaProfile } from "./profile.ts";
 import { QaSession } from "./session.ts";
 import { loadQaEventSettings, seedHandler } from "./seed.ts";
@@ -44,8 +45,10 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 		log: context.log,
 		secrets: [context.gitToken, ...Object.values(context.ownerTokens ?? {}), jiraSecrets?.token, jiraSecrets?.passphrase].filter((value): value is string => Boolean(value)),
 	});
+	const preflight = qaPreflight(context, jiraClient ? { jira: jiraClient } : {});
 	return {
 		...hooks,
+		...(preflight ? { preflight } : {}),
 		chat: qaChat(context.env, settings.ticketPattern, tools),
 		...execution,
 		readinessChecks: {

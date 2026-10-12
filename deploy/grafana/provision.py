@@ -2,7 +2,7 @@
 """Creates (or updates, by uid) the SomeWork agents dashboard and its alert rules in Grafana. Standard library only; idempotent.
 
 Everything is derived from the agents' structured logs that Alloy ships to Loki (events job_finished, job_failed, job_refused,
-approval_requested, service_started, NATS fallback warnings), so it works for every agent role and host: docker agents, the Windows
+approval_requested, service_started, preflight_failed, event_unmapped, any *_failed warning, NATS fallback warnings), so it works for every agent role and host: docker agents, the Windows
 agents' JSON files and the manager's journal. No notification target is configured (alert state is visible in Grafana only), like the
 existing storage alert.
 
@@ -18,7 +18,9 @@ import urllib.error
 import urllib.request
 
 LABELS = "{{host}} {{container}} {{service_name}}"
-SELECT_JOBS = '{event="job_finished"} | json | __error__=""'
+# a warning whose event name ends in _failed (the kit's and the roles' "this degraded silently" lines); preflight_failed has its own rule
+WARN_FAILED = '{level="warn"} |~ `"event":\\s*"[a-z_]+_failed"` !~ `"event":\\s*"preflight_failed"`'
+SELECT_JOBS ='{event="job_finished"} | json | __error__=""'
 
 
 def dashboard(ds):
@@ -96,6 +98,15 @@ def rules(ds, folder):
              'max(sum by (host, container, service_name) (count_over_time({event="service_started"}[30m])))', 3, 1800, "page", "An agent started more than 3 times in 30 minutes (crash loop)"),
         rule(ds, folder, "somework-nats-fallback", "SomeWork agents lost their NATS wake",
              'sum(count_over_time({event=~"NATS wake unavailable.*"}[15m]))', 5, 900, "ticket", "Agents are polling over HTTP because NATS is unavailable or untrusted"),
+        rule(ds, folder, "somework-warn-failures", "SomeWork service logging failures as warnings",
+             f'max(sum by (host, container, service_name) (count_over_time({WARN_FAILED} [1h])))', 5, 3600, "ticket",
+             "A service logged more than 5 *_failed warnings in the last hour (something it depends on is failing without stopping it: a credential, a lookup, a delivery)"),
+        rule(ds, folder, "somework-preflight-failed", "SomeWork agent preflight check failed",
+             'sum(count_over_time({event="preflight_failed"}[15m]))', 0, 900, "ticket",
+             "An agent's preflight check turned bad in the last 15 minutes (a credential lacks a permission or a system does not answer): the log line names the check, /ready and /profile show it"),
+        rule(ds, folder, "somework-hub-unmapped", "SomeWork event hub deliveries mapped to no event",
+             'sum(count_over_time({event="event_unmapped"}[1h]))', 20, 3600, "ticket",
+             "The event hub received more than 20 webhooks in an hour that its mapping turned into no event (a source changed its payload or is misconfigured): the log line names the keys of the body"),
         rule(ds, folder, "windows-alloy-errors", "Windows log shipper (Alloy) errors",
              'sum(count_over_time({host=~"admin-cloud-windows.*", service_name="Application"} |= "Alloy" |= "level=error" [30m]))', 5, 1800, "ticket",
              "Alloy on a Windows machine is logging errors (wrong identity, corrupt write-ahead log, rejected old entries)"),
