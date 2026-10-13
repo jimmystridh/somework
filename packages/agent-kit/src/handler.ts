@@ -78,6 +78,8 @@ function requestedModel(value: unknown): ModelChoice | "invalid" | undefined {
 	return { ...(named ? { provider, modelId: id } : {}), ...(effort !== undefined ? { effort } : {}) };
 }
 
+/** Below this many tokens left in the day (or a twentieth of the per-job cap, when that is less) a job is refused instead of started. */
+const MIN_JOB_TOKENS = 100_000;
 const resolveWithoutSettings = (request: ModelChoice): ModelResolution =>
 	request.provider !== undefined && request.modelId !== undefined
 		? { ok: true, model: { provider: request.provider, modelId: request.modelId, ...(request.effort ? { effort: request.effort } : {}) }, sources: { provider: "job", modelId: "job", ...(request.effort ? { effort: "job" as const } : {}) } }
@@ -158,13 +160,15 @@ function createJobHandler(deps: HandlerDeps): Handler {
 		const requested = prepared.budget && prepared.budget.maxTokens > 0 && prepared.budget.maxMinutes > 0 ? prepared.budget : undefined;
 		if (!requested && (requireBudget || !profile)) return fail("budget_required", "a job without a token and time budget is not accepted");
 		// one budget for every run: the fleet's caps (Fleet limits from Operations; the agent's own environment values until it has some). What a requester or the role asks for does not lower it
-		const budget = { maxTokens: deps.limits.maxTokensCap, maxMinutes: deps.limits.maxMinutesCap };
+		// a job the rest of the day cannot cover in full still runs, up to what is left: a job costs a fraction of its cap, and only a day that is nearly used up refuses it
+		const dailyRemaining = deps.ledger?.remaining();
+		const budget = { maxTokens: Math.min(deps.limits.maxTokensCap, dailyRemaining ?? Infinity), maxMinutes: deps.limits.maxMinutesCap };
 		// one model session and one workspace per job: the jobs of a chat share its conversation, and a job that resumed the session of an earlier one repeated its conclusion instead of doing its own work
 		const agentKey: string = prepared.agentKey ?? `${scratch ? "scratch" : repository.url}#${taskId}`;
 		if (deps.shards && !ownsKey(deps.shards.table, deps.shards.agentId, agentKey)) return fail("wrong_shard", "this agent does not own the shard of that agentKey; route the task with targetAgentId from the shard table");
-		if (deps.ledger && deps.ledger.remaining() < budget.maxTokens) {
+		if (dailyRemaining !== undefined && dailyRemaining < Math.min(MIN_JOB_TOKENS, Math.ceil(deps.limits.maxTokensCap / 20))) {
 			m.jobs({ status: "budget_exhausted" });
-			log("warn", "job_refused", { taskId, reason: "budget_exhausted", requestedTokens: budget.maxTokens, remainingTokens: deps.ledger.remaining() });
+			log("warn", "job_refused", { taskId, reason: "budget_exhausted", requestedTokens: deps.limits.maxTokensCap, remainingTokens: dailyRemaining });
 			return fail("budget_exhausted", "the daily token budget does not cover this job");
 		}
 

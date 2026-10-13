@@ -129,6 +129,14 @@ describe("Pi agent service", () => {
 		assert.equal(failure(await s.run({ budget: { maxTokens: 50_000, maxMinutes: 5 } })).code, "budget_exhausted");
 	});
 
+	it("runs a job when the day cannot cover its whole cap but still holds more than a few tokens", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-ledger-"));
+		const ledger = new DailyLedger(join(dir, "ledger.json"), 6_000_000);
+		ledger.record(5_000_000);
+		const s = await stack(["final:fits in what is left"], { ledger });
+		completed(await s.run({}));
+	});
+
 	it("refuses a key that belongs to another shard", async () => {
 		const table: ShardTable = { shardCount: 2, owners: { "agent/someone-else": [[0, 1]] } };
 		const s = await stack(["final:x"], { shards: { table, agentId: "agent/ts-worker" } });
