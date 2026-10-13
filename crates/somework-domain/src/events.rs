@@ -139,6 +139,8 @@ impl Domain {
                 let mut body = route.payload.clone();
                 if let Some(obj) = body.as_object_mut() {
                     obj.entry("eventId").or_insert(json!(event_id));
+                    // the position in `GET /v1/events`, so a consumer of the NATS notification can advance its event cursor too
+                    obj.entry("eventSeq").or_insert(json!(seq));
                     obj.entry("traceparent").or_insert(json!(ctx.trace.traceparent()));
                 }
                 self.insert_outbox(conn, seq, SINK_NATS, &route.subject, &format!("{event_id}:{}", route.subject), None, &body).await?;

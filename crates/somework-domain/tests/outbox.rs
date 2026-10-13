@@ -79,6 +79,8 @@ async fn sending_a_message_atomically_persists_the_event_and_the_outbox_rows() {
     assert_eq!(notice["messageId"], sent.envelope.message_id.as_str());
     assert_eq!(notice["wake"], true);
     assert_eq!(notice["sender"], "agent/author");
+    let event_seq: i64 = sqlx::query_scalar("SELECT seq FROM events WHERE message_id = ? AND type = 'message.created'").bind(sent.envelope.message_id.as_str()).fetch_one(env.domain.db.pool()).await.unwrap();
+    assert_eq!(notice["eventSeq"], event_seq, "the notification names its position in GET /v1/events, so the consumer can advance its cursor");
     assert!(notice["traceparent"].as_str().unwrap().starts_with("00-"));
     assert!(notice.get("content").is_none(), "a notification carries only what is needed to fetch the message");
     assert!(rows.iter().any(|(s, _, _)| s == "matrix"));
