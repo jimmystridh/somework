@@ -80,7 +80,7 @@ export class TriageRuntime implements AgentRuntime {
 			this.#keep(request.requestId, { ok: true, triage: judged.parsed.triage, truncated: judged.parsed.truncated, repaired: false });
 			return first;
 		}
-		this.#log("warn", "triage_output_invalid", { requestId: request.requestId, problems: judged.problems.length, structural: !judged.parsed.ok });
+		this.#log("warn", "triage_output_invalid", { requestId: request.requestId, problems: judged.problems.length, structural: !judged.parsed.ok, what: judged.problems.slice(0, 5).map((problem) => problem.slice(0, 160)) });
 		const settle = (answer: string, problems: string[], parsed: Parsed, repaired: boolean, why: string) => {
 			if (parsed.ok) this.#keep(request.requestId, { ok: true, triage: markUnverified(parsed.triage, this.#refs), truncated: parsed.truncated, repaired });
 			else this.#keep(request.requestId, { ok: false, reason: `${problems.join("; ")}${why}`, raw: answer });

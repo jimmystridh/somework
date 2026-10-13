@@ -133,7 +133,7 @@ export function createDatadogTools(options: DatadogToolOptions): { extension: Ex
 			return await run();
 		} catch (error) {
 			if (error instanceof DatadogError) {
-				log("warn", "datadog_tool_failed", { tool, kind: error.kind, status: error.status });
+				log("warn", "datadog_tool_failed", { tool, kind: error.kind, status: error.status, detail: redact(error.message, secrets()).slice(0, 240) });
 				return failure(`Datadog could not be read (${tool}): ${redact(error.message, secrets())}`);
 			}
 			throw error;

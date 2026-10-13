@@ -209,6 +209,16 @@ export function skillsExtension(options: Omit<SkillsOptions, "allow"> & {
 	now?: () => number;
 }): Extension<any> {
 	const cache = new Map<string, { at: number; text: string | undefined }>();
+	// every job reads the skills again: a warning is logged once per process for each text, not once per job (a stale overlay filled the log 95 times a day)
+	const warned = new Set<string>();
+	const log: Log = (level, event, fields) => {
+		if (event === "skills_warning") {
+			const warning = String(fields?.warning);
+			if (warned.has(warning)) return;
+			warned.add(warning);
+		}
+		options.log?.(level, event, fields);
+	};
 	const ttl = options.cacheMs ?? 30_000;
 	const now = options.now ?? Date.now;
 	return defineExtension({
@@ -224,7 +234,7 @@ export function skillsExtension(options: Omit<SkillsOptions, "allow"> & {
 					const cacheKey = `${workspace}\u0000${options.version?.() ?? ""}\u0000${allow.join(",")}`;
 					const hit = cache.get(cacheKey);
 					if (hit && now() - hit.at < ttl) return hit.text;
-					const text = renderKnowledge(await loadKnowledge(input.env, workspace, { ...options, allow }, options.log), options.limits);
+					const text = renderKnowledge(await loadKnowledge(input.env, workspace, { ...options, allow }, log), options.limits);
 					cache.set(cacheKey, { at: now(), text });
 					if (cache.size > MAX_CACHED_SECTIONS) cache.delete(cache.keys().next().value!);
 					return text;
