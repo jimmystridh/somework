@@ -36,6 +36,7 @@ export interface AgentDescription {
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
+	watches?: { enabled: boolean };
 	/** The agent's own Telegram bot: whether it runs and how many people may write to it (never who). */
 	telegram?: { enabled: boolean; allowedUsers: number };
 	/** The agent's own Slack app: whether it runs, how many people may write to it and in how many channels it answers mentions (never who or which). */
@@ -62,6 +63,7 @@ export interface DescribeInput {
 	events: { enabled: boolean; notifyTo?: string };
 	observe: { enabled: boolean; scope?: string };
 	timers?: { enabled: boolean };
+	watches?: { enabled: boolean };
 	telegram?: { enabled: boolean; allowedUsers: number };
 	slack?: { enabled: boolean; allowedUsers: number; channels: number };
 	setup?: SetupReport;
@@ -111,6 +113,7 @@ export function describeAgent(input: DescribeInput): AgentDescription {
 		events: input.events,
 		observe: input.observe,
 		...(input.timers ? { timers: input.timers } : {}),
+		...(input.watches ? { watches: input.watches } : {}),
 		...(input.telegram ? { telegram: input.telegram } : {}),
 		...(input.slack ? { slack: input.slack } : {}),
 	};

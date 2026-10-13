@@ -57,6 +57,7 @@ import { overlayFromDirectory, skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
 import { llmUsageCounters } from "./usage-metrics.ts";
 import { createTimers } from "./timers/index.ts";
+import { createWatches } from "./watches/index.ts";
 import { resolveSlack, SlackChannel, slackApi, slackApprovals, SlackSender, slackSocketUrl, SlackStore, type SlackStart } from "./slack/index.ts";
 import { resolveTelegram, TelegramChannel, telegramApi, telegramApprovals, telegramFiles, TelegramSender, TelegramStore, type TelegramStart } from "./telegram/index.ts";
 import { combinedLocal, RoutedSender } from "./threads/channels.ts";
@@ -129,6 +130,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const jobArtifacts = new JobArtifacts({ log });
 			const taskClient = jobArtifacts.wrap(client);
 			const timers = createTimers({ env, agentId: identity.agentId, log });
+			const watches = createWatches({ env, agentId: identity.agentId, log });
 			// the git session is built after the role's hooks (it needs the hooks' environment): a role that asks for branches reaches it through this
 			const gitSessionLate: { current?: GitSession } = {};
 			const branchesNaming = async (repoUrl: string, ticket: string) => (gitSessionLate.current ? branchesNamingIn(gitSessionLate.current, repoUrl, ticket) : []);
@@ -272,13 +274,14 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				threadTools.extension,
 				...(observe ? [observe.extension] : []),
 				...(timers ? [timers.extension] : []),
+				...(watches ? [watches.extension] : []),
 				...(hooks.chat?.extension ? [hooks.chat.extension] : []),
 				skillsExtension({ allow: () => setup.repositorySkills(skillAllow), version: () => setup.version(), readOverlay: (name) => setup.overlay(name) ?? fileOverlay(name), log }),
 				libraryExtension(() => setup.librarySkills()).extension,
 				createMcpTools(mcpHub).extension,
 			];
 			// the thread tools are registered with the runtime but offered only to conversations: jobs get the role's own tools, with the coding tools spelled out when it lists none
-			const normalTools = [...(profile.allowedTools ?? ["read", "write", "edit", "bash"]), ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? [])];
+			const normalTools = [...(profile.allowedTools ?? ["read", "write", "edit", "bash"]), ...(events?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? []), ...(watches?.toolNames ?? [])];
 			const llmUsage = llmUsageCounters(metrics, { agent: identity.agentId, role: profile.id });
 			llmUsage.start(setup.model());
 			const runtime = new PiDurableRuntime({
@@ -367,7 +370,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			});
 			jobsRef = jobs;
 			const knownTools = new Set(runtime.knownTools());
-			const conversationTools = [...new Set(["read", "write", "edit", "bash", ...(profile.allowedTools ?? []), AGENT_STATUS_TOOL, ...(hooks.chat?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? []), ...threadTools.toolNames])].filter((name) => knownTools.has(name));
+			const conversationTools = [...new Set(["read", "write", "edit", "bash", ...(profile.allowedTools ?? []), AGENT_STATUS_TOOL, ...(hooks.chat?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? []), ...(watches?.toolNames ?? []), ...threadTools.toolNames])].filter((name) => knownTools.has(name));
 			const threadWorkspace = async (key: string): Promise<string> => {
 				const directory = `${root}/.threads/${key}`;
 				await envFor(root).createDir(directory, { recursive: true }, BACKGROUND_CONTEXT);
@@ -432,6 +435,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					events: { enabled: eventsConfig.enabled, notifyTo: eventsConfig.notifyTo },
 					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
 					timers: { enabled: Boolean(timers) },
+					watches: { enabled: Boolean(watches) },
 					telegram: { enabled: Boolean(telegram), allowedUsers: telegram?.start.allowed.size ?? 0 },
 					slack: { enabled: Boolean(slack), allowedUsers: slack?.start.allowedUsers.size ?? 0, channels: slack?.start.allowedChannels.size ?? 0 },
 					setup: setup.report({ model: runtime.model }),

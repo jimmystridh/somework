@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import http from "node:http";
-import https from "node:https";
+import { callHub } from "../hub-http.ts";
 
 export interface TimerView {
 	id: string;
@@ -57,40 +56,8 @@ export class TimersClient {
 		this.#options = options;
 	}
 
-	async #call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
-		const url = new URL(path, this.#base);
-		const payload = body === undefined ? undefined : JSON.stringify(body);
-		const transport = url.protocol === "https:" ? https : http;
-		return await new Promise((resolve, reject) => {
-			const request = transport.request(
-				url,
-				{
-					method,
-					timeout: this.#options.timeoutMs ?? 10_000,
-					...(this.#options.caPem ? { ca: this.#options.caPem } : {}),
-					headers: { authorization: `Bearer ${this.#options.token()}`, "x-somework-agent": this.#options.agentId, ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}) },
-				},
-				(response) => {
-					const chunks: Buffer[] = [];
-					let size = 0;
-					response.on("data", (chunk: Buffer) => {
-						size += chunk.length;
-						if (size > 64 * 1024) return void request.destroy(new TimersError("the hub's answer was too large"));
-						chunks.push(chunk);
-					});
-					response.on("end", () => {
-						try {
-							resolve({ status: response.statusCode ?? 0, json: JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}") });
-						} catch {
-							reject(new TimersError("the hub answered something that is not JSON", response.statusCode));
-						}
-					});
-				},
-			);
-			request.on("timeout", () => request.destroy(new TimersError("the hub did not answer in time")));
-			request.on("error", (error) => reject(error instanceof TimersError ? error : new TimersError(`the hub could not be reached (${(error as NodeJS.ErrnoException).code ?? "error"})`)));
-			request.end(payload);
-		});
+	#call(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+		return callHub(this.#options, this.#base, method, path, body, (message, status) => new TimersError(message, status));
 	}
 
 	#refused(answer: { status: number; json: any }): never {
