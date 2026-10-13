@@ -34,6 +34,10 @@ services:
       TIMERS_URL: ${TIMERS_URL:-}
       TIMERS_TOKEN_FILE: /run/secrets/timers-token
       TIMERS_CA_FILE: /run/somework/ca.pem
+      # Pull request watches: ask the event hub to wake this agent for the events of one pull request. Off while WATCH_URL is empty.
+      WATCH_URL: ${WATCH_URL:-}
+      WATCH_TOKEN_FILE: /run/secrets/watch-token
+      WATCH_CA_FILE: /run/somework/ca.pem
       SOMEWORK_REQUIRE_TLS: "1"
       SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
       PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
@@ -99,6 +103,7 @@ services:
       - ${AGENT_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
       - ./config/ca.pem:/run/somework/ca.pem:ro
       - ${TIMERS_TOKEN_HOST:-/dev/null}:/run/secrets/timers-token:ro      # timers: ./secrets/timers-token (`somework-hub timer-token <agent id>` on the hub)
+      - ${WATCH_TOKEN_HOST:-/dev/null}:/run/secrets/watch-token:ro        # watches: ./secrets/watch-token (`somework-hub watch-token <agent id>` on the hub)
       - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./skills-overlay:/run/skills-overlay:ro               # <skill>.md overlays (only used with SKILLS_OVERLAY_DIR)

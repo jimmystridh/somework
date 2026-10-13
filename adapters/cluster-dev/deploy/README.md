@@ -68,6 +68,7 @@ sudo chown 10001:10001 secrets/ssh/agents && sudo chmod 600 secrets/ssh/agents
 | GitHub | `secrets/git-token` | fine-grained, **the organisation repository only**: Contents and Pull requests write, Metadata read. Used by `git_push` and by the job path. Not the owner's login |
 | Woodpecker | `secrets/ci-token`, `CI_URL`, `CI_REPO` | a token that can read the repository's pipelines and logs (Woodpecker user tokens act as the user: use a dedicated user or accept that it is read through `ci_*` only) |
 | Grafana | `secrets/grafana-token`, `GRAFANA_URL` | a Viewer service account (`deploy/grafana/provision-reader.py`) |
+| Pull request watches | `secrets/watch-token`, `WATCH_URL` | `somework-hub watch-token agent/cluster-dev` on the hub; add this VM to `TLS_CLIENTS` of the hub's firewall; rule `rules/cluster-dev-watch.yaml` |
 | Proxmox | not used by this code | the decision lists a Proxmox API token for the pool; no tool uses it yet (host_exec to the hypervisor uses ssh and asks the owner every time) |
 
 ## 6. The model login

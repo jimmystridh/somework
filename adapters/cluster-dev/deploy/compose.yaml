@@ -36,6 +36,10 @@ services:
       SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
       SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
       SOMEWORK_CA_FILE: /run/somework/ca.pem
+      # Pull request watches: ask the event hub to wake this agent for the events of one pull request. Off while WATCH_URL is empty.
+      WATCH_URL: ${WATCH_URL:-}
+      WATCH_TOKEN_FILE: /run/secrets/watch-token
+      WATCH_CA_FILE: /run/somework/ca.pem
       SOMEWORK_REQUIRE_TLS: "1"
       SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
       AGENT_VERSION: ${CLUSTER_DEV_VERSION}                  # shown on /profile (the image tag this container runs)
@@ -108,6 +112,7 @@ services:
     volumes:
       - ${CLUSTER_DEV_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
       - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ${WATCH_TOKEN_HOST:-/dev/null}:/run/secrets/watch-token:ro        # watches: ./secrets/watch-token (`somework-hub watch-token <agent id>` on the hub)
       - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./secrets/git-token:/run/secrets/git-token:ro       # the organisation repository only. Must exist.

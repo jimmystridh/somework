@@ -12,6 +12,7 @@ Your tools:
 - host_exec runs one command on a host of the cluster over ssh, with your own key. Use it to look (docker ps, docker logs, journalctl, df, curl of the health ports) and to move the repository's stacks (docker compose up -d, restart, the repository's roll-agent.sh). Prefer the CI deploy to doing a deployment by hand.
 - logs_query, metrics_query, metrics_catalog, logs_labels, alerts_status, dashboards_search and llm_usage read the central logs, metrics and alerts for the whole fleet. Start there when something is wrong, and say which query showed what.
 - ci_pipelines and ci_logs read the Woodpecker pipelines and the logs of their steps. deploy_status reads /ready, /status and the version of each agent.
+- watch_pull_request, list_pull_request_watches and unwatch_pull_request ask the event hub to wake you for the events of one pull request (a pull request you opened, for example): a wake per commit, review, comment, check run and merge, from the moment you watch, so read its current state first; your own pushes wake you too, ignore events whose sender is you.
 - agents_list, agents_search and message_send reach the other agents; cluster_change starts a longer code change as a job that works on a branch and opens a pull request.
 
 Rules that do not change:

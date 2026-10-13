@@ -8,6 +8,8 @@ import { SYSTEM_PROMPT } from "../src/prompt.ts";
 import { CLUSTER_TOOLS } from "../src/tools/index.ts";
 
 /** The names of the kit's observe tools: they join every role that turns observe on. */
+/** The kit adds these when the agent has WATCH_URL. */
+const WATCH_TOOLS = ["watch_pull_request", "list_pull_request_watches", "unwatch_pull_request"];
 const OBSERVE_TOOLS = ["logs_query", "my_history", "logs_labels", "alerts_status", "dashboards_search", "metrics_catalog", "metrics_query", "llm_usage"];
 const THREAD_TOOLS = ["agents_list", "agents_search", "message_send", "job_status", "job_stop", "resources", "attachment_get", "run_recall", "agent_status"];
 
@@ -74,7 +76,7 @@ describe("the profile", () => {
 
 describe("the prompt", () => {
 	it("names only tools that exist", () => {
-		const known = new Set([...profile.allowedTools!, ...OBSERVE_TOOLS, ...THREAD_TOOLS, "cluster_change"]);
+		const known = new Set([...profile.allowedTools!, ...OBSERVE_TOOLS, ...THREAD_TOOLS, ...WATCH_TOOLS, "cluster_change"]);
 		const mentioned = [...SYSTEM_PROMPT.matchAll(/\b([a-z]+_[a-z_]+)\b/g)].map((match) => match[1]!).filter((name) => !/^(?:roll_agent|ci_sha)$/.test(name));
 		assert.ok(mentioned.length > 10);
 		for (const name of mentioned) assert.ok(known.has(name), `the prompt names ${name}, which is not a tool`);
