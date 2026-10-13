@@ -2,7 +2,7 @@
 //! `AsAdmin`), so a handler cannot forget to check one.
 
 use super::{
-    AsAdmin, AsEditor, AsViewer, AuthMode, Authed, Failure, Ops,
+    AsAdmin, AsEditor, AsLimits, AsViewer, AuthMode, Authed, Failure, Ops,
     contract::{self, Invalid, slug_of},
     diff,
     reconcile::Observation,
@@ -404,7 +404,7 @@ async fn limits(State(ops): State<Arc<Ops>>, _: AsViewer) -> ApiResult<LimitsVie
     Ok(Json(LimitsView { current, agents }))
 }
 
-async fn put_limits(State(ops): State<Arc<Ops>>, Authed(session): AsAdmin, Payload(put): Payload<LimitsPut>) -> ApiResult<LimitsRevision> {
+async fn put_limits(State(ops): State<Arc<Ops>>, AsLimits(session): AsLimits, Payload(put): Payload<LimitsPut>) -> ApiResult<LimitsRevision> {
     let note = contract::check_note(put.note.as_deref())?;
     let saved = ops.store.save_limits(put.base_revision, &put.values, &note, &session.email).await?;
     ops.nudge.notify_one();

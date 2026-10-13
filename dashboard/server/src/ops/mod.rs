@@ -220,6 +220,8 @@ pub struct Session {
     pub email: String,
     pub role: Role,
     pub auth: &'static str,
+    /// A service token that may save the fleet limits although its role is below administrator (people who are administrators always may).
+    pub sets_limits: bool,
 }
 
 /// An error response: the status and the body of `ApiError`.
@@ -241,12 +243,12 @@ impl Ops {
     pub async fn session(&self, headers: &HeaderMap) -> Result<Session, Failure> {
         if let Some(presented) = headers.get(SERVICE_TOKEN_HEADER) {
             return match presented.to_str().ok().and_then(|presented| service::find(&self.service_tokens, presented.trim())) {
-                Some(token) => Ok(Session { email: token.name.clone(), role: token.role, auth: "service" }),
+                Some(token) => Ok(Session { email: token.name.clone(), role: token.role, auth: "service", sets_limits: token.limits }),
                 None => Err(Failure::new(StatusCode::UNAUTHORIZED, "unauthorized", "the service token is not one of this console's")),
             };
         }
         match &self.auth {
-            AuthMode::Stub(user) => Ok(Session { email: user.email.clone(), role: user.role, auth: "stub" }),
+            AuthMode::Stub(user) => Ok(Session { email: user.email.clone(), role: user.role, auth: "stub", sets_limits: false }),
             AuthMode::Entra(_) => {
                 let not_signed_in = || Failure(StatusCode::UNAUTHORIZED, ApiError { code: "not_signed_in".into(), message: "sign in first".into(), login: Some("/fleet/auth/login".into()), ..Default::default() });
                 let cookie = headers.get(axum::http::header::COOKIE).and_then(|value| value.to_str().ok()).and_then(|header| session::cookie_value(header, SESSION_COOKIE)).ok_or_else(not_signed_in)?;
@@ -255,7 +257,7 @@ impl Ops {
                     return Err(not_signed_in());
                 }
                 match self.store.user(&claims.email).await {
-                    Ok(Some(user)) => Ok(Session { email: user.email, role: user.role, auth: "entra" }),
+                    Ok(Some(user)) => Ok(Session { email: user.email, role: user.role, auth: "entra", sets_limits: false }),
                     Ok(None) => Err(Failure::new(StatusCode::FORBIDDEN, "forbidden", "you are not on the allow list")),
                     Err(_) => Err(Failure::unavailable()),
                 }
@@ -271,6 +273,22 @@ pub struct Authed<const MINIMUM: u8>(pub Session);
 pub type AsViewer = Authed<0>;
 pub type AsEditor = Authed<1>;
 pub type AsAdmin = Authed<2>;
+
+/// A request that may save the fleet limits: an administrator, or an editor-level service token that was granted `"limits": true`. Writes need the header too.
+pub struct AsLimits(pub Session);
+
+impl FromRequestParts<Arc<Ops>> for AsLimits {
+    type Rejection = Failure;
+
+    async fn from_request_parts(parts: &mut Parts, ops: &Arc<Ops>) -> Result<Self, Failure> {
+        let Authed(session) = Authed::<1>::from_request_parts(parts, ops).await?;
+        if session.role >= Role::Admin || session.sets_limits {
+            Ok(Self(session))
+        } else {
+            Err(Failure::new(StatusCode::FORBIDDEN, "forbidden", "this needs the administrator role, or a service token that may change the limits"))
+        }
+    }
+}
 
 pub fn minimum_role(level: u8) -> Role {
     match level {

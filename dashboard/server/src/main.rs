@@ -574,6 +574,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_service_token_saves_the_limits_only_when_it_was_granted_that_and_never_manages_people() {
+        let Some(pg) = ops::testing::postgres("a_service_token_saves_the_limits_only_when_it_was_granted_that_and_never_manages_people") else { return };
+        let store = pg.store("service_limits").await;
+        let public = public_dir().await;
+        let (manager, other) = (ops::contract::sha256_hex(b"manager-token"), ops::contract::sha256_hex(b"other-token"));
+        let tokens = ops::service::parse(&format!(
+            r#"[{{"name": "agent/manager", "sha256": "{manager}", "role": "editor", "limits": true}}, {{"name": "agent/other", "sha256": "{other}", "role": "editor"}}]"#
+        ))
+        .unwrap();
+        let stub = ops::AuthMode::Stub(ops::StubUser { email: "viewer@example.com".into(), role: fleet_shared::operations::Role::Viewer });
+        let app = application(test_state(&public), public.clone(), Some(ops::testing::ops_with_services(&store, stub, None, vec![], tokens)));
+        let limits = r#"{"baseRevision": 0, "values": {"maxTokensCap": 500000, "maxMinutesCap": 60, "dailyTokenLimit": 5000000, "budgetRaiseCeiling": 5000000}, "note": "from the manager"}"#;
+        let headers = |token: &'static str| [("x-operations-service-token", token), ("x-operations-request", "1"), ("content-type", "application/json")];
+
+        assert_eq!(call(&app, "PUT", "/fleet/api/ops/limits", &headers("other-token"), limits.into()).await.0, StatusCode::FORBIDDEN, "an editor token without the grant cannot save limits");
+        let (status, body) = call(&app, "PUT", "/fleet/api/ops/limits", &headers("manager-token"), limits.into()).await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let saved: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!((saved["revision"].as_u64(), saved["author"].as_str()), (Some(1), Some("agent/manager")), "the revision names the service as its author");
+        assert_eq!(call(&app, "PUT", "/fleet/api/ops/users/new@example.com", &headers("manager-token"), r#"{"role": "viewer"}"#.into()).await.0, StatusCode::FORBIDDEN, "the grant does not reach the allow list");
+        assert_eq!(call(&app, "GET", "/fleet/api/ops/users", &headers("manager-token"), String::new()).await.0, StatusCode::FORBIDDEN);
+        let _ = fs::remove_dir_all(&public).await;
+    }
+
+    #[tokio::test]
     async fn without_a_database_the_operations_routes_say_so_and_the_rest_works() {
         let public = public_dir().await;
         let app = application(test_state(&public), public.clone(), None);

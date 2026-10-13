@@ -1,5 +1,6 @@
 //! Service tokens: another service of the fleet (today the Manager) calls the `/fleet/api/ops` routes with a bearer token instead of a browser
-//! session and acts with the role named for it, never above editor. The file holds only SHA-256 digests; the token itself lives on the caller's host.
+//! session and acts with the role named for it, never above editor. One narrow extra can be granted per token (`"limits": true`): saving the fleet's limits,
+//! which is otherwise an administrator's. It never reaches the allow list of people. The file holds only SHA-256 digests; the token itself lives on the caller's host.
 
 use super::contract::sha256_hex;
 use fleet_shared::operations::Role;
@@ -12,6 +13,8 @@ pub struct ServiceToken {
     pub name: String,
     sha256: String,
     pub role: Role,
+    /// May also save the fleet limits (`PUT /limits`), which a role below administrator cannot; nothing else of an administrator's.
+    pub limits: bool,
 }
 
 #[derive(Deserialize)]
@@ -20,13 +23,15 @@ struct Entry {
     name: String,
     sha256: String,
     role: String,
+    #[serde(default)]
+    limits: bool,
 }
 
 fn valid_name(name: &str) -> bool {
     (3..=64).contains(&name.len()) && name.starts_with(|c: char| c.is_ascii_lowercase()) && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "/._-".contains(c))
 }
 
-/// `[{"name": "agent/manager", "sha256": "<64 hex digits of the token's SHA-256>", "role": "editor"}]`
+/// `[{"name": "agent/manager", "sha256": "<64 hex digits of the token's SHA-256>", "role": "editor", "limits": true}]` (`limits` is optional and needs the role editor).
 pub fn parse(contents: &str) -> Result<Vec<ServiceToken>, String> {
     let entries: Vec<Entry> = serde_json::from_str(contents).map_err(|error| format!("the service token file is not valid: {error}"))?;
     let mut tokens: Vec<ServiceToken> = Vec::new();
@@ -39,10 +44,13 @@ pub fn parse(contents: &str) -> Result<Vec<ServiceToken>, String> {
         if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!("service token {} needs the 64 hex digits of the token's SHA-256", entry.name));
         }
+        if entry.limits && role < Role::Editor {
+            return Err(format!("service token {} needs the role editor to be allowed to change the limits", entry.name));
+        }
         if tokens.iter().any(|token| token.name == entry.name || token.sha256 == sha256) {
             return Err(format!("service token {} is listed twice", entry.name));
         }
-        tokens.push(ServiceToken { name: entry.name, sha256, role });
+        tokens.push(ServiceToken { name: entry.name, sha256, role, limits: entry.limits });
     }
     Ok(tokens)
 }
@@ -59,6 +67,17 @@ mod tests {
 
     fn entry(name: &str, token: &str, role: &str) -> String {
         format!(r#"{{"name": "{name}", "sha256": "{}", "role": "{role}"}}"#, sha256_hex(token.as_bytes()))
+    }
+
+    #[test]
+    fn a_token_may_be_granted_the_limits_and_only_with_the_editor_role() {
+        let with = |role: &str, limits: &str| format!(r#"[{{"name": "agent/manager", "sha256": "{}", "role": "{role}"{limits}}}]"#, sha256_hex(b"one"));
+        assert!(!parse(&with("editor", "")).unwrap()[0].limits, "off unless granted");
+        assert!(parse(&with("editor", r#", "limits": true"#)).unwrap()[0].limits);
+        assert!(!parse(&with("editor", r#", "limits": false"#)).unwrap()[0].limits);
+        assert!(parse(&with("viewer", r#", "limits": true"#)).unwrap_err().contains("needs the role editor"));
+        assert!(parse(&with("admin", r#", "limits": true"#)).is_err(), "a service is never an administrator");
+        assert!(parse(&with("editor", r#", "everything": true"#)).is_err(), "unknown fields are refused");
     }
 
     #[test]

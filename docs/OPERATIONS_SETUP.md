@@ -42,7 +42,7 @@ Postgres never holds agent secrets or job content. Free text is shown as text, n
 
 ## Service tokens
 
-A service of the fleet can call the same routes with a bearer token (`OPERATIONS_SERVICE_TOKENS_FILE`, digests only, role viewer or editor). It is the editor role in full, but the only caller today, the Manager, uses it for one thing: saving an agent's operator instructions after the owner confirmed the exact text in Telegram. Every such revision is authored by the service name (`agent/manager`) and is in the audit log; `GET /me` shows `auth: "service"`.
+A service of the fleet can call the same routes with a bearer token (`OPERATIONS_SERVICE_TOKENS_FILE`, digests only, role viewer or editor). It is the editor role in full, but the only caller today, the Manager, uses it for two things, each only after the owner confirmed the exact request in Telegram: saving an agent's operator instructions, and (when its entry has `"limits": true`, the one thing a service can have beyond the editor role) saving the fleet limits (`set_fleet_limits`: daily and per-job tokens, per-job minutes, the raise ceiling). The grant never reaches the allow list of people. Every such revision is authored by the service name (`agent/manager`) and is in the audit log; `GET /me` shows `auth: "service"`.
 
 ## Manager
 
