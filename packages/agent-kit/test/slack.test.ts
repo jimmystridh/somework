@@ -38,6 +38,13 @@ const mention = (n: number, text: string, extra: Record<string, unknown> = {}, u
 const envelope = (id: string, body: unknown, type = "events_api") => ({ type, envelope_id: id, accepts_response_payload: false, payload: body });
 
 const allowed = { users: new Set([OWNER]), channels: new Set([CHANNEL]) };
+const tap = (actionId: string, id: string, over: { user?: string; channel?: string; thread?: string; ts?: string; text?: string } = {}) => ({
+	type: "block_actions",
+	user: { id: over.user ?? OWNER },
+	channel: { id: over.channel ?? DM },
+	message: { ts: over.ts ?? ts(50), ...(over.thread ? { thread_ts: over.thread } : {}), text: over.text ?? "Approval needed (agent/qa): bash: x" },
+	actions: [{ action_id: actionId, value: id, type: "button" }],
+});
 
 describe("slack events", () => {
 	it("serves a DM of an allowed person", () => {
@@ -600,6 +607,51 @@ describe("slack commands", () => {
 		assert.match(w.said().at(-1)!.text, /no open question/);
 	});
 
+	it("puts Approve and Deny buttons on the question, and a tap decides and replaces the buttons with the outcome", async () => {
+		const w = world();
+		const asked = w.approvals.ask({ approver: { kind: "human", id: `slack/${OWNER}` }, conversationId: `slack:${DM}`, agent: ME, tool: "bash", summary: "run the migration", signal: new AbortController().signal });
+		await tick();
+		const posted = w.calls.find((call) => call.method === "chat.postMessage")!.payload as any;
+		const id = /!approve ([0-9a-f]+)/.exec(posted.text)![1]!;
+		assert.equal(posted.blocks[0].type, "section");
+		assert.deepEqual(posted.blocks[1].elements.map((element: any) => [element.action_id, element.value, element.text.text]), [["approve", id, "Approve"], ["deny", id, "Deny"]]);
+		await w.channel.handleAction(tap("approve", id, { text: posted.text }));
+		assert.deepEqual(await asked, { approved: true });
+		const update = w.calls.find((call) => call.method === "chat.update")!.payload as any;
+		assert.deepEqual([update.channel, update.ts], [DM, ts(50)]);
+		assert.equal(update.text, `${posted.text}\n\nApproved.`);
+		assert.deepEqual(update.blocks.map((block: any) => block.type), ["section"], "the buttons are gone");
+		await w.channel.handleAction(tap("deny", id));
+		assert.match((w.calls.filter((call) => call.method === "chat.update").at(-1)!.payload as any).text, /closed/);
+	});
+
+	it("lets nobody else decide by button, and ignores what is not one of its buttons", async () => {
+		const w = world({ users: [OWNER, "U0OTHER"] });
+		const asked = w.approvals.ask({ approver: { kind: "human", id: `slack/${OWNER}` }, conversationId: `slack:${DM}`, agent: ME, tool: "bash", summary: "x", signal: AbortSignal.timeout(80) });
+		await tick();
+		const id = /!approve ([0-9a-f]+)/.exec(w.said()[0]!.text)![1]!;
+		await w.channel.handleAction(tap("approve", id, { user: "U0OTHER" }));
+		await w.channel.handleAction(tap("approve", id, { user: "U0STRANGER" }));
+		await w.channel.handleAction(tap("approve", id, { channel: "C0NOTALLOWED" }));
+		await w.channel.handleAction(tap("something", id));
+		await w.channel.handleAction(tap("approve", "not-an-id"));
+		await w.channel.handleAction({ type: "view_submission" });
+		assert.equal(w.calls.filter((call) => call.method === "chat.update").length, 0);
+		assert.equal((await asked).approved, false, "nobody decided: it times out as a denial");
+	});
+
+	it("takes a tap from the thread the question was asked in only, and acknowledges the envelope", async () => {
+		const w = world({ channels: [CHANNEL] });
+		const conversationId = `slack:${CHANNEL}:${ts(1)}`;
+		const asked = w.approvals.ask({ approver: { kind: "human", id: `slack/${OWNER}` }, conversationId, agent: ME, tool: "bash", summary: "x", signal: new AbortController().signal });
+		await tick();
+		const id = /!deny ([0-9a-f]+)/.exec(w.said()[0]!.text)![1]!;
+		await w.channel.handleAction(tap("deny", id, { channel: CHANNEL, thread: ts(9) }));
+		assert.equal(w.calls.filter((call) => call.method === "chat.update").length, 0, "another thread of the same channel does not decide");
+		await w.channel.handleAction(tap("deny", id, { channel: CHANNEL, thread: ts(1) }));
+		assert.deepEqual(await asked, { approved: false, reason: "denied by the approver" });
+	});
+
 	it("takes a denial from the thread it was asked in, and nowhere else", async () => {
 		const w = world();
 		const conversationId = `slack:${CHANNEL}:${ts(1)}`;
@@ -651,6 +703,22 @@ describe("slack socket mode", () => {
 		await done;
 		assert.ok(socket.closed);
 		assert.deepEqual(w.log.map((line) => line.event), ["slack_started", "slack_connected", "slack_disconnected", "slack_stopped"]);
+	});
+
+	it("takes a button tap that arrives as an interactive envelope, and acknowledges it", async () => {
+		const w = world();
+		const { stop, done } = start(w);
+		await until("a connection", () => w.sockets.length === 1);
+		const socket = w.sockets[0]!;
+		socket.receive(hello);
+		const asked = w.approvals.ask({ approver: { kind: "human", id: `slack/${OWNER}` }, conversationId: `slack:${DM}`, agent: ME, tool: "bash", summary: "x", signal: new AbortController().signal });
+		await until("the question", () => w.said().length === 1);
+		const id = /!approve ([0-9a-f]+)/.exec(w.said()[0]!.text)![1]!;
+		socket.receive(envelope("t1", tap("approve", id), "interactive"));
+		assert.deepEqual(socket.acks, ["t1"]);
+		assert.deepEqual(await asked, { approved: true });
+		stop.abort();
+		await done;
 	});
 
 	it("answers a redelivered envelope once, acknowledging it each time", async () => {

@@ -131,3 +131,24 @@ export function parseSlackEvent(payload: any, allowed: { users: ReadonlySet<stri
 	if (text === "") return { kind: "unsupported", keys, target };
 	return { kind: "text", eventKey: eventId ?? ts, keys, userId: event.user, target, conversationId: slackConversationId(target), text: text.slice(0, maxChars), sentAt: new Date(Number(ts.split(".")[0]) * 1000).toISOString() };
 }
+
+export type ParsedSlackAction =
+	| { kind: "action"; userId: string; channel: string; ts: string; threadTs?: string; approved: boolean; id: string; text: string }
+	| { kind: "ignored"; reason: "not_an_action" | "not_allowed" | "channel_not_allowed" | "unknown_action" };
+
+/** What an Approve or Deny button of ours carries (`action_id` and, as `value`, the question's id). */
+export const SLACK_APPROVAL_ACTIONS = ["approve", "deny"] as const;
+
+/** One `block_actions` payload of an `interactive` envelope: a tap on Approve or Deny, from an allowed person in a DM or an allowed channel. */
+export function parseSlackAction(payload: any, allowed: { users: ReadonlySet<string>; channels: ReadonlySet<string> }): ParsedSlackAction {
+	if (!payload || typeof payload !== "object" || payload.type !== "block_actions") return { kind: "ignored", reason: "not_an_action" };
+	const user: unknown = payload.user?.id;
+	if (typeof user !== "string" || !allowed.users.has(user)) return { kind: "ignored", reason: "not_allowed" };
+	const channel: unknown = payload.channel?.id;
+	if (typeof channel !== "string" || !/^[A-Z0-9]+$/.test(channel) || !(channel.startsWith("D") || allowed.channels.has(channel))) return { kind: "ignored", reason: "channel_not_allowed" };
+	const action = Array.isArray(payload.actions) ? payload.actions[0] : undefined;
+	const ts: unknown = payload.message?.ts;
+	if (!action || !SLACK_APPROVAL_ACTIONS.includes(action.action_id) || typeof action.value !== "string" || !/^[0-9a-f]{12}$/.test(action.value) || typeof ts !== "string" || !/^\d+\.\d+$/.test(ts)) return { kind: "ignored", reason: "unknown_action" };
+	const threadTs: unknown = payload.message?.thread_ts;
+	return { kind: "action", userId: user, channel, ts, ...(typeof threadTs === "string" && /^\d+\.\d+$/.test(threadTs) ? { threadTs } : {}), approved: action.action_id === "approve", id: action.value, text: typeof payload.message?.text === "string" ? payload.message.text : "" };
+}

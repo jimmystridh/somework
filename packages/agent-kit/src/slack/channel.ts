@@ -4,7 +4,7 @@ import type { ApprovalChannel, Approvals } from "../threads/approvals.ts";
 import type { JobManager, Party } from "../threads/jobs.ts";
 import { finishReply, type InboundMessage } from "../threads/message.ts";
 import { describeJob } from "../threads/tools.ts";
-import { parseSlackEvent, slackChunks, type SlackApi, type SlackTarget } from "./api.ts";
+import { parseSlackAction, parseSlackEvent, slackChunks, slackConversationId, type SlackApi, type SlackTarget } from "./api.ts";
 import { slackMessage, type SlackSender } from "./sender.ts";
 import { SLACK_PREFIX, type SlackStore } from "./store.ts";
 
@@ -15,8 +15,14 @@ export const SLACK_SENDER_PREFIX = "slack/";
 export const SLACK_COMMAND_PREFIX = "!";
 
 /** Approval questions to a person on Slack are asked and answered in the conversation. */
-export function slackApprovals(store: Pick<SlackStore, "owns">, sender: Pick<SlackSender, "say">): ApprovalChannel {
-	return { owns: (conversationId) => store.owns(conversationId), reaches: (approver) => approver.id.startsWith(SLACK_SENDER_PREFIX), say: (conversationId, text) => sender.say(conversationId, text), commandPrefix: SLACK_COMMAND_PREFIX };
+export function slackApprovals(store: Pick<SlackStore, "owns">, sender: Pick<SlackSender, "say" | "ask">): ApprovalChannel {
+	return {
+		owns: (conversationId) => store.owns(conversationId),
+		reaches: (approver) => approver.id.startsWith(SLACK_SENDER_PREFIX),
+		say: (conversationId, text) => sender.say(conversationId, text),
+		ask: (conversationId, text, id) => sender.ask(conversationId, text, id),
+		commandPrefix: SLACK_COMMAND_PREFIX,
+	};
 }
 
 /** The part of a WebSocket that the channel uses (the global `WebSocket` of Node has it); tests bring their own. */
@@ -160,6 +166,9 @@ export class SlackChannel {
 						return this.#send(socket, { type: "pong", ...(envelope.num === undefined ? {} : { num: envelope.num }) });
 					case "events_api":
 						this.#queue = this.#queue.then(() => this.handleEvent(envelope.payload)).catch((error) => this.#log("error", "slack_event_failed", { error: cut(error) }));
+						return;
+					case "interactive":
+						this.#queue = this.#queue.then(() => this.handleAction(envelope.payload)).catch((error) => this.#log("error", "slack_event_failed", { error: cut(error) }));
 				}
 			});
 		});
@@ -221,6 +230,24 @@ export class SlackChannel {
 			}
 		}
 		count?.({ result: "accepted" });
+	}
+
+	/** A tap on Approve or Deny (an `interactive` envelope): decides like the command does and replaces the buttons with the outcome. */
+	async handleAction(payload: unknown): Promise<void> {
+		const press = parseSlackAction(payload, { users: this.#deps.allowedUsers, channels: this.#deps.allowedChannels });
+		const count = this.#deps.metrics?.counter("somework_slack_events_total", "Slack events, by what became of them");
+		if (press.kind === "ignored") return void count?.({ result: press.reason });
+		count?.({ result: "button" });
+		const who: Party = { kind: "human", id: `${SLACK_SENDER_PREFIX}${press.userId}` };
+		const result = this.#deps.approvals.decide(press.id, who, slackConversationId({ channel: press.channel, ...(press.threadTs ? { threadTs: press.threadTs } : {}) }), press.approved);
+		if (result === "rejected") return;
+		const outcome = result === "decided" ? (press.approved ? "Approved." : "Denied.") : "That question is closed (it may have timed out).";
+		const text = `${press.text}\n\n${outcome}`.slice(0, 3000);
+		try {
+			await this.#deps.api("chat.update", { channel: press.channel, ts: press.ts, text, blocks: [{ type: "section", text: { type: "plain_text", text, emoji: false } }] });
+		} catch (error) {
+			this.#log("warn", "slack_reply_failed", { error: cut(error) });
+		}
 	}
 
 	#withinLimit(userId: string): boolean {
