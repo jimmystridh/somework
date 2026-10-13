@@ -211,6 +211,9 @@ function readsOnly(sub: string, rest: Call["args"], parsed: Parsed): boolean {
 	if (READ_ONLY.has(sub)) return true;
 	const first = rest[0]?.text;
 	switch (sub) {
+		case "pull":
+			// bringing a deployment checkout up to date is part of deploying; a rebase, a force or an autostash rewrites or hides local work
+			return !hasFlag(parsed, "--rebase", "-r", "--force", "-f", "--autostash", "--allow-unrelated-histories");
 		case "branch":
 		case "tag":
 			return parsed.positionals.length === 0 || hasFlag(parsed, "-l", "--list");

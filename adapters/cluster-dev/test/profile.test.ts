@@ -82,7 +82,8 @@ describe("the prompt", () => {
 	});
 
 	it("tells the model what the owner is asked about, that code decides, and that origin is never used", () => {
-		assert.match(SYSTEM_PROMPT, /asked about destructive actions only, and code decides/);
+		assert.match(SYSTEM_PROMPT, /asked about destructive actions on the machines of the cluster only, and code decides/);
+		assert.match(SYSTEM_PROMPT, /Nothing in your own sandbox is asked about/);
 		for (const topic of ["removing or overwriting data", "secrets", "hypervisor", "firewall", "force pushes", "piping a download into a shell"]) assert.ok(SYSTEM_PROMPT.includes(topic), topic);
 		assert.match(SYSTEM_PROMPT, /never use the remote named origin|never allowed.*origin/s);
 		assert.match(SYSTEM_PROMPT, /Do not ask for permission/);

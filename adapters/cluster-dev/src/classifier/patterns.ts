@@ -40,6 +40,9 @@ const SECRET_BASENAMES: [RegExp, string, boolean][] = [
 	[/^(?:config\.v2|hostconfig)\.json$/, "a container's configuration, which holds its environment", false],
 ];
 
+/** A CA certificate or a chain, which is public, as opposed to the key it goes with (a file called just cert.pem may hold both, so it is still asked about). */
+const PUBLIC_CERTIFICATE = /^(?!.*(?:key|priv|secret))(?:ca|[\w.-]*-ca|ca-[\w.-]*|chain|fullchain|[\w.-]*-chain)\.(?:pem|crt|cer)$|\.(?:crt|cer)$/i;
+
 const SECRET_DIRECTORIES: [RegExp, string][] = [
 	[/(?:^|\/)\.ssh(?:\/|$)/, "the ssh directory"],
 	[/(?:^|\/)\.gnupg(?:\/|$)/, "the gpg directory"],
@@ -80,6 +83,7 @@ export function secretPathReason(word: string): string | undefined {
 		const path = candidate.replace(/\/+$/, "");
 		for (const [pattern, label] of SECRET_DIRECTORIES) if (pattern.test(path)) return label;
 		const name = path.slice(path.lastIndexOf("/") + 1);
+		if (PUBLIC_CERTIFICATE.test(name)) continue;
 		if (/^\.env(?:\..+)?$/.test(name) && !EXAMPLE_ENV.test(name)) return "an environment file that holds secrets";
 		const pathLike = path.includes("/") || path.startsWith("~");
 		for (const [pattern, label, bare] of SECRET_BASENAMES) if ((bare || pathLike) && pattern.test(name)) return label;

@@ -15,6 +15,7 @@ export interface Settings {
 	host?: string;
 	workspaces: string[];
 	remote: string;
+	sandboxFree: boolean;
 	/** More git remotes that may be pushed to (other repositories the deployment names). */
 	extraRemotes: string[];
 	hypervisorHosts: string[];

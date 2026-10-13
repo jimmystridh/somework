@@ -39,6 +39,16 @@ know, a command name or path computed when the command runs, and text it cannot 
 | `system` | `systemctl` start/stop/restart/enable/mask/daemon-reload of a unit that is not in `CLUSTER_DEV_OWN_SERVICES`, `service`, `reboot`, `shutdown`, accounts, `apt`/`dpkg` changes, `mount`, `sysctl -w`, `crontab`, `kill`/`pkill` on a machine, `ip` and `nmcli` changes, `sudo -i`, `nsenter`, `chroot`, `docker run` with `-v`, `--privileged`, `--network host` | `systemctl status`, `journalctl`, `ps`, `df`, `free`, `docker ps`, `docker logs`, `docker compose up -d`/`restart`/`ps`/`logs`/`pull`/`build`, `deploy/agents/roll-agent.sh` and `deploy-from-ci.sh`, `npm test`, `node --test`, `cargo test` |
 | `unknown` | a program the classifier does not know, a computed command name, a script file on a cluster machine (other than the deploy scripts), `bash` reading a script from stdin, text it cannot parse, anything nested too deep | the developer's loop in the workspace |
 
+Two things are deliberately **not** asked about, because they cannot sweep up secrets:
+* **A contained search.** `rg`, `ag`, `ack` and `grep -r` run unattended on named project directories (absolute or under `~`, below a home directory, `/srv`,
+  `/opt`, `/tmp`, `/workspace` or `/var/log`; not a home directory itself, not a hidden one, not `.`) when every pattern is specific (at least four characters
+  that are not regex syntax) and does not look for secrets (token, secret, password, credential, key, auth, ...), and nothing dumps whole files (`-v`,
+  `--passthru`, `--hidden`, `-u`, `-f`, a context of more than 5 lines). What such a search prints is lines that match a pattern about code, and the service
+  scrubs the secrets it holds from every answer. Anything else is judged as the table says.
+* **Interpreter code in the sandbox.** `python -c`, `node -e`, heredocs into an interpreter and the like are the developer's own loop in the sandbox, which holds
+  no secret and has no way into the cluster. On a cluster machine the same code is judged by what it reaches (files it removes or writes, commands it runs, the
+  environment). A program read from standard input that the classifier cannot see is still asked about, and so is any argument that names secret material.
+
 `forbidden` is the one thing that is not even asked about: **`git push` anywhere but the organisation remote** (`CLUSTER_DEV_GIT_REMOTE`, default `org`, and the
 repositories the deployment lists in `CLUSTER_DEV_EXTRA_REPOSITORIES`; `origin` is refused at startup as either). It wins over every other finding in the same command.
 
@@ -72,6 +82,7 @@ the service pushes `cluster/<job>` and opens the pull request. It does not merge
 | Variable | Default | Meaning |
 |---|---|---|
 | `CLUSTER_DEV_REPOSITORY` | none | the one repository (https URL): jobs and `git_push` accept no other; also `CHAT_REPOSITORY_URL` and the read-only checkout |
+| `CLUSTER_DEV_ASK_IN_SANDBOX` | off | `1`: the sandbox's own commands and files are judged and asked about too, as on a machine. Off: nothing in the sandbox is asked (it holds no secret and has no way into the cluster), except the one thing that is never allowed (a push anywhere but the repositories listed) |
 | `CLUSTER_DEV_GIT_REMOTE` | `org` | the git remote that may be pushed to; `origin` is refused |
 | `CLUSTER_DEV_EXTRA_REPOSITORIES` | none | `name=https://host/owner/repository`, comma separated: more repositories `git_push` may push to (its `repository` argument names one). Each is also an allowed remote name for the classifier; `origin` is refused. Each has its own credential, `<CLUSTER_DEV_GIT_TOKEN_DIR>/git-token-<name>`, because a fine-grained token belongs to one owner |
 | `CLUSTER_DEV_GIT_TOKEN_DIR` | `/run/secrets/git` | the directory holding those credential files |

@@ -1,4 +1,4 @@
-import { assignmentFinding, basename, checkWrite, clip, found, hasFlag, isOwnPath, isWorkspaceRoot, isWorkspaceWildcard, joinWords, parseArgs, texts, valueOf, word, type Call, type Finding, type Settings } from "./common.ts";
+import { assignmentFinding, basename, checkWrite, clip, found, hasFlag, isOwnPath, isWorkspaceRoot, isWorkspaceWildcard, joinWords, parseArgs, texts, valueOf, word, type Call, type Finding, type Parsed, type Settings } from "./common.ts";
 import { classifyDatabase, DATABASE_PROGRAMS } from "./database.ts";
 import { classifyDocker } from "./docker.ts";
 import { classifyGit } from "./git.ts";
@@ -286,6 +286,24 @@ function rsync(call: Call): Finding | undefined {
 const KEY_SEARCH = /PRIVATE KEY|BEGIN (?:RSA|EC|OPENSSH|DSA|PGP)|AKIA[0-9A-Z]|ghp_|github_pat_|xox[abprs]-|sk-[A-Za-z0-9]{6}|eyJhbGci/;
 const BROAD_ROOTS = /^(?:\/|~|~\/|\/root|\/home|\/etc|\/run|\/var\/lib\/docker|\/proc|\/var\/lib|\/srv|\/opt)\/?$|^\/(?:root|home\/[^/]+|etc|run)(?:\/|$)/;
 
+/** What a pattern has to look like to be the kind that finds code: words that name secrets, and patterns too short or loose to be about one thing, are not. */
+const SECRET_WORDS = /token|secret|passw|credential|bearer|api[_-]?key|private[_ -]?key|authoriz|authentic|oauth|cookie|jwt|ssh-|\bBEGIN\b|\bkeys?\b/i;
+const specificPattern = (pattern: string): boolean => pattern.replace(/[\\^$.*+?()[\]{}|]/g, "").length >= 4 && !SECRET_WORDS.test(pattern);
+/** Project directories a search may name: absolute (or under the home directory), below a root such as /home/<user>, not hidden, not where the system keeps secrets. */
+const SEARCHABLE_ROOT = /^(?:\/home\/[^/]+|~|\/srv|\/opt|\/tmp|\/workspace|\/var\/log)\/[^/.][^/]*(?:\/[^/.][^/]*)*\/?$/;
+
+/**
+ * A recursive search that cannot sweep up secrets: the roots are named project directories (not a home directory, not a hidden one, not `.`),
+ * every pattern is specific and does not look for secrets, and nothing dumps whole files (invert, pass-through, pattern file, wide context).
+ * What it prints is lines that match a pattern about code, and the service scrubs the secrets it holds from every answer.
+ */
+function containedSearch(parsed: Parsed, patterns: string[], patternFile: boolean, roots: Word[]): boolean {
+	if (patternFile || patterns.length === 0 || roots.length === 0 || !patterns.every(specificPattern)) return false;
+	if (hasFlag(parsed, "-v", "--invert-match", "--passthru", "--hidden", "-u", "--unrestricted", "--no-ignore", "-a", "--text", "-U", "--multiline")) return false;
+	for (const flag of parsed.flags) if (["-A", "-B", "-C", "--context", "--after-context", "--before-context"].includes(flag.name) && !(Number(flag.value?.text) <= 5)) return false;
+	return roots.every((root) => !root.dynamic && SEARCHABLE_ROOT.test(root.text));
+}
+
 function search(call: Call): Finding | undefined {
 	const parsed = parseArgs(call.args, ["-e", "--regexp", "-f", "--file", "-m", "--max-count", "-A", "-B", "-C", "--context", "--include", "--exclude", "--exclude-dir", "-d", "--directories", "-D", "--devices", "--label", "-g", "--glob", "--iglob", "--type", "--type-not", "--threads", "--color", "--colour", "--max-depth", "--ignore", "--path-to-ignore", "--type-add", "--sort", "--sortr", "--max-columns", "--encoding"]);
 	const patterns = parsed.flags.filter((flag) => flag.name === "-e" || flag.name === "--regexp").map((flag) => flag.value!.text);
@@ -294,6 +312,7 @@ function search(call: Call): Finding | undefined {
 	if (patterns.length === 0 && !patternFile && parsed.positionals[0]) patterns.push(parsed.positionals[0].text);
 	if (patterns.some((pattern) => KEY_SEARCH.test(pattern))) return found("secrets", `${call.program} searches for key material`);
 	const recursive = ["ag", "rg", "ack"].includes(call.program) || hasFlag(parsed, "-r", "-R", "--recursive") || valueOf(parsed, "-d", "--directories")?.text === "recurse";
+	if (recursive && containedSearch(parsed, patterns, patternFile, patternSource)) return undefined;
 	if (recursive) for (const root of patternSource) if (BROAD_ROOTS.test(root.text)) return found("secrets", `${call.program} searches ${clip(root.text, 40)}, which holds secrets`);
 	if (recursive && remote(call.settings) && (patternSource.length === 0 || patternSource.some((root) => !/^\/var\/log(?:\/|$)/.test(root.text)))) return found("secrets", `${call.program} searches a directory tree on a machine, which may hold secret files (only /var/log is searched without asking)`);
 	return undefined;
@@ -1004,7 +1023,20 @@ function setBuiltin(call: Call): Finding | undefined {
 	return call.args.length === 0 ? found("secrets", "set without arguments prints every variable, secrets included") : undefined;
 }
 
+const TAILSCALE_READS = new Set(["status", "ip", "version", "whois", "netcheck", "ping", "dns", "metrics", "id-token-never"]);
+
+/** `tailscale` looks at the network freely; what changes the node (up, down, set, login, logout, serve, funnel, cert, file, ssh, lock) is not read-only. */
+function tailscale(call: Call): Finding | undefined {
+	const parsed = parseArgs(call.args, ["--socket", "--timeout", "-c", "--count"]);
+	const verb = parsed.positionals[0]?.text;
+	if (verb === undefined) return hasFlag(parsed, "--version", "--help", "-h") ? undefined : found("unknown", "tailscale without a command");
+	if (!TAILSCALE_READS.has(verb)) return found("system", `tailscale ${clip(verb, 30)} changes the node or its keys`);
+	if (verb === "dns" && !["status", "query"].includes(parsed.positionals[1]?.text ?? "")) return found("system", "tailscale dns changes the node's DNS settings");
+	return undefined;
+}
+
 const HANDLERS: Record<string, Handler> = {
+	tailscale,
 	rm: (call) => removal(call),
 	unlink: (call) => removal(call),
 	rmdir: (call) => removal(call),

@@ -30,8 +30,9 @@ ops admin --config /etc/somework/somework.toml enroll-agent --id agent/cluster-d
 cp card.json cards/cluster-dev.json                                 # adapters/cluster-dev/card.json, copied to the host's ./cards directory
 ops admin --config /etc/somework/somework.toml register-card --card /cards/cluster-dev.json --approve
 ```
-`--side-effects write` because the card offers `code.cluster` (it opens pull requests). The agent also publishes events `agent.cluster-dev.job.*`, which
-needs the permission `events.publish:agent.cluster-dev.*` (`scripts/grant-job-events.ts`).
+`--side-effects write` because the card offers `code.cluster` (it opens pull requests). The agent also publishes events `agent.cluster_dev.job.*` (the topic
+slug turns the dash into an underscore), which needs the permission `events.publish:agent.cluster_dev.*` (`enroll-agent --publish 'agent.cluster_dev.*'`,
+later `set-agent-permissions`, or `scripts/grant-job-events.ts`).
 
 ## 3. Files on the VM (`./`, the compose directory)
 | Path | What |
@@ -111,6 +112,12 @@ curl -s http://127.0.0.1:8081/ready
 ```
 The service refuses to start when `PI_CONCURRENCY` is not 1, when a host in `CLUSTER_DEV_HOSTS` has no key file or `known_hosts` is missing, when
 `CLUSTER_DEV_GIT_REMOTE` is `origin`, or when `CI_URL` is set without a token file.
+
+## 9b. Register the agent with Operations
+Without this the agent runs on its own defaults (`DAILY_TOKEN_LIMIT`, `BUDGET_MAX_TOKENS_CAP`) and never receives the fleet limits, the global prompt, the model or any setup the owner saves in Operations (the cause of "budget exhausted" at 8M tokens a day while the fleet limit was far higher).
+1. Publish the health port on the VM's address and let only Operations reach it: `HEALTH_BIND=<the VM address>` in `.env`, then on the VM install `deploy/agents/agent-health-firewall.sh` as `/usr/local/sbin/agent-health-firewall` with a systemd unit like the agents VM's (`HEALTH_IP=<the VM address> HEALTH_PORTS=8081 CLIENTS=<the Operations host>` in `/etc/default/agent-health-firewall`). From then on `curl` the health port by that address, not `127.0.0.1`.
+2. On the Operations host add `{"id": "agent/cluster-dev", "url": "http://<the VM address>:8081/status"}` to `agents-health.json` in its secrets directory and restart Operations.
+3. In Operations, Fleet limits, the agent shows the revision it applied; `/profile` of the agent shows `maxTokensCap` and `dailyTokenLimit` from it.
 
 ## 10. Smoke test
 Without credentials first: `PI_PROVIDER=faux` with a plan such as `call:deploy_status:{}` then `final:ok`, and a message to the agent. Then with the real

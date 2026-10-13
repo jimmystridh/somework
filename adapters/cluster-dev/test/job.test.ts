@@ -13,7 +13,7 @@ import { profile } from "../src/profile.ts";
 import { fakeSpawn, settingsFor } from "./support.ts";
 
 // the profile's approval functions read the settings of the process, as the service does
-Object.assign(process.env, { CLUSTER_DEV_HOSTS: "agents=js@10.10.10.20", CLUSTER_DEV_SSH_KEY_DIR: "/keys" });
+Object.assign(process.env, { CLUSTER_DEV_HOSTS: "agents=js@10.10.10.20", CLUSTER_DEV_SSH_KEY_DIR: "/keys", CLUSTER_DEV_ASK_IN_SANDBOX: "1" });
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {

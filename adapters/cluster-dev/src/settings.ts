@@ -21,6 +21,8 @@ export interface ClusterSettings {
 	repositoryUrl?: string;
 	/** The git remote that may be pushed to: the organisation's, never `origin`. */
 	gitRemote: string;
+	/** Ask the owner about the sandbox's own commands and files as well (off: the sandbox holds no secrets and has no way into the cluster, so nothing there is asked). */
+	askInSandbox: boolean;
 	/** Other repositories git_push may push to, each with its own credential file. */
 	extraRepositories: ExtraRepository[];
 	hosts: HostEntry[];
@@ -142,6 +144,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): ClusterSetti
 	return {
 		...(repositoryUrl ? { repositoryUrl } : {}),
 		gitRemote,
+		askInSandbox: env.CLUSTER_DEV_ASK_IN_SANDBOX?.trim() === "1",
 		extraRepositories: parseExtraRepositories(env.CLUSTER_DEV_EXTRA_REPOSITORIES, (env.CLUSTER_DEV_GIT_TOKEN_DIR?.trim() || "/run/secrets/git").replace(/\/+$/, ""), [gitRemote]),
 		hosts: parseHosts(env.CLUSTER_DEV_HOSTS),
 		hypervisorHosts: list(env.CLUSTER_DEV_HYPERVISOR_HOSTS, DEFAULT_HYPERVISOR_HOSTS),
@@ -162,6 +165,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): ClusterSetti
 export function classifyContext(settings: ClusterSettings, host?: string): ClassifyContext {
 	return {
 		remote: settings.gitRemote,
+		...(settings.askInSandbox ? {} : { sandbox: "free" as const }),
 		extraRemotes: settings.extraRepositories.map((repository) => repository.name),
 		hypervisorHosts: settings.hypervisorHosts,
 		ownServices: settings.ownServices,

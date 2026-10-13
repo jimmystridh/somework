@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { bashApproval, fileApproval } from "../src/approvals.ts";
 import { classifyContext, loadSettings, parseAgentUrls, parseHosts, roleEnvironment } from "../src/settings.ts";
 
 const env = (values: Record<string, string>): NodeJS.ProcessEnv => values as NodeJS.ProcessEnv;
@@ -107,5 +108,24 @@ describe("the settings", () => {
 		assert.match(filled.GIT_AUTHOR_EMAIL!, /cluster-dev@/);
 		const kept = roleEnvironment(env({ PI_CONCURRENCY: "2", OBSERVE_SCOPE: "own", CHAT_REPOSITORY_URL: "https://x/y", GIT_AUTHOR_NAME: "Me", CLUSTER_DEV_REPOSITORY: "https://github.com/acme/somework" }));
 		assert.deepEqual([kept.PI_CONCURRENCY, kept.OBSERVE_SCOPE, kept.CHAT_REPOSITORY_URL, kept.GIT_AUTHOR_NAME], ["2", "own", "https://x/y", "Me"]);
+	});
+});
+
+describe("asking in the sandbox", () => {
+	it("is off by default, and on with CLUSTER_DEV_ASK_IN_SANDBOX=1", () => {
+		assert.equal(loadSettings(env({})).askInSandbox, false);
+		assert.equal(classifyContext(loadSettings(env({}))).sandbox, "free");
+		assert.equal(loadSettings(env({ CLUSTER_DEV_ASK_IN_SANDBOX: "1" })).askInSandbox, true);
+		assert.equal(classifyContext(loadSettings(env({ CLUSTER_DEV_ASK_IN_SANDBOX: "1" }))).sandbox, undefined);
+		assert.equal(classifyContext(loadSettings(env({})), "agents").sandbox, "free", "a machine is judged as a machine whatever the flag says");
+	});
+
+	it("decides what the owner is asked: nothing in the sandbox by default, the old questions with the flag", () => {
+		const free = loadSettings(env({}));
+		const strict = loadSettings(env({ CLUSTER_DEV_ASK_IN_SANDBOX: "1" }));
+		assert.equal(bashApproval({ command: "rm -rf /srv/old" }, free), undefined);
+		assert.equal(fileApproval("read", { path: "/home/js/.ssh/id_rsa" }, free), undefined);
+		assert.match(bashApproval({ command: "rm -rf /srv/old" }, strict)!, /^bash: rm -rf \/srv\/old \[data:/);
+		assert.match(fileApproval("read", { path: "/home/js/.ssh/id_rsa" }, strict)!, /\[secrets: the ssh directory\]/);
 	});
 });

@@ -112,6 +112,33 @@ describe("finding what is hidden behind an allowed command", () => {
 			],
 			REMOTE,
 		);
+		expectAllowed(
+			[
+				"rg -n 'systemPrompt|system_prompt|promptSuffix' /home/js/agent-cluster-pi /home/js/somework-manager /home/js/somework-pilot -g '!package-lock.json' -g '!node_modules/**' | head -100",
+				"for d in agent-cluster-pi somework-manager; do echo \"=== $d\"; git -C \"$d\" remote -v; done; rg -n systemPrompt /home/js/somework-manager",
+				"grep -rn promptSuffix ~/somework-manager/src",
+				"rg systemPrompt $HOME/somework-manager",
+				"ag requestApproval /opt/agent-cluster-services/fleet-rust -C 3",
+			],
+			REMOTE,
+		);
+		expectDestructive(
+			[
+				["rg systemPrompt ~", "secrets"],
+				["rg systemPrompt /home/js", "secrets"],
+				["rg systemPrompt .", "secrets"],
+				["rg systemPrompt /home/js/.config", "secrets"],
+				["rg token /home/js/somework-manager", "secrets"],
+				["rg 'api_key|password' /home/js/somework-manager", "secrets"],
+				["rg -v systemPrompt /home/js/somework-manager", "secrets"],
+				["rg --hidden systemPrompt /home/js/somework-manager", "secrets"],
+				["rg -C 50 systemPrompt /home/js/somework-manager", "secrets"],
+				["rg ab /home/js/somework-manager", "secrets"],
+				["rg -f patterns.txt /home/js/somework-manager", "secrets"],
+				["rg systemPrompt /home/js/somework-manager /etc", "secrets"],
+			],
+			REMOTE,
+		);
 		expectAllowed(["grep -r error /var/log/", "grep -rn timeout /var/log/syslog", "tar -tzf x.tgz", "grep error /var/log/syslog", "docker logs agent 2>&1 | grep -i error"], REMOTE);
 		expectAllowed(["grep -rn requestApproval packages", "rg token docs", "tar -czf x.tgz src", "scp agents:/home/js/somework-pilot/reviewer/compose.yaml ./compose.yaml"], LOCAL);
 	});

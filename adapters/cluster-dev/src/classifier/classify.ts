@@ -19,6 +19,11 @@ export interface ClassifyContext {
 	host?: string;
 	/** Directories the agent may change freely (its workspace). Unset or empty: there are none, so every change to files is destructive. */
 	workspaces?: readonly string[];
+	/**
+	 * `"free"`: in the agent's own sandbox (no `host`) nothing is destructive, since it holds no secrets and has no way into the cluster; only what is
+	 * `forbidden` stays. Unset: the sandbox is judged like any machine, as far as its workspace goes.
+	 */
+	sandbox?: "free";
 	/** The git remote that may be pushed to (default `org`). */
 	remote?: string;
 	/** More remotes that may be pushed to: the other repositories the deployment names. Never `origin`. */
@@ -49,6 +54,7 @@ function resolve(context: ClassifyContext): Settings {
 		...(context.host !== undefined ? { host: context.host } : {}),
 		workspaces: (context.workspaces ?? []).map((root) => root.replace(/\/+$/, "") || "/"),
 		remote: context.remote ?? "org",
+		sandboxFree: context.sandbox === "free",
 		extraRemotes: (context.extraRemotes ?? []).filter((name) => name !== "origin"),
 		hypervisorHosts: [...(context.hypervisorHosts ?? DEFAULT_HYPERVISOR_HOSTS)],
 		ownServices: [...(context.ownServices ?? [])],
@@ -250,5 +256,7 @@ export function classifyCommand(command: string, context: ClassifyContext = {}):
 	} catch (error) {
 		finding = found("unknown", `the command could not be judged (${error instanceof Error ? error.message.slice(0, 80) : "error"})`);
 	}
+	// In the agent's own sandbox (no host) there is nothing to destroy or leak: no secrets, no way into the cluster. Only what is never allowed stays.
+	if (finding && settings.host === undefined && settings.sandboxFree && !finding.forbidden) finding = undefined;
 	return finding ? { destructive: true, reason: finding.reason, category: finding.category, ...(finding.forbidden ? { forbidden: true } : {}) } : { destructive: false };
 }

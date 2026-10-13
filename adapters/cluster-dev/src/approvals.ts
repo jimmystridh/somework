@@ -20,8 +20,12 @@ export function bashApproval(args: Record<string, unknown>, settings: ClusterSet
 	return `bash: ${shown(command)} [${verdict.category}: ${verdict.reason}]`;
 }
 
-/** `toolApprovals` of `read`, `write` and `edit`: a file that holds secrets is not read or changed without the owner. */
-export function fileApproval(tool: "read" | "write" | "edit", args: Record<string, unknown>): string | undefined {
+/**
+ * `toolApprovals` of `read`, `write` and `edit`: these tools only work in the sandbox, which holds no secrets and has no way into the cluster, so nothing is
+ * asked, unless the deployment sets `CLUSTER_DEV_ASK_IN_SANDBOX=1`: then a file that holds secrets is not read or changed without the owner.
+ */
+export function fileApproval(tool: "read" | "write" | "edit", args: Record<string, unknown>, settings: ClusterSettings = currentSettings()): string | undefined {
+	if (!settings.askInSandbox) return undefined;
 	const path = typeof args.path === "string" ? args.path : "";
 	const reason = secretPathReason(path);
 	return reason ? `${tool}: ${path.slice(0, 200)} [secrets: ${reason}]` : undefined;
