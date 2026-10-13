@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { sleep } from "../src/backoff.ts";
-import { interpret, natsInfoFrom, NatsWakeSource, runWakes, wakes, type Wake } from "../src/wake.ts";
+import { eventSeqOf, interpret, natsInfoFrom, NatsWakeSource, runWakes, wakes, type Wake } from "../src/wake.ts";
 import { startDomain, type Domain } from "./harness.ts";
 
 const FAST_POLL_MS = 150;
@@ -26,7 +26,7 @@ async function until(what: string, ms: number, condition: () => boolean): Promis
 const say = async (text: string): Promise<string> =>
 	(await domain.author.post("/v1/messages", { recipients: [{ kind: "agent", id: "agent/ts-worker" }], content: { mediaType: "text/plain", data: text }, triggerMode: "directed" })).messageId as string;
 
-function listen() {
+function listen(options: { cursorAckEveryMs?: number } = {}) {
 	const abort = new AbortController();
 	const logs: string[] = [];
 	const seen: Wake[] = [];
@@ -37,7 +37,7 @@ function listen() {
 			seen.push(wake);
 			void wake.ack();
 		},
-		{ pollEveryMs: FAST_POLL_MS, logger: (_level, message) => logs.push(message) },
+		{ pollEveryMs: FAST_POLL_MS, ...options, logger: (_level, message) => logs.push(message) },
 	);
 	return {
 		logs,
@@ -77,6 +77,38 @@ describe("NATS wake", () => {
 		const afterwards = await say("sent after the broker came back");
 		await until("the wake over NATS again", 20_000, () => listener.seen.some((wake) => wake.messageId === afterwards));
 		await listener.stop();
+	});
+
+	it("moves the domain's event cursor along with the notifications it handles over NATS", async () => {
+		const listener = listen({ cursorAckEveryMs: 100 });
+		await until("the listener to connect to NATS", 30_000, () => listener.connections() === 1);
+		await say("one");
+		const last = await say("two");
+		await until("both wakes", 10_000, () => listener.seen.some((wake) => wake.messageId === last));
+		await until("the stored cursor to catch up", 10_000, () => domain.requests.some((line) => line.includes("/v1/events/ack")));
+		await sleep(400);
+		const behind = await domain.worker().events(undefined, 0);
+		await listener.stop();
+		assert.deepEqual(behind.events.filter((event) => event.type === "message.created" && event.wake === true), [], "nothing the listener handled is still ahead of the stored cursor");
+	});
+
+	it("starts an HTTP fallback at the newest event, however many older ones are waiting after the stored cursor", async () => {
+		await domain.nats!.stop();
+		const old: string[] = [];
+		for (let i = 0; i < 130; i++) old.push(await say(`old ${i}`));
+		const listener = listen();
+		await until("the fallback to look", 15_000, () => domain.requests.filter((line) => line.includes("/v1/events")).length >= 3);
+		await sleep(600);
+		assert.deepEqual(listener.seen.map((wake) => wake.messageId).filter((id) => old.includes(id)), [], "no old message is replayed");
+		const fresh = await say("fresh");
+		await until("the fresh wake over HTTP", 20_000, () => listener.seen.some((wake) => wake.messageId === fresh));
+		await listener.stop();
+		await domain.nats!.start();
+		// what was sent while the broker was down is not lost: its durable consumer hands it over once the principal is back on NATS
+		const back = listen();
+		await until("the listener to connect to NATS", 60_000, () => back.connections() === 1);
+		await until("the old messages over NATS", 30_000, () => old.every((id) => back.seen.some((wake) => wake.messageId === id)));
+		await back.stop();
 	});
 
 	it("refuses a plaintext broker when TLS is required", async () => {
@@ -128,6 +160,9 @@ describe("wake interpretation", () => {
 
 	it("maps message notifications and ignores the agent's own, non-waking and other ones", () => {
 		assert.deepEqual(interpret({ wake: true, kind: "message", messageId: "m1", sender: "agent/other" }, "agent/me"), { messageId: "m1", dedupeKey: "msg:m1" });
+		assert.equal(eventSeqOf({ eventSeq: 42 }), 42);
+		assert.equal(eventSeqOf({ eventSeq: "42" }), undefined);
+		assert.equal(eventSeqOf({}), undefined);
 		assert.equal(interpret({ wake: false, kind: "message", messageId: "m2" }, "agent/me"), undefined);
 		assert.equal(interpret({ wake: true, kind: "message", messageId: "m3", sender: "agent/me" }, "agent/me"), undefined);
 		assert.equal(interpret({ wake: true, kind: "task", taskId: "t2" }, "agent/me"), undefined);

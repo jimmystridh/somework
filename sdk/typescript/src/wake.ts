@@ -13,6 +13,8 @@ export interface WakeOptions {
 	mode?: "auto" | "poll";
 	/** Interval of the short HTTP lookups used while NATS is unavailable or disabled. */
 	pollEveryMs?: number;
+	/** How often the newest handled NATS notification is acknowledged to the domain's event cursor (default 5 seconds). */
+	cursorAckEveryMs?: number;
 	logger?: (level: "debug" | "info" | "warn", message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -60,6 +62,9 @@ export function natsInfoFrom(connection: any): NatsInfo | undefined {
 
 type Interpreted = { messageId: string; dedupeKey: string };
 
+/** The position of a notification in `GET /v1/events`, when the domain names it (`eventSeq`). */
+export const eventSeqOf = (payload: any): number | undefined => (Number.isInteger(payload?.eventSeq) && payload.eventSeq > 0 ? payload.eventSeq : undefined);
+
 /** Maps a JetStream notification to a wake; `undefined` means "acknowledge and ignore" (the agent's own output, items that must not wake it). */
 export function interpret(payload: any, ownAgentId: string): Interpreted | undefined {
 	if (payload?.wake !== true || payload.sender === ownAgentId) return undefined;
@@ -87,7 +92,7 @@ export class NatsWakeSource {
 	 * TLS policy comes from the caller's own configuration (`tls`), never from the domain's answer, so a compromised or
 	 * misconfigured domain cannot talk a worker into plaintext or an untrusted CA.
 	 */
-	static async connect(info: NatsInfo, ownAgentId: string, tls: SomeWorkClient["tls"], onWake: (wake: Wake) => void): Promise<NatsWakeSource> {
+	static async connect(info: NatsInfo, ownAgentId: string, tls: SomeWorkClient["tls"], onWake: (wake: Wake) => void, onHandled: (eventSeq: number) => void = () => {}): Promise<NatsWakeSource> {
 		const secure = tls.requireTls || tls.caPem !== undefined || info.url.startsWith("tls://");
 		const servers = info.url.replace(/^(nats|tls):\/\//, "");
 		const expectedHost = new URL(`tls://${servers}`).hostname.replace(/^\[|\]$/g, "");
@@ -115,20 +120,25 @@ export class NatsWakeSource {
 							} catch {
 								// not ours to interpret: acknowledge below
 							}
+							const eventSeq = eventSeqOf(payload);
+							const handled = () => {
+								message.ack();
+								if (eventSeq !== undefined) onHandled(eventSeq);
+							};
 							const found = interpret(payload, ownAgentId);
 							if (!found) {
-								message.ack();
+								handled();
 								continue;
 							}
 							if (!dedupe.firstTime(found.dedupeKey, DEDUPE_WINDOW_MS)) {
-								message.ack(); // duplicate delivery: already handled
+								handled(); // duplicate delivery: already handled
 								continue;
 							}
 							let acked = false;
 							onWake(asWake(found, async () => {
 								if (!acked) {
 									acked = true;
-									message.ack();
+									handled();
 								}
 							}));
 						}
@@ -164,6 +174,48 @@ async function attachConsumer<T>(get: () => Promise<T>, what: string): Promise<T
 	}
 }
 
+const PAGE = 500;
+
+/** Tells the domain how far this principal has handled its events, at most once per interval: its stored cursor is what an HTTP lookup starts from. */
+export class CursorAcks {
+	readonly #client: SomeWorkClient;
+	readonly #everyMs: number;
+	#newest = 0;
+	#sent = 0;
+	#timer: NodeJS.Timeout | undefined;
+
+	constructor(client: SomeWorkClient, everyMs = 5_000) {
+		this.#client = client;
+		this.#everyMs = everyMs;
+	}
+
+	note(eventSeq: number): void {
+		if (eventSeq <= this.#newest) return;
+		this.#newest = eventSeq;
+		this.#schedule();
+	}
+
+	#schedule(): void {
+		if (this.#timer !== undefined) return;
+		this.#timer = setTimeout(() => void this.flush(), this.#everyMs);
+		this.#timer.unref();
+	}
+
+	/** Sends the newest position now (shutdown, tests); a failed send is tried again at the next interval. */
+	async flush(): Promise<void> {
+		if (this.#timer !== undefined) clearTimeout(this.#timer);
+		this.#timer = undefined;
+		const upTo = this.#newest;
+		if (upTo <= this.#sent) return;
+		try {
+			await this.#client.ackEvents(upTo);
+			this.#sent = upTo;
+		} catch {
+			this.#schedule();
+		}
+	}
+}
+
 /** Looks at the domain's event feed over plain, short HTTP requests (never held open). */
 class HttpWakes {
 	readonly #client: SomeWorkClient;
@@ -175,11 +227,30 @@ class HttpWakes {
 		this.#fromHead = fromHead;
 	}
 
+	/**
+	 * Moves to the newest event. The domain answers a request without `after` from this principal's stored cursor, which only moves when somebody
+	 * acknowledges it: a principal that has been woken over NATS for days has an old one, and one page of it is not "the head". Pages are read
+	 * until one is not full, and the stored cursor is brought up to the head so it does not stay behind.
+	 */
+	async toHead(): Promise<void> {
+		let cursor = this.#cursor;
+		for (let page = 0; page < 1000; page++) {
+			const { events, cursor: next } = await this.#client.events(cursor, 0, PAGE);
+			cursor = next;
+			if (events.length < PAGE) break;
+		}
+		this.#cursor = cursor;
+		if (cursor !== undefined && cursor > 0) await this.#client.ackEvents(cursor).catch(() => {});
+	}
+
 	async look(): Promise<Wake[]> {
 		const first = this.#cursor === undefined;
+		if (first && this.#fromHead) {
+			await this.toHead();
+			return [];
+		}
 		const { events, cursor } = await this.#client.events(this.#cursor, 0);
 		this.#cursor = cursor;
-		if (first && this.#fromHead) return [];
 		const out: Wake[] = [];
 		for (const event of events) {
 			if (event.wake !== true) continue;
@@ -232,6 +303,10 @@ export async function runWakes(client: SomeWorkClient, signal: AbortSignal, onWa
 
 	const backoff = new Backoff(1_000, 30_000);
 	const http = new HttpWakes(client, true);
+	const acks = new CursorAcks(client, options.cursorAckEveryMs);
+	// a principal that has been woken over NATS only has a stored cursor from the last time it polled: bring it up to date now, so a broker outage later starts from here
+	void new HttpWakes(client, true).toHead().catch(() => {});
+	signal.addEventListener("abort", () => void acks.flush(), { once: true });
 	while (!signal.aborted) {
 		let source: NatsWakeSource | undefined;
 		let unavailable = "the domain offers no NATS";
@@ -240,7 +315,7 @@ export async function runWakes(client: SomeWorkClient, signal: AbortSignal, onWa
 			const info = natsInfoFrom(await client.connection());
 			offered = info !== undefined;
 			if (info) {
-				source = await NatsWakeSource.connect(info, client.identity.agentId, client.tls, deliver);
+				source = await NatsWakeSource.connect(info, client.identity.agentId, client.tls, deliver, (eventSeq) => acks.note(eventSeq));
 				backoff.reset();
 			}
 		} catch (error) {

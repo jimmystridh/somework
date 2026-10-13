@@ -9,7 +9,7 @@ channel to the domain service.
 
 | Subject | Stream | Purpose |
 |---|---|---|
-| `somework.inbox.<agent>` | `SOMEWORK_INBOX` (30 d) | directed messages and wake-ups (`{kind, messageId, messageType, conversationId, wake, sender}`); one filtered consumer per logical agent |
+| `somework.inbox.<agent>` | `SOMEWORK_INBOX` (30 d) | directed messages and wake-ups (`{kind, messageId, messageType, conversationId, wake, sender, eventSeq}`; `eventSeq` is the notification's position in `GET /v1/events`, which the SDK acknowledges as the principal's event cursor, so an HTTP fallback never starts from an old position); one filtered consumer per logical agent |
 | `somework.event.conversation.<id>`, `.published.<topic>`, `.catalog.changed`, `.policy.denied` | `SOMEWORK_EVENTS` (30 d) | projections for dashboards / the Matrix projector |
 | `somework.subscription.<sub>` | `SOMEWORK_SUBSCRIPTIONS` (30 d) | one consumer *per agent* whose filter set follows that agent's subscriptions |
 | `somework.presence.<agent>` | core NATS (ephemeral) | liveness hints |

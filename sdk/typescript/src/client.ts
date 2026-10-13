@@ -207,8 +207,9 @@ export class SomeWorkClient {
 	}
 
 	/** Event feed after `cursor`. The SDK never holds it open (`waitSeconds` stays 0): push wake-ups come from NATS. */
-	async events(after: number | undefined, waitSeconds = 0): Promise<{ events: any[]; cursor: number }> {
-		const response = await this.get(after === undefined ? `/v1/events?wait=${waitSeconds}` : `/v1/events?after=${after}&wait=${waitSeconds}`, { timeoutMs: (waitSeconds + 30) * 1000 });
+	async events(after: number | undefined, waitSeconds = 0, limit?: number): Promise<{ events: any[]; cursor: number }> {
+		const page = limit === undefined ? "" : `&limit=${limit}`;
+		const response = await this.get(after === undefined ? `/v1/events?wait=${waitSeconds}${page}` : `/v1/events?after=${after}&wait=${waitSeconds}${page}`, { timeoutMs: (waitSeconds + 30) * 1000 });
 		return { events: response.events ?? [], cursor: response.cursor ?? after ?? 0 };
 	}
 
