@@ -19,6 +19,7 @@ export interface PlaywrightOptions {
 const VIDEO_SIZE = { width: 800, height: 450 };
 const MAX_ERRORS = 30;
 const NAVIGATION_TIMEOUT = 90_000;
+const LAUNCH_TIMEOUT_MS = 60_000;
 
 /**
  * Playwright (`playwright-core`, no bundled browsers) driving the installed Edge headlessly. One context and one page at a time. The
@@ -42,7 +43,13 @@ export class PlaywrightBackend implements BrowserBackend {
 	static async launch(options: PlaywrightOptions): Promise<PlaywrightBackend> {
 		const { chromium } = await import("playwright-core");
 		const backend = new PlaywrightBackend(options);
-		backend.#browser = await chromium.launch({ headless: true, ...(options.executablePath ? { executablePath: options.executablePath } : { channel: options.channel }) });
+		// a browser that does not start within a minute is not going to (a stuck launch held a whole job for 3 minutes and then failed it): two short tries instead of one long one
+		const launchOptions = { headless: true, timeout: LAUNCH_TIMEOUT_MS, ...(options.executablePath ? { executablePath: options.executablePath } : { channel: options.channel }) };
+		try {
+			backend.#browser = await chromium.launch(launchOptions);
+		} catch {
+			backend.#browser = await chromium.launch(launchOptions);
+		}
 		await backend.#newContext();
 		return backend;
 	}
