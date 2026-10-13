@@ -163,6 +163,7 @@ export interface WorldOptions {
 	sources?: object[];
 	clock?: object;
 	timers?: object;
+	watches?: object;
 	forwardUrl?: string;
 	mappingsDir?: string;
 	maxAttempts?: number;
@@ -197,6 +198,7 @@ export async function startWorld(options: WorldOptions = {}): Promise<World> {
 		],
 		clock: options.clock ?? { producer: prod("clock"), schedules: [] },
 		...(options.timers ? { timers: options.timers } : {}),
+		...(options.watches ? { watches: options.watches } : {}),
 	});
 	const store = new Store(config.storePath);
 	const sleeps: number[] = [];

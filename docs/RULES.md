@@ -39,7 +39,7 @@ The producers' mappings decide the `data` of each topic. The shipped rules and s
 
 | Topic | `data` fields used |
 |---|---|
-| `github.pull_request.opened`, `.ready_for_review` | `number`, `draft`, `repository.cloneUrl` (also carried: `repository.fullName`, `htmlUrl`, `headSha`, `headRef`, `baseRef`, `author`, `title`, `htmlUrl`) |
+| `github.pull_request.opened`, `.ready_for_review` | `number`, `draft`, `repository.cloneUrl` (also carried: `repository.fullName`, `htmlUrl`, `headSha`, `headRef`, `baseRef`, `author`, `sender`, `title`, `htmlUrl`) |
 | `jira.issue.transitioned` | `issue.key`, `to`, `from`, `repository.cloneUrl`, `repository.ref` (the mapping fills the repository and revision under test from its per-project configuration; the webhook itself carries neither) |
 | `clock.nightly_digest.tick` | `name`, `scheduledFor` (schedule names use underscores: a topic segment may not contain a hyphen) |
 | `grafana.alert.firing` | `alert`, `uid`, `severity`, `summary`, `url` |

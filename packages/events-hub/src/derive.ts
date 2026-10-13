@@ -15,6 +15,8 @@ export const hookToken = (secret: string, source: string, version: number): stri
 export const pullToken = (secret: string): string => derive(secret, "pull");
 /** What one agent presents to ask for timers; a leaked token lets one agent schedule events for itself, nothing else. */
 export const timerToken = (secret: string, agent: string): string => derive(secret, `timer:${agent}`);
+/** What one agent presents to ask for watches on pull requests; a leaked token lets one agent watch for itself, nothing else. No list of agents is kept: the token is derived for whichever agent id is claimed. */
+export const watchToken = (secret: string, agent: string): string => derive(secret, `watch:${agent}`);
 export const adminToken = (secret: string): string => derive(secret, "admin");
 /** The key a code host signs deliveries with for one source (the `github-hmac` check); it is never put in a URL. */
 export const signingSecret = (secret: string, source: string, version: number): string => derive(secret, `hmac:${source}:${version}`);

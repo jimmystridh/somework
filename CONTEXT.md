@@ -108,6 +108,10 @@ _Avoid_: notify, ping
 A declarative file kept in git that describes one subscription: which events wake which agent. The rules in git are the only way to create subscriptions. What an agent does with the event is its own decision (the removed *Reaction* started work on the platform's behalf).
 _Avoid_: automation, workflow, reaction, policy (policy decides who may do what)
 
+**Watch**:
+A standing request by an agent, kept by the hub, to be told about the events of one thing outside the platform (today a pull request). The hub re-publishes the matching events under a topic of that agent alone; a *Rule* in git subscribes the agent to that topic once. A watch is not a *Subscription*: it creates none, so an agent can only ever receive events about what it asked to watch.
+_Avoid_: subscription (a domain object created only by a *Rule*), listener, follow
+
 ## Relationships
 
 - An **Event** is published by a **Producer** under a **Topic**; a **Subscription** selects topics; a match either only records the event for the subscriber or **Wakes** an agent. The agent decides for itself what to do under its own authority.

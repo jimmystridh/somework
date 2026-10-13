@@ -218,6 +218,7 @@
         "headRef": "fix/vat-rounding",
         "baseRef": "main",
         "htmlUrl": "https://github.com/Visma-Administration/visma.administration/pull/7",
+        "sender": "anna-dev",
         "repository": {
           "fullName": "Visma-Administration/visma.administration",
           "cloneUrl": "https://github.com/Visma-Administration/visma.administration.git",

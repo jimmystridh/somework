@@ -55,6 +55,40 @@ interface TimerDbRow {
 	fired_at: number | null;
 }
 
+export interface WatchRow {
+	id: string;
+	agent: string;
+	/** The topic slug of the agent, kept to refuse two agent ids that would share one watch topic. */
+	slug: string;
+	/** Lower-cased `owner/name`. */
+	repository: string;
+	number: number;
+	headSha: string | null;
+	createdAt: number;
+	/** The last time the agent renewed the watch or an event was delivered through it. */
+	activeAt: number;
+	/** Set while the pull request is closed without a merge. */
+	closedAt: number | null;
+	endedAt: number | null;
+	endReason: string | null;
+}
+
+interface WatchDbRow {
+	id: string;
+	agent: string;
+	slug: string;
+	repository: string;
+	number: number;
+	head_sha: string | null;
+	created_at: number;
+	active_at: number;
+	closed_at: number | null;
+	ended_at: number | null;
+	end_reason: string | null;
+}
+
+const toWatch = (row: WatchDbRow): WatchRow => ({ id: row.id, agent: row.agent, slug: row.slug, repository: row.repository, number: row.number, headSha: row.head_sha, createdAt: row.created_at, activeAt: row.active_at, closedAt: row.closed_at, endedAt: row.ended_at, endReason: row.end_reason });
+
 const toTimer = (row: TimerDbRow): TimerRow => ({ id: row.id, agent: row.agent, key: row.key, dueAt: row.due_at, note: row.note, payload: row.payload, createdAt: row.created_at, firedAt: row.fired_at });
 
 /** The hub's own durable state: pull cursor, dead letters, the inbox of the internal listener, clock progress and source switches. */
@@ -85,6 +119,12 @@ export class Store {
 				id TEXT PRIMARY KEY, agent TEXT NOT NULL, key TEXT NOT NULL, due_at INTEGER NOT NULL, note TEXT NOT NULL, payload TEXT,
 				created_at INTEGER NOT NULL, fired_at INTEGER, UNIQUE (agent, key)
 			);
+			CREATE TABLE IF NOT EXISTS watches (
+				id TEXT PRIMARY KEY, agent TEXT NOT NULL, slug TEXT NOT NULL, repository TEXT NOT NULL, number INTEGER NOT NULL, head_sha TEXT,
+				created_at INTEGER NOT NULL, active_at INTEGER NOT NULL, closed_at INTEGER, ended_at INTEGER, end_reason TEXT,
+				UNIQUE (agent, repository, number)
+			);
+			CREATE INDEX IF NOT EXISTS watches_by_pull_request ON watches (repository, number);
 		`);
 		for (const table of ["dead_letters", "inbox"]) {
 			const columns = (this.#db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
@@ -135,6 +175,81 @@ export class Store {
 
 	pruneTimers(firedBefore: number): void {
 		this.#db.prepare("DELETE FROM timers WHERE fired_at IS NOT NULL AND fired_at < ?").run(firedBefore);
+	}
+
+	// ---- watches ------------------------------------------------------------------------------------------------------------------
+	/** Adds a watch, or renews the agent's watch of the same pull request (an ended one comes back to life, keeping its id). Returns undefined when the agent holds too many others. */
+	putWatch(watch: Pick<WatchRow, "id" | "agent" | "slug" | "repository" | "number">, now: number, maxActive: number): { row: WatchRow; created: boolean } | undefined {
+		this.#db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.#db.prepare("SELECT * FROM watches WHERE agent = ? AND repository = ? AND number = ?").get(watch.agent, watch.repository, watch.number) as unknown as WatchDbRow | undefined;
+			if (existing) {
+				const active = existing.ended_at === null;
+				if (!active && this.activeWatchCount(watch.agent) >= maxActive) {
+					this.#db.exec("ROLLBACK");
+					return undefined;
+				}
+				this.#db.prepare("UPDATE watches SET active_at = ?, ended_at = NULL, end_reason = NULL, closed_at = CASE WHEN ended_at IS NULL THEN closed_at ELSE NULL END WHERE id = ?").run(now, existing.id);
+			} else {
+				if (this.activeWatchCount(watch.agent) >= maxActive) {
+					this.#db.exec("ROLLBACK");
+					return undefined;
+				}
+				this.#db.prepare("INSERT INTO watches(id, agent, slug, repository, number, created_at, active_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(watch.id, watch.agent, watch.slug, watch.repository, watch.number, now, now);
+			}
+			const row = toWatch(this.#db.prepare("SELECT * FROM watches WHERE agent = ? AND repository = ? AND number = ?").get(watch.agent, watch.repository, watch.number) as unknown as WatchDbRow);
+			this.#db.exec("COMMIT");
+			return { row, created: !existing };
+		} catch (error) {
+			this.#db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	activeWatchCount(agent?: string): number {
+		const sql = "SELECT COUNT(*) AS n FROM watches WHERE ended_at IS NULL" + (agent === undefined ? "" : " AND agent = ?");
+		return (this.#db.prepare(sql).get(...(agent === undefined ? [] : [agent])) as { n: number }).n;
+	}
+
+	/** Another agent id that maps to the same watch topic as this one, if any holds a watch. */
+	slugOwner(slug: string, notAgent: string): string | undefined {
+		return (this.#db.prepare("SELECT agent FROM watches WHERE slug = ? AND agent <> ? LIMIT 1").get(slug, notAgent) as { agent: string } | undefined)?.agent;
+	}
+
+	watchesOf(agent: string): WatchRow[] {
+		return (this.#db.prepare("SELECT * FROM watches WHERE agent = ? ORDER BY created_at, rowid").all(agent) as unknown as WatchDbRow[]).map(toWatch);
+	}
+
+	activeWatchesOfPullRequest(repository: string, number: number): WatchRow[] {
+		return (this.#db.prepare("SELECT * FROM watches WHERE repository = ? AND number = ? AND ended_at IS NULL ORDER BY id").all(repository, number) as unknown as WatchDbRow[]).map(toWatch);
+	}
+
+	activeWatchesOfCommit(repository: string, headSha: string): WatchRow[] {
+		return (this.#db.prepare("SELECT * FROM watches WHERE repository = ? AND head_sha = ? AND ended_at IS NULL ORDER BY id").all(repository, headSha) as unknown as WatchDbRow[]).map(toWatch);
+	}
+
+	touchWatch(id: string, now: number, change: { headSha?: string; closedAt?: number | null }): void {
+		this.#db.prepare("UPDATE watches SET active_at = ?, head_sha = COALESCE(?, head_sha), closed_at = CASE WHEN ? THEN ? ELSE closed_at END WHERE id = ? AND ended_at IS NULL").run(now, change.headSha ?? null, change.closedAt === undefined ? 0 : 1, change.closedAt ?? null, id);
+	}
+
+	endWatch(id: string, now: number, reason: string): void {
+		this.#db.prepare("UPDATE watches SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL").run(now, reason, id);
+	}
+
+	/** Ends the agent's active watch by id or by `owner/name#number`; true when one was active. */
+	cancelWatch(agent: string, idOrRef: string, now: number): boolean {
+		return Number(this.#db.prepare("UPDATE watches SET ended_at = ?, end_reason = 'cancelled' WHERE agent = ? AND ended_at IS NULL AND (id = ? OR repository || '#' || number = lower(?))").run(now, agent, idOrRef, idOrRef).changes) > 0;
+	}
+
+	/** Ends the watches nobody renewed or heard from since `inactiveBefore`, and those of pull requests closed since `closedBefore`; returns how many. */
+	expireWatches(now: number, inactiveBefore: number, closedBefore: number): number {
+		const closed = Number(this.#db.prepare("UPDATE watches SET ended_at = ?, end_reason = 'closed' WHERE ended_at IS NULL AND closed_at IS NOT NULL AND closed_at < ?").run(now, closedBefore).changes);
+		const idle = Number(this.#db.prepare("UPDATE watches SET ended_at = ?, end_reason = 'expired' WHERE ended_at IS NULL AND active_at < ?").run(now, inactiveBefore).changes);
+		return closed + idle;
+	}
+
+	pruneWatches(endedBefore: number): void {
+		this.#db.prepare("DELETE FROM watches WHERE ended_at IS NOT NULL AND ended_at < ?").run(endedBefore);
 	}
 
 	#get(name: string): string | undefined {

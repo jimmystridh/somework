@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { createHub } from "./bootstrap.ts";
-import { hookToken, signingSecret, timerToken } from "./derive.ts";
+import { AGENT_ID } from "./config.ts";
+import { hookToken, signingSecret, timerToken, watchToken } from "./derive.ts";
 import { jsonLogger } from "./log.ts";
 import { parseBody } from "./mapping.ts";
 
@@ -16,6 +17,7 @@ const USAGE = `somework-hub <command>
                                      the webhook URL of every source: the secret part of each URL is printed, keep it out of logs and chat
   signing-secret <source>            the key a code host signs deliveries with for a source verified with github-hmac
   timer-token <agent>                the token one agent presents to ask for timers (keep it out of logs and chat)
+  watch-token <agent>                the token one agent presents to watch pull requests (keep it out of logs and chat)
 
 Configuration is read from HUB_CONFIG and HUB_SECRET_FILE, like the service.`;
 
@@ -87,6 +89,12 @@ async function main(argv: string[]): Promise<number> {
 		if (area === "timer-token" && action) {
 			if (!config.timers?.agents.includes(action)) return fail(`${action} is not listed in timers.agents`);
 			console.log(timerToken(secret, action));
+			return 0;
+		}
+		if (area === "watch-token" && action) {
+			if (!config.watches) return fail("watches are not enabled in the hub config");
+			if (!AGENT_ID.test(action)) return fail(`${action} is not an agent id (agent/<name>)`);
+			console.log(watchToken(secret, action));
 			return 0;
 		}
 		console.error(USAGE);

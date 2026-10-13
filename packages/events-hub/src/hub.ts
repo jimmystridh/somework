@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ForwardConfig, HubConfig, SourceConfig } from "./config.ts";
 import { Clock } from "./clock.ts";
 import { Timers } from "./timers.ts";
+import { Watches } from "./watches.ts";
 import { hookToken, safeEqual } from "./derive.ts";
 import type { Forwarder } from "./forwarder.ts";
 import { silent, type Log } from "./log.ts";
@@ -68,6 +69,7 @@ export class Hub {
 	readonly metrics = new Metrics();
 	readonly clock: Clock | undefined;
 	readonly timers: Timers | undefined;
+	readonly watches: Watches | undefined;
 	readonly #deps: HubDeps;
 	readonly #log: Log;
 	readonly #sleep: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -85,6 +87,8 @@ export class Hub {
 	readonly #ticks;
 	readonly #timerEvents;
 	readonly #timersPending;
+	readonly #watchEvents;
+	readonly #watchesActive;
 	readonly #pending;
 	readonly #oldest;
 	readonly #queued;
@@ -110,6 +114,8 @@ export class Hub {
 		this.#ticks = m.counter("hub_clock_ticks_total", "Clock ticks, by schedule and outcome.");
 		this.#timerEvents = m.counter("hub_timers_total", "Timers that came due, by agent and outcome.");
 		this.#timersPending = m.gauge("hub_timers_pending", "Timers waiting to come due.");
+		this.#watchEvents = m.counter("hub_watch_events_total", "Events re-published to an agent that watches a pull request, by agent.");
+		this.#watchesActive = m.gauge("hub_watches_active", "Watches on pull requests that have not ended.");
 		this.#pending = m.gauge("hub_dead_letters", "Dead letters waiting for a replay, by source.");
 		this.#oldest = m.gauge("hub_receiver_oldest_pending_age_seconds", "Age of the oldest webhook still queued at the receiver.");
 		this.#queued = m.gauge("hub_receiver_queued", "Webhooks queued at the receiver.");
@@ -135,6 +141,14 @@ export class Hub {
 					onFire: (agent, outcome, late) => this.#timerEvents({ agent, outcome: outcome === "published" && late ? "published_late" : outcome }),
 				})
 			: undefined;
+		this.watches = deps.config.watches
+			? new Watches({ config: deps.config.watches, store: deps.store, now: deps.now, log: this.#log, onDelivery: (agent) => this.#watchEvents({ agent }) })
+			: undefined;
+	}
+
+	async #publishWatch(source: string, event: Parameters<Publisher["publish"]>[1], occurredAt: string): Promise<void> {
+		const result = await this.#deps.publisher.publish(source, event, occurredAt);
+		this.#log("info", result.duplicate ? "watch_event_duplicate" : "watch_event_published", { topic: event.topic, seq: result.seq });
 	}
 
 	async #publishClock(event: Parameters<Publisher["publish"]>[1], occurredAt: string): Promise<{ duplicate: boolean }> {
@@ -173,6 +187,7 @@ export class Hub {
 			if (result.duplicate) duplicates++;
 			this.#log("info", result.duplicate ? "event_duplicate" : "event_published", { source: source.name, topic: event.topic, seq: result.seq });
 		}
+		if (this.watches && source.name === this.watches.source) await this.watches.relay(events, item.receivedAt, (event, occurredAt) => this.#publishWatch(source.name, event, occurredAt));
 		return { kind: "published", events: events.length, duplicates };
 	}
 
@@ -364,6 +379,7 @@ export class Hub {
 			const rows = store.inbox(20);
 			this.#inboxSize.set(store.inboxSize());
 			this.#timersPending.set(store.pendingTimerCount());
+			this.#watchesActive.set(store.activeWatchCount());
 			if (rows.length === 0) {
 				await new Promise<void>((resolve) => {
 					const timer = setTimeout(resolve, 1000);
@@ -400,6 +416,7 @@ export class Hub {
 				this.#receiverUp.set(0);
 				this.#receiverSeen = null;
 			}
+			this.watches?.maintain();
 			const counts = this.#deps.store.deadLetterCounts();
 			for (const source of this.#sources.keys()) this.#pending.set(counts[source] ?? 0, { source });
 			const now = (this.#deps.now ?? Date.now)();

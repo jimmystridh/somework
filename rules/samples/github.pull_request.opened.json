@@ -12,6 +12,7 @@
     "headRef": "feature/PROJ-123-rounding",
     "baseRef": "main",
     "htmlUrl": "https://github.com/example-org/example-repo/pull/42",
+    "sender": "octocat",
     "repository": {
       "fullName": "example-org/example-repo",
       "cloneUrl": "https://github.com/example-org/example-repo.git",

@@ -25,5 +25,6 @@
       { "name": "nightly_digest", "cron": "0 23 * * *", "timeZone": "Europe/Stockholm", "jitterSeconds": 0, "missed": "run-once" }
     ]
   },
-  "timers": { "agents": ["agent/aikido-fixer"], "minDelaySeconds": 60, "maxDelaySeconds": 604800, "maxPendingPerAgent": 20 }
+  "timers": { "agents": ["agent/aikido-fixer"], "minDelaySeconds": 60, "maxDelaySeconds": 604800, "maxPendingPerAgent": 20 },
+  "watches": { "source": "github", "maxPerAgent": 50 }
 }

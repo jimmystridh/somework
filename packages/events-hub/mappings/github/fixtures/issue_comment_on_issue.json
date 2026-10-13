@@ -86,6 +86,7 @@
         "number": 12,
         "isPullRequest": false,
         "title": "Crash on startup",
+        "sender": "carol",
         "comment": {
           "id": 8002,
           "author": "carol",

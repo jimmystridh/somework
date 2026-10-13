@@ -79,7 +79,8 @@
         "deleted": false,
         "forced": false,
         "commitCount": 0,
-        "pusher": "anna-dev"
+        "pusher": "anna-dev",
+        "sender": "anna-dev"
       },
       "classification": "internal"
     }

@@ -101,6 +101,7 @@
         "number": 7,
         "isPullRequest": true,
         "title": "Fix rounding in VAT report",
+        "sender": "bob-reviewer",
         "comment": {
           "id": 8001,
           "author": "bob-reviewer",

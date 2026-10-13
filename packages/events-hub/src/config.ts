@@ -45,6 +45,13 @@ export interface TimersConfig {
 	maxPendingPerAgent: number;
 }
 
+/** Watches on pull requests (ADR 0005): an agent asks the hub for the events of one pull request and gets them as `github.watch.<agent>.event`. Open to every agent that presents its own token. */
+export interface WatchesConfig {
+	/** The source whose mapped events are matched and whose producer publishes the watch events (default `github`). */
+	source: string;
+	maxPerAgent: number;
+}
+
 export interface HubConfig {
 	domain: { url: string; caFile?: string; requireTls: boolean };
 	receiver: { url: string; caFile?: string; waitSeconds: number };
@@ -55,6 +62,7 @@ export interface HubConfig {
 	sources: SourceConfig[];
 	clock: { producer?: ProducerConfig; schedules: ScheduleConfig[] };
 	timers?: TimersConfig;
+	watches?: WatchesConfig;
 }
 
 const SOURCE_NAME = /^[a-z][a-z0-9-]{0,30}$/;
@@ -103,6 +111,7 @@ export function parseConfig(raw: unknown, baseDir = "."): HubConfig {
 	});
 	if (schedules.length > 0 && !input.clock?.producer?.keyFile) throw new Error("clock schedules need clock.producer.keyFile");
 	const timers = input.timers === undefined ? undefined : parseTimers(input.timers, Boolean(input.clock?.producer?.keyFile));
+	const watches = input.watches === undefined ? undefined : parseWatches(input.watches, sources);
 	return {
 		domain: { url: need(input.domain?.url, "domain.url"), ...(input.domain?.caFile ? { caFile: String(input.domain.caFile) } : {}), requireTls: input.domain?.requireTls !== false },
 		receiver: { url: need(input.receiver?.url, "receiver.url"), ...(input.receiver?.caFile ? { caFile: String(input.receiver.caFile) } : {}), waitSeconds: Number(input.receiver?.waitSeconds ?? 25) },
@@ -113,6 +122,7 @@ export function parseConfig(raw: unknown, baseDir = "."): HubConfig {
 		sources,
 		clock: { ...(input.clock?.producer ? { producer: { keyFile: String(input.clock.producer.keyFile) } } : {}), schedules },
 		...(timers ? { timers } : {}),
+		...(watches ? { watches } : {}),
 	};
 }
 
@@ -140,6 +150,16 @@ function parseTimers(raw: unknown, hasClockProducer: boolean): TimersConfig {
 	};
 	if (config.minDelaySeconds > config.maxDelaySeconds) throw new Error("timers.minDelaySeconds is larger than maxDelaySeconds");
 	return config;
+}
+
+function parseWatches(raw: unknown, sources: SourceConfig[]): WatchesConfig {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("watches must be an object");
+	const input = raw as Record<string, any>;
+	const source = String(input.source ?? "github");
+	if (!sources.some((s) => s.name === source && s.mapping && s.producer)) throw new Error(`watches.source "${source}" is not a source with a mapping and a producer`);
+	const maxPerAgent = Number(input.maxPerAgent ?? 50);
+	if (!Number.isInteger(maxPerAgent) || maxPerAgent < 1) throw new Error("watches.maxPerAgent must be a positive whole number");
+	return { source, maxPerAgent };
 }
 
 export function loadConfig(path: string): HubConfig {

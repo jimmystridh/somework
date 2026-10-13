@@ -80,6 +80,6 @@ describe("the mappings produce the event shapes the shipped rules rely on (rules
 
 	it("carries nothing the sample for a pull request does not list", () => {
 		const events = recorded.get("github.pull_request.opened")!;
-		assert.deepEqual(Object.keys(events[0]!.data as object).sort(), ["action", "author", "baseRef", "draft", "headRef", "headSha", "htmlUrl", "number", "repository", "title"]);
+		assert.deepEqual(Object.keys(events[0]!.data as object).sort(), ["action", "author", "baseRef", "draft", "headRef", "headSha", "htmlUrl", "number", "repository", "sender", "title"]);
 	});
 });

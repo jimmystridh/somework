@@ -1,12 +1,14 @@
 /* GitHub webhook -> events. Input: {headers, body, receivedAt, source, defaults}. Headers are lower-cased by the receiver.
    The data shapes are the ones rules/samples/ records and docs/RULES.md lists; change them together. Key = the delivery id, so a redelivery of
    the same webhook is the same event. Only the fields named below are carried; the draft flag is data, whether to review drafts is a rule's
-   decision. $clip and $excerpt are provided by the hub. */
+   decision. Every event carries the login that caused it as `sender`, so an agent can tell its own actions from others'. The hub's watches (docs/EVENTS.md,
+   "Watches") read `repository.fullName` and `number` (`pullRequests` and `headSha` for check runs) of these events. $clip and $excerpt are provided by the hub. */
 (
   $event := headers."x-github-event";
   $delivery := headers."x-github-delivery";
   $b := body;
   $key := "github:delivery:" & $delivery;
+  $sender := $b.sender.login;
 
   $repo := $b.repository ? {
     "fullName": $clip($b.repository.full_name, 200),
@@ -22,6 +24,10 @@
         : $action = "synchronize" ? "github.pull_request.synchronize"
         : $action = "ready_for_review" ? "github.pull_request.ready_for_review"
         : $action = "reopened" ? "github.pull_request.reopened"
+        : $action = "converted_to_draft" ? "github.pull_request.converted_to_draft"
+        : $action = "edited" ? "github.pull_request.edited"
+        : $action = "review_requested" ? "github.pull_request.review_requested"
+        : $action = "review_request_removed" ? "github.pull_request.review_request_removed"
         : $action = "closed" ? ($pr.merged = true ? "github.pull_request.merged" : "github.pull_request.closed");
       $base := {
         "action": $action,
@@ -33,12 +39,15 @@
         "headRef": $clip($pr.head.ref, 200),
         "baseRef": $clip($pr.base.ref, 200),
         "htmlUrl": $pr.html_url,
+        "sender": $sender,
         "repository": $repo
       };
       $topic ? {
         "topic": $topic,
         "key": $key,
-        "data": $action = "closed" ? $merge([$base, { "merged": $pr.merged = true }]) : $base
+        "data": $action = "closed" ? $merge([$base, { "merged": $pr.merged = true }])
+          : $action = "review_requested" or $action = "review_request_removed" ? $merge([$base, { "requestedReviewer": $b.requested_reviewer.login, "requestedTeam": $clip($b.requested_team.name, 100) }])
+          : $base
       }
     )
     : $event = "check_run" and $b.action = "completed" and $b.check_run ? {
@@ -51,6 +60,7 @@
         "conclusion": $b.check_run.conclusion,
         "htmlUrl": $b.check_run.html_url,
         "headSha": $b.check_run.head_sha,
+        "sender": $sender,
         "pullRequests": [$b.check_run.pull_requests.number][[0..9]]
       }
     }
@@ -62,10 +72,50 @@
         "number": $b.issue.number,
         "isPullRequest": $exists($b.issue.pull_request),
         "title": $clip($b.issue.title, 200),
+        "sender": $sender,
         "comment": {
           "id": $b.comment.id,
           "author": $b.comment.user.login,
           "authorAssociation": $b.comment.author_association,
+          "htmlUrl": $b.comment.html_url,
+          "body": $excerpt($b.comment.body, 500)
+        }
+      }
+    }
+    : $event = "pull_request_review" and ($b.action = "submitted" or $b.action = "dismissed") and $b.review and $b.pull_request ? {
+      "topic": "github.pull_request_review." & $b.action,
+      "key": $key,
+      "data": {
+        "repository": $repo,
+        "number": $b.pull_request.number,
+        "title": $clip($b.pull_request.title, 200),
+        "sender": $sender,
+        "review": {
+          "id": $b.review.id,
+          "state": $lowercase($b.review.state),
+          "author": $b.review.user.login,
+          "authorAssociation": $b.review.author_association,
+          "commitId": $b.review.commit_id,
+          "htmlUrl": $b.review.html_url,
+          "body": $excerpt($b.review.body, 500)
+        }
+      }
+    }
+    : $event = "pull_request_review_comment" and $b.action = "created" and $b.comment and $b.pull_request ? {
+      "topic": "github.pull_request_review_comment.created",
+      "key": $key,
+      "data": {
+        "repository": $repo,
+        "number": $b.pull_request.number,
+        "title": $clip($b.pull_request.title, 200),
+        "sender": $sender,
+        "comment": {
+          "id": $b.comment.id,
+          "author": $b.comment.user.login,
+          "authorAssociation": $b.comment.author_association,
+          "path": $clip($b.comment.path, 250),
+          "line": $b.comment.line,
+          "inReplyTo": $b.comment.in_reply_to_id,
           "htmlUrl": $b.comment.html_url,
           "body": $excerpt($b.comment.body, 500)
         }
@@ -89,7 +139,8 @@
           "message": $clip($split($b.head_commit.message, "\n")[0], 200),
           "author": $b.head_commit.author.username
         },
-        "pusher": $b.pusher.name
+        "pusher": $b.pusher.name,
+        "sender": $sender
       }
     }
   )

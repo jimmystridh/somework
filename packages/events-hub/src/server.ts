@@ -1,9 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createServer as createTlsServer } from "node:https";
-import { adminToken, safeEqual, timerToken } from "./derive.ts";
+import { AGENT_ID } from "./config.ts";
+import { adminToken, safeEqual, timerToken, watchToken } from "./derive.ts";
 import type { Hub } from "./hub.ts";
 import type { Store } from "./store.ts";
 import { TimerError } from "./timers.ts";
+import { WatchError } from "./watches.ts";
 
 const MAX_BODY = 1024 * 1024;
 const FORWARDED = /^(content-type|user-agent|x-grafana-.+|x-hook-.+)$/;
@@ -27,7 +29,7 @@ async function readBody(req: IncomingMessage, limit: number): Promise<Buffer | n
 
 const MAX_TIMER_BODY = 16 * 1024;
 
-/** One listener, four audiences: senders inside the private network (`/in`), agents asking for timers (`/v1/timers`, a token per agent), the operator (`/admin`, bearer) and monitoring (`/healthz`, `/metrics`). */
+/** One listener, four audiences: senders inside the private network (`/in`), agents asking for timers or watches (`/v1/timers`, `/v1/watches`, a token per agent), the operator (`/admin`, bearer) and monitoring (`/healthz`, `/metrics`). */
 export function createHubServer(hub: Hub, store: Store, secret: string, tls?: { cert: Buffer | string; key: Buffer | string }): Server {
 	const admin = adminToken(secret);
 	const authorized = (req: IncomingMessage): boolean => safeEqual(/^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""))?.[1] ?? "", admin);
@@ -61,6 +63,36 @@ export function createHubServer(hub: Hub, store: Store, secret: string, tls?: { 
 				if (req.method === "DELETE" && one) return timers.cancel(agent, decodeURIComponent(one[1]!)) ? send(res, 200, { cancelled: true }) : send(res, 404, { error: "no_such_pending_timer" });
 			} catch (error) {
 				if (error instanceof TimerError) return send(res, error.status, { error: error.message });
+				throw error;
+			}
+			return send(res, 404, { error: "not_found" });
+		}
+
+		if (url.pathname === "/v1/watches" || url.pathname.startsWith("/v1/watches/")) {
+			const watches = hub.watches;
+			if (!watches) return send(res, 404, { error: "watches_not_enabled" });
+			const agent = String(req.headers["x-somework-agent"] ?? "");
+			const presented = /^Bearer (.+)$/.exec(String(req.headers.authorization ?? ""))?.[1] ?? "";
+			if (!AGENT_ID.test(agent) || !safeEqual(presented, watchToken(secret, agent))) return send(res, 401, { error: "unauthorized" });
+			try {
+				if (req.method === "POST" && url.pathname === "/v1/watches") {
+					const body = await readBody(req, MAX_TIMER_BODY);
+					if (body === null) return send(res, 413, { error: "too_large" });
+					let parsed: unknown;
+					try {
+						parsed = JSON.parse(body.toString("utf8"));
+					} catch {
+						return send(res, 400, { error: "the body must be JSON" });
+					}
+					if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return send(res, 400, { error: "the body must be a JSON object" });
+					const { watch, created } = watches.request(agent, parsed as Record<string, unknown>);
+					return send(res, created ? 201 : 200, { ...watch, created, note: `events arrive on ${watch.topic} only while a rule in git subscribes you to that topic` });
+				}
+				if (req.method === "GET" && url.pathname === "/v1/watches") return send(res, 200, { watches: watches.list(agent) });
+				const one = /^\/v1\/watches\/([^/]{1,200})$/.exec(url.pathname);
+				if (req.method === "DELETE" && one) return watches.cancel(agent, decodeURIComponent(one[1]!)) ? send(res, 200, { cancelled: true }) : send(res, 404, { error: "no_such_active_watch" });
+			} catch (error) {
+				if (error instanceof WatchError) return send(res, error.status, { error: error.message });
 				throw error;
 			}
 			return send(res, 404, { error: "not_found" });

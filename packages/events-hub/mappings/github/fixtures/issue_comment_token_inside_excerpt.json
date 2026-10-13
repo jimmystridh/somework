@@ -89,6 +89,7 @@
         "number": 7,
         "isPullRequest": true,
         "title": "Fix",
+        "sender": "bob-reviewer",
         "comment": {
           "id": 8003,
           "author": "bob-reviewer",

@@ -89,6 +89,7 @@
         "conclusion": "failure",
         "htmlUrl": "https://github.com/Visma-Administration/visma.administration/runs/31",
         "headSha": "1111111111111111111111111111111111111111",
+        "sender": "github-actions[bot]",
         "pullRequests": [
           7,
           8
