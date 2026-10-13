@@ -10,6 +10,7 @@ import { sameModel, type ModelRef } from "./providers/allowlist.ts";
 import { supportedEfforts } from "./providers/effective-model.ts";
 import type { Effort } from "./setup/contract.ts";
 import { Metrics } from "./metrics.ts";
+import { priceSpend } from "./pricing.ts";
 import type { RunRecording, RunTracer } from "./trace.ts";
 import { emptyUsage, type AgentOutcome, type AgentRequest, type AgentRuntime, type ApprovalDecision, type ApprovalRequest, type RunHooks, type Usage } from "./runtime.ts";
 
@@ -314,7 +315,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		return Object.fromEntries(
 			Object.entries<any>(models).map(([key, usage]) => [
 				key,
-				{ inputTokens: usage.input ?? 0, outputTokens: usage.output ?? 0, cacheReadTokens: usage.cacheRead ?? 0, cacheWriteTokens: usage.cacheWrite ?? 0, costUsd: usage.cost?.total ?? 0 },
+				{ inputTokens: usage.input ?? 0, outputTokens: usage.output ?? 0, cacheReadTokens: usage.cacheRead ?? 0, cacheWriteTokens: usage.cacheWrite ?? 0, costUsd: modelCostUsd(key, usage) },
 			]),
 		);
 	}
@@ -348,11 +349,11 @@ export class PiDurableRuntime implements AgentRuntime {
 		const view = await conversation.viewState(ctx);
 		const models = (view as any).value?.docs?.["pi.usage"]?.models ?? {};
 		const total = emptyUsage();
-		for (const usage of Object.values<any>(models)) {
+		for (const [key, usage] of Object.entries<any>(models)) {
 			total.inputTokens += usage.input ?? 0;
 			total.outputTokens += usage.output ?? 0;
 			total.totalTokens += budgetTokens(usage);
-			total.costUsd += usage.cost?.total ?? 0;
+			total.costUsd += modelCostUsd(key, usage);
 		}
 		return total;
 	}
@@ -390,6 +391,13 @@ export class PiDurableRuntime implements AgentRuntime {
 /** Pi stores the model by provider and id only; the effort is the agent's `thinkingLevel`. */
 const piModel = (model: ModelRef): { provider: string; modelId: string } => ({ provider: model.provider, modelId: model.modelId });
 const thinkingOf = (effort: Effort | undefined): { thinkingLevel?: Effort } => (effort ? { thinkingLevel: effort } : {});
+
+/** What a model's usage cost: Pi's own figure, or the price list's (`pricing.ts`) when Pi has no price for the model, as for a model newer than its table. */
+export function modelCostUsd(key: string, usage: any): number {
+	const own = usage.cost?.total ?? 0;
+	if (own > 0) return own;
+	return priceSpend(key, { inputTokens: usage.input ?? 0, outputTokens: usage.output ?? 0, cacheReadTokens: usage.cacheRead ?? 0, cacheWriteTokens: usage.cacheWrite ?? 0 }) ?? 0;
+}
 
 /** A cache read costs a tenth of fresh input or less, but a long conversation re-reads its whole context on every turn: counted in full it would dwarf the work done. */
 export const CACHE_READ_WEIGHT = 0.1;

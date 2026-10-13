@@ -230,6 +230,16 @@ A token budget (the per-job cap, the daily limit, the pools of the ledger) count
 
 The daily limit is one envelope: the tasks' spend, the events' spend and the chat's spend (each pool up to its own share) all come off it. A task may start while `tokenPools.tasks.remaining` is at least a twentieth of the per-job cap (at most 100,000) and then runs on what is left, up to the cap. `/status` shows `remaining` next to each pool's `used` and `limit`, because the task pool's own `used` and `limit` alone can look as if there were tokens left when the chat has taken them.
 
+## Cost: where the dollars come from
+
+`somework_llm_cost_usd_total` and a job's `costUsd` are **API-equivalent**: what the tokens would cost at the provider's list price (the agents sign in with a ChatGPT subscription, which is billed flat). The method is the one `ccusage` uses, and the prices are the ones it uses too, LiteLLM's published list (`model_prices_and_context_window.json`):
+
+- each bucket at its own rate: fresh input, cache reads (the input price when the model has no cache discount), cache writes (and the one-hour retention at twice the input price when the list has no rate), output;
+- a request whose whole context, cached or not, passes 272k tokens (200k for the models that say so) is billed entirely at the higher rates, not only the part above;
+- the flex and priority (fast) service tiers scale the cost by their input price.
+
+Pi prices every request itself from the table baked into its package and the kit uses that figure; `src/pricing.ts` is the second source for what Pi does not know (a model newer than its table, a provider that reports no cost), and `somework_llm_unpriced_tokens_total` counts the tokens of a model that has no price anywhere, so a missing cost is visible. Refresh the table with `node scripts/update-pricing.ts` (it writes `src/pricing-data.json`) and check what the agents recorded against it with `node scripts/pricing-audit.ts [--days 14]`: for the two models the fleet has used, the recorded cost equals the list's to the cent. An aggregate has no per-request sizes, so a model with long-context requests records a little more than the audit expects; ccusage's date-aware prices (a price that changed on a day) are not replicated.
+
 ## Drain: deploying without waiting for a gap
 
 A file named `drain` in the state directory (`PI_STATE_DIR`) puts the agent in drain mode, so a deployment does not have to wait for a quiet moment in a busy agent: it creates the file, waits until the jobs that run have finished, replaces the agent and removes the file.

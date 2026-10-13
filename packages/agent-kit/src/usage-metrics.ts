@@ -11,17 +11,20 @@ const KINDS = ["input", "output", "cache_read", "cache_write"] as const;
 export function llmUsageCounters(metrics: Metrics, who: { agent: string; role: string }): { record(spent: ModelSpend): void; start(model: { provider: string; modelId: string }): void } {
 	const tokens = metrics.counter("somework_llm_tokens_total", "Tokens spent on models, by agent, role, provider, model and kind (input, output, cache_read, cache_write)");
 	const cost = metrics.counter("somework_llm_cost_usd_total", "Cost in US dollars of the tokens spent on models, by agent, role, provider and model");
+	const unpriced = metrics.counter("somework_llm_unpriced_tokens_total", "Tokens spent on models that have no price, by agent, role, provider and model: their cost is missing from somework_llm_cost_usd_total (run scripts/update-pricing.ts)");
 	const labels = (provider: string, model: string) => ({ agent: who.agent, role: who.role, provider, model });
 	return {
 		start: ({ provider, modelId }) => {
 			for (const kind of KINDS) tokens({ ...labels(provider, modelId), kind }, 0);
 			cost(labels(provider, modelId), 0);
+			unpriced(labels(provider, modelId), 0);
 		},
 		record: (spent) => {
 			const base = labels(spent.provider, spent.modelId);
 			const byKind = { input: spent.inputTokens, output: spent.outputTokens, cache_read: spent.cacheReadTokens, cache_write: spent.cacheWriteTokens };
 			for (const kind of KINDS) if (byKind[kind] > 0) tokens({ ...base, kind }, byKind[kind]);
 			if (spent.costUsd > 0) cost(base, spent.costUsd);
+			else if (spent.inputTokens + spent.outputTokens + spent.cacheReadTokens + spent.cacheWriteTokens > 0) unpriced(base, spent.inputTokens + spent.outputTokens + spent.cacheReadTokens + spent.cacheWriteTokens);
 		},
 	};
 }
