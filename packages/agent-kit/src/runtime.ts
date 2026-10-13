@@ -7,12 +7,19 @@ export interface Budget {
 	maxMinutes: number;
 }
 
+export interface RunImage {
+	data: string;
+	mimeType: string;
+}
+
 export interface AgentRequest {
 	/** Idempotency key of the job: a retry with the same id finds the same durable run. */
 	requestId: string;
 	/** Stable routing key: the same key continues the same conversation. */
 	agentKey: string;
 	instruction: string;
+	/** Pictures that go with the instruction, shown to the model in the same message (base64). A model that cannot read images ignores them. */
+	images?: readonly RunImage[];
 	/** Working directory inside the sandbox. */
 	workspace: string;
 	budget: Budget;

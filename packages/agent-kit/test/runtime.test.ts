@@ -65,6 +65,21 @@ describe("PiDurableRuntime", () => {
 		assert.ok(progress.includes("tool: write") && progress.includes("tool: bash"), `progress: ${progress}`);
 	});
 
+	it("sends the pictures of a request to the model in the same message as the instruction", async () => {
+		const contexts: any[] = [];
+		const dir = mkdtempSync(join(tmpdir(), "pi-runtime-img-"));
+		const fake = scriptedModels(["final:i see it"], (context) => contexts.push(context));
+		const runtime = new PiDurableRuntime({ storagePath: join(dir, "state.sqlite"), models: fake.models, model: fake.model, env: (cwd) => new NodeExecutionEnv({ cwd: cwd ?? dir }) });
+		await runtime.start();
+		open.push(runtime);
+		const workspace = join(dir, "w");
+		mkdirSync(workspace, { recursive: true });
+		const outcome = await runtime.execute(request(workspace, { instruction: "what is in this picture?", images: [{ data: "aGVsbG8=", mimeType: "image/png" }] }), hooks().hooks);
+		assert.equal(outcome.status, "done");
+		const user = contexts[0].messages.find((message: any) => message.role === "user");
+		assert.deepEqual(user.content, [{ type: "text", text: "what is in this picture?" }, { type: "image", data: "aGVsbG8=", mimeType: "image/png" }]);
+	});
+
 	it("reports what each model spent, adding up to the usage of the run", async () => {
 		const spent: Parameters<NonNullable<PiRuntimeOptions["onUsage"]>>[0][] = [];
 		const { runtime, workspace } = await runtimeFor(["bash:echo hi", "final:done"], undefined, (entry) => spent.push(entry));

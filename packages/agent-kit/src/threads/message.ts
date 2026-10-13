@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import type { SomeWorkClient } from "@somework/sdk";
 import { redactText } from "../events/redact.ts";
+import type { RunImage } from "../runtime.ts";
 import type { Party } from "./jobs.ts";
 
 /** The tool that reads what earlier runs did; the framing names it. */
@@ -13,6 +15,29 @@ export const CHAT_APPROVAL_REQUEST_LABEL = "chatApprovalRequest";
 export const CHAT_APPROVAL_DECISION_LABEL = "chatApprovalDecision";
 /** What an agent says to stay out of a conversation: nothing is sent. */
 export const NO_REPLY = "NO_REPLY";
+
+/** A picture a chat channel kept on disk for a message: shown to the model together with the text. */
+export interface LocalImage {
+	path: string;
+	mimeType: string;
+}
+
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 8_000_000;
+
+/** The pictures of a chat message, read from the files the channel kept: at most four, each at most 8 MB; one that cannot be read is left out. */
+export function readImages(images: readonly LocalImage[] | undefined): RunImage[] {
+	const read: RunImage[] = [];
+	for (const image of (images ?? []).slice(0, MAX_IMAGES)) {
+		try {
+			const bytes = readFileSync(image.path);
+			if (bytes.length > 0 && bytes.length <= MAX_IMAGE_BYTES) read.push({ data: bytes.toString("base64"), mimeType: image.mimeType });
+		} catch {
+			// a picture that is gone is not shown; the message still stands
+		}
+	}
+	return read;
+}
 
 /** The parts of a message record the agent reads. */
 export interface InboundMessage {
@@ -32,6 +57,8 @@ export interface InboundMessage {
 	/** The text of a `text/plain` message, cut. */
 	text?: string;
 	artifacts?: unknown[];
+	/** Pictures of a chat message, kept on disk by the channel (not part of a domain message). */
+	images?: LocalImage[];
 }
 
 const party = (value: any): Party | undefined => (value && typeof value.id === "string" ? { kind: String(value.kind ?? "agent"), id: value.id } : undefined);
@@ -207,6 +234,7 @@ export function frameThread(framing: Framing): string {
 		`<<<MESSAGE-${boundary}`,
 		framing.text,
 		`MESSAGE-${boundary}>>>`,
+		...(message.images && message.images.length > 0 ? ["", `It carries ${message.images.length} picture(s), shown to you with the message.`] : []),
 		...(message.artifacts && message.artifacts.length > 0 ? ["", `It carries ${message.artifacts.length} attachment(s): ${message.artifacts.map((ref: any) => `${ref?.filename ?? "file"} (${ref?.mediaType ?? "?"}, ${ref?.artifactId ?? "?"})`).join("; ")}.`] : []),
 		"",
 		`Do it now. Your final answer is sent to ${others.length > 1 ? "everyone in the conversation" : (others[0]?.id ?? "the sender")}. If you have nothing to add (an acknowledgement, a thank-you, a message not meant for you), answer exactly ${NO_REPLY} and nothing is sent.`,

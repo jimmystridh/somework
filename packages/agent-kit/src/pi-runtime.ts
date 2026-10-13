@@ -259,7 +259,7 @@ export class PiDurableRuntime implements AgentRuntime {
 
 		let outcome: AgentOutcome | undefined;
 		try {
-			const submission = await conversation.submit({ type: "input", content: request.instruction, requestId: request.requestId }, ctx);
+			const submission = await conversation.submit({ type: "input", content: request.images?.length ? [{ type: "text", text: request.instruction }, ...request.images.map((image) => ({ type: "image" as const, data: image.data, mimeType: image.mimeType }))] : request.instruction, requestId: request.requestId }, ctx);
 			log("run_submitted", { submissionId: submission.id });
 			const settled = await this.#settle(submission.wait(ctx), hooks.signal);
 			if (settled === "detach") {

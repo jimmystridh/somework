@@ -20,6 +20,8 @@ export interface ApprovalChannel {
 	/** True for an approver the channel can reach (its principal ids). */
 	reaches(approver: Party): boolean;
 	say(conversationId: string, text: string): Promise<void>;
+	/** An approval question with its own way to answer (buttons); channels without one get `say` and the commands. `id` is the question's id. */
+	ask?(conversationId: string, text: string, id: string): Promise<void>;
 	/** What commands start with on this channel, as the question shows them (default `/`). */
 	commandPrefix?: string;
 }
@@ -88,7 +90,8 @@ export class Approvals {
 		try {
 			if (channel && onChannel) {
 				const prefix = channel.commandPrefix ?? "/";
-				await channel.say(request.conversationId!, `Approval needed (${request.agent}): ${request.tool}: ${request.summary}\nAnswer ${prefix}approve ${id} or ${prefix}deny ${id}. Without an answer in ${Math.round(this.#timeoutMs / 60_000)} minutes it is denied.`);
+				const question = `Approval needed (${request.agent}): ${request.tool}: ${request.summary}\nAnswer ${prefix}approve ${id} or ${prefix}deny ${id}. Without an answer in ${Math.round(this.#timeoutMs / 60_000)} minutes it is denied.`;
+				await (channel.ask ? channel.ask(request.conversationId!, question, id) : channel.say(request.conversationId!, question));
 				return await decided;
 			}
 			await this.#client.post(

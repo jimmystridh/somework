@@ -58,7 +58,7 @@ import { createObserve } from "./observe/index.ts";
 import { llmUsageCounters } from "./usage-metrics.ts";
 import { createTimers } from "./timers/index.ts";
 import { resolveSlack, SlackChannel, slackApi, slackApprovals, SlackSender, slackSocketUrl, SlackStore, type SlackStart } from "./slack/index.ts";
-import { resolveTelegram, TelegramChannel, telegramApi, telegramApprovals, TelegramSender, TelegramStore, type TelegramStart } from "./telegram/index.ts";
+import { resolveTelegram, TelegramChannel, telegramApi, telegramApprovals, telegramFiles, TelegramSender, TelegramStore, type TelegramStart } from "./telegram/index.ts";
 import { combinedLocal, RoutedSender } from "./threads/channels.ts";
 
 const read = (path: string): string => readFileSync(path, "utf8").trim();
@@ -210,7 +210,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				const store = new TelegramStore(join(config.state.dir, "telegram"), identity.agentId);
 				const api = telegramApi(telegramStart.token);
 				const telegramSender = new TelegramSender({ api, store, agentId: identity.agentId, maxBytes: 8192, log });
-				return { start: telegramStart, store, api, sender: telegramSender };
+				return { start: telegramStart, store, api, files: telegramFiles(telegramStart.token, api), sender: telegramSender };
 			})() : undefined;
 			// the agent's own Slack app (Socket Mode), when it has both tokens and a list of people who may write to it
 			const slackStart: SlackStart = threadSettings.enabled ? resolveSlack(config.slack) : { enabled: false };
@@ -487,6 +487,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				if (telegram) {
 					const channel = new TelegramChannel({
 						api: telegram.api,
+						files: telegram.files,
 						store: telegram.store,
 						allowed: telegram.start.allowed,
 						agentId: identity.agentId,

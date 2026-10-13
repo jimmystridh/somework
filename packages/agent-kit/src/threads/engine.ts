@@ -8,7 +8,7 @@ import type { AgentRuntime } from "../runtime.ts";
 import type { RunNotes } from "../trace.ts";
 import type { Approvals } from "./approvals.ts";
 import type { JobManager } from "./jobs.ts";
-import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, NO_REPLY, repliesTo, type HistoryLine, type InboundMessage, type Sender } from "./message.ts";
+import { asMessage, cleanText, describeAge, finishReply, frameThread, isNoReply, NO_REPLY, readImages, repliesTo, type HistoryLine, type InboundMessage, type Sender } from "./message.ts";
 import { relatedLines } from "./recall.ts";
 import type { ThreadSettings } from "./settings.ts";
 import { SETUP_LABELS } from "../setup/contract.ts";
@@ -287,7 +287,7 @@ export class ThreadEngine {
 			return;
 		}
 		const text = message.text === undefined ? "" : cleanText(message.text, settings.messageChars * 4);
-		if (text === "" && !message.artifacts?.length) {
+		if (text === "" && !message.artifacts?.length && !message.images?.length) {
 			inbox.finish(id);
 			return;
 		}
@@ -295,6 +295,7 @@ export class ThreadEngine {
 		const context: RunContext = { ...(message.conversationId ? { conversationId: message.conversationId } : {}), messageId: id, runId, sender: message.sender, audience: to };
 		const jobs = message.conversationId ? this.#deps.jobs.activeIn(message.conversationId).map((job) => describeJob(job, this.#now())) : [];
 		const instruction = frameThread({ self: this.#deps.agentId, state, history, message, text, boundary: (this.#deps.boundary ?? (() => randomBytes(8).toString("hex")))(), jobs, related: this.#related(message, runId), ...(describeAge(message.createdAt, this.#now()) ? { age: describeAge(message.createdAt, this.#now())! } : {}), now: new Date(this.#now()) });
+		const images = readImages(message.images);
 		const caps = this.#deps.caps?.();
 		const budget = caps ? { maxTokens: Math.min(caps.maxTokensCap, remaining), maxMinutes: caps.maxMinutesCap } : { maxTokens: Math.min(settings.runBudget.maxTokens, settings.hardTokenCap, remaining), maxMinutes: settings.runBudget.maxMinutes };
 		const stop = new AbortController();
@@ -302,7 +303,7 @@ export class ThreadEngine {
 		this.#deps.signal.addEventListener("abort", forward, { once: true });
 		try {
 			const outcome = await this.#deps.runtime.execute(
-				{ requestId: runId, agentKey: `thread:${id}${inbox.get(id)?.setup ?? ""}`, instruction, workspace: await this.#deps.workspace(threadKey(context)), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context, meta: chatMeta(message, text) },
+				{ requestId: runId, agentKey: `thread:${id}${inbox.get(id)?.setup ?? ""}`, instruction, ...(images.length > 0 ? { images } : {}), workspace: await this.#deps.workspace(threadKey(context)), budget, tools: this.#deps.tools, instructions: this.#deps.instructions, context, meta: chatMeta(message, text) },
 				{
 					signal: stop.signal,
 					onProgress: () => undefined,

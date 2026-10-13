@@ -1,6 +1,6 @@
 import { silent, type Log } from "../log.ts";
 import { finishReply, type OutgoingMessage, type Sender, type SentMessage } from "../threads/message.ts";
-import { textChunks, type TelegramApi } from "./api.ts";
+import { approvalButtonData, textChunks, type TelegramApi } from "./api.ts";
 import { TELEGRAM_PREFIX, type TelegramStore } from "./store.ts";
 
 const chatOf = (conversationId: string | undefined): number | undefined => {
@@ -33,18 +33,29 @@ export class TelegramSender implements Sender {
 	}
 
 	async send(message: OutgoingMessage): Promise<SentMessage> {
+		return this.#deliver(message);
+	}
+
+	async #deliver(message: OutgoingMessage, buttons?: unknown): Promise<SentMessage> {
 		const chat = chatOf(message.conversationId);
 		if (chat === undefined) throw new Error("not a Telegram conversation");
 		const text = finishReply(`${message.text}${attachmentsLine(message.artifacts)}`, this.#maxBytes);
 		const messageId = `${TELEGRAM_PREFIX}out:${Date.now()}:${this.#sent++}`;
 		this.#store.record({ id: messageId, conversationId: message.conversationId!, sender: { kind: "agent", id: this.#agentId }, text, at: new Date().toISOString() });
-		for (const chunk of textChunks(text)) await this.#api("sendMessage", { chat_id: chat, text: chunk });
-		this.#log("info", "telegram_sent", { chunks: textChunks(text).length });
+		const chunks = textChunks(text);
+		for (const [index, chunk] of chunks.entries()) await this.#api("sendMessage", { chat_id: chat, text: chunk, ...(buttons !== undefined && index === chunks.length - 1 ? { reply_markup: buttons } : {}) });
+		this.#log("info", "telegram_sent", { chunks: chunks.length });
 		return { messageId, conversationId: message.conversationId! };
 	}
 
-	/** A line into a conversation that is not an answer: an approval question. */
+	/** A line into a conversation that is not an answer. */
 	async say(conversationId: string, text: string): Promise<void> {
 		await this.send({ recipients: [], conversationId, text, key: "" });
+	}
+
+	/** An approval question with an Approve and a Deny button; `id` is the question's id, which the tap carries back (`approvalButtonData`). */
+	async ask(conversationId: string, text: string, id: string): Promise<void> {
+		const buttons = { inline_keyboard: [[{ text: "Approve", callback_data: approvalButtonData(id, true) }, { text: "Deny", callback_data: approvalButtonData(id, false) }]] };
+		await this.#deliver({ recipients: [], conversationId, text, key: "" }, buttons);
 	}
 }

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanText, type HistoryLine, type InboundMessage } from "../threads/message.ts";
 import { DurableTable } from "../threads/store.ts";
@@ -12,11 +12,14 @@ export interface StoredLine {
 	sender: { kind: string; id: string };
 	text: string;
 	at: string;
+	/** Pictures that came with the message: file names in the store's `images` directory. */
+	images?: { file: string; mimeType: string }[];
 	/** Order within the store: Telegram's dates only have a resolution of seconds. */
 	n: number;
 }
 
 const KEEP = 500;
+const EXTENSIONS: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
 
 /**
  * What the channel keeps of its chats: the messages (the model's history, and what a restart needs to take up a message that was not answered
@@ -26,10 +29,12 @@ export class TelegramStore {
 	readonly #table: DurableTable<StoredLine>;
 	readonly #offsetFile: string;
 	readonly #agentId: string;
+	readonly #imageDir: string;
 	#next: number;
 
 	constructor(dir: string, agentId: string) {
 		mkdirSync(dir, { recursive: true });
+		this.#imageDir = join(dir, "images");
 		this.#table = new DurableTable<StoredLine>(join(dir, "messages.json"));
 		this.#offsetFile = join(dir, "offset.json");
 		this.#agentId = agentId;
@@ -61,15 +66,26 @@ export class TelegramStore {
 		if (this.#table.get(line.id)) return false;
 		this.#table.put({ ...line, n: this.#next++ });
 		const rows = this.#table.all().sort((a, b) => a.n - b.n);
-		for (const old of rows.slice(0, Math.max(0, rows.length - KEEP))) this.#table.remove(old.id);
+		for (const old of rows.slice(0, Math.max(0, rows.length - KEEP))) {
+			this.#table.remove(old.id);
+			for (const image of old.images ?? []) rmSync(join(this.#imageDir, image.file), { force: true });
+		}
 		return true;
+	}
+
+	/** Keeps a picture of a message on disk (owner only); the name goes into the line's `images`. */
+	saveImage(messageId: string, index: number, bytes: Uint8Array, mimeType: string): { file: string; mimeType: string } {
+		mkdirSync(this.#imageDir, { recursive: true, mode: 0o700 });
+		const file = `${messageId.replace(/[^A-Za-z0-9]/g, "_")}-${index}.${EXTENSIONS[mimeType] ?? "bin"}`;
+		writeFileSync(join(this.#imageDir, file), bytes, { mode: 0o600 });
+		return { file, mimeType };
 	}
 
 	/** A message a person wrote, as the engine reads messages of the domain. */
 	message(id: string): InboundMessage | undefined {
 		const line = this.#table.get(id);
 		if (!line || line.sender.kind !== "human") return undefined;
-		return { messageId: line.id, type: "chat.message", sender: line.sender, recipients: [{ kind: "agent", id: this.#agentId }], conversationId: line.conversationId, createdAt: line.at, text: line.text };
+		return { messageId: line.id, type: "chat.message", sender: line.sender, recipients: [{ kind: "agent", id: this.#agentId }], conversationId: line.conversationId, createdAt: line.at, text: line.text, ...(line.images?.length ? { images: line.images.map((image) => ({ path: join(this.#imageDir, image.file), mimeType: image.mimeType })) } : {}) };
 	}
 
 	/** The lines of a conversation before a message, the last `limit` of them, oldest first. */

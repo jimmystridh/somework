@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { JobGate } from "../src/gate.ts";
 import type { Handler } from "../src/job-types.ts";
 import type { AgentOutcome, AgentRequest } from "../src/runtime.ts";
-import { isPrivateUserMessage, parseUpdate, resolveTelegram, TelegramChannel, telegramApi, telegramApprovals, TelegramSender, TelegramStore, telegramSettingsFrom, textChunks, type TelegramApi } from "../src/telegram/index.ts";
+import { approvalButtonData, imagesOf, isPrivateUserMessage, parseApprovalButton, parseUpdate, resolveTelegram, TelegramChannel, telegramApi, telegramApprovals, TelegramSender, TelegramStore, telegramSettingsFrom, textChunks, type TelegramApi } from "../src/telegram/index.ts";
 import { Approvals } from "../src/threads/approvals.ts";
 import { RoutedSender } from "../src/threads/channels.ts";
 import { ThreadEngine } from "../src/threads/engine.ts";
@@ -19,6 +19,10 @@ import { DurableInbox, DurableTable } from "../src/threads/store.ts";
 
 const ME = "agent/qa";
 const OWNER = 4242;
+const press = (id: number, data: string, extra: Record<string, unknown> = {}, from = OWNER, messageText = "Approval needed (agent/qa): bash: x") => ({
+	update_id: id,
+	callback_query: { id: `q${id}`, from: { id: from, is_bot: false }, message: { message_id: 55, chat: { id: from, type: "private" }, text: messageText }, data, ...extra },
+});
 const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2, costUsd: 0 };
 const tick = (ms = 5): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const update = (id: number, text: string | undefined, extra: Record<string, unknown> = {}, from = OWNER) => ({
@@ -43,10 +47,38 @@ describe("telegram updates", () => {
 		assert.equal(isPrivateUserMessage({ chat: { type: "private", id: 5 }, from: { id: 6, is_bot: false } }), false);
 	});
 
-	it("says that it reads text only to an allowed person who sends something else, and cuts a long text", () => {
+	it("says that it reads text and pictures only to an allowed person who sends something else, and cuts a long text", () => {
+		assert.deepEqual(parseUpdate(update(5, undefined, { voice: { file_id: "v" } }), allowed), { kind: "unsupported", updateId: 5, chatId: OWNER });
 		assert.deepEqual(parseUpdate(update(5, undefined, { photo: [{}] }), allowed), { kind: "unsupported", updateId: 5, chatId: OWNER });
 		const long = parseUpdate(update(6, "x".repeat(5000)), allowed);
 		assert.equal(long?.kind === "text" && long.text.length, 4000);
+	});
+
+	it("reads a photo or an image file with its caption, taking the largest size within the limit", () => {
+		const photo = [{ file_id: "small", width: 90, height: 90, file_size: 1000 }, { file_id: "big", width: 1280, height: 960, file_size: 400_000 }, { file_id: "huge", width: 5000, height: 4000, file_size: 20_000_000 }];
+		assert.deepEqual(imagesOf({ photo }), [{ fileId: "big", mimeType: "image/jpeg" }]);
+		const parsed = parseUpdate(update(12, undefined, { photo, caption: "  what is this?  " }), allowed);
+		assert.deepEqual(parsed?.kind === "text" ? [parsed.text, parsed.images] : parsed, ["what is this?", [{ fileId: "big", mimeType: "image/jpeg" }]]);
+		assert.deepEqual(imagesOf({ document: { file_id: "d", mime_type: "image/png", file_size: 5 } }), [{ fileId: "d", mimeType: "image/png" }]);
+		assert.deepEqual(imagesOf({ document: { file_id: "d", mime_type: "application/pdf" } }), [], "other files are not pictures");
+		assert.deepEqual(imagesOf({ document: { file_id: "d", mime_type: "image/png", file_size: 20_000_000 } }), [], "too large");
+		const bare = parseUpdate(update(13, undefined, { photo }), allowed);
+		assert.deepEqual(bare?.kind === "text" ? [bare.text, bare.images.length] : bare, ["", 1]);
+	});
+
+	it("serves a button press only from a private chat with an allowed person", () => {
+		const parsed = parseUpdate(press(8, "approve:0123456789ab"), allowed);
+		assert.deepEqual(parsed, { kind: "callback", updateId: 8, userId: OWNER, chatId: OWNER, queryId: "q8", data: "approve:0123456789ab", messageId: 55, text: "Approval needed (agent/qa): bash: x" });
+		assert.deepEqual(parseUpdate(press(9, "approve:0123456789ab", {}, 99), allowed), { kind: "ignored", updateId: 9, reason: "not_allowed" });
+		assert.deepEqual(parseUpdate({ update_id: 10, callback_query: { id: "q", from: { id: OWNER, is_bot: false }, message: { message_id: 1, chat: { id: -100, type: "group" } }, data: "x" } }, allowed), { kind: "ignored", updateId: 10, reason: "not_private" });
+		assert.deepEqual(parseUpdate({ update_id: 11, callback_query: { id: "q", from: { id: OWNER, is_bot: false }, data: "x" } }, allowed), { kind: "ignored", updateId: 11, reason: "not_private" });
+	});
+
+	it("reads only the buttons it made", () => {
+		assert.deepEqual(parseApprovalButton(approvalButtonData("0123456789ab", true)), { id: "0123456789ab", approved: true });
+		assert.deepEqual(parseApprovalButton(approvalButtonData("0123456789ab", false)), { id: "0123456789ab", approved: false });
+		for (const other of ["approve:short", "approve:0123456789abXX", "allow:0123456789ab", "", undefined, 7]) assert.equal(parseApprovalButton(other), undefined);
+		assert.ok(new TextEncoder().encode(approvalButtonData("0123456789ab", true)).length <= 64);
 	});
 
 	it("cuts replies into chunks that Telegram accepts, without splitting a character", () => {
@@ -127,7 +159,7 @@ describe("telegram store", () => {
 });
 
 /** An agent with its channel, a fake Telegram and a fake domain: nothing here touches a network. */
-function world(options: { answer?: (request: AgentRequest) => Promise<string> | string; jobHandler?: Handler; dir?: string; allowed?: number[]; messagesPerHour?: number; now?: () => number } = {}) {
+function world(options: { files?: (fileId: string) => Promise<Buffer>; answer?: (request: AgentRequest) => Promise<string> | string; jobHandler?: Handler; dir?: string; allowed?: number[]; messagesPerHour?: number; now?: () => number } = {}) {
 	const dir = options.dir ?? mkdtempSync(join(tmpdir(), "tg-world-"));
 	const calls: { method: string; payload: any }[] = [];
 	const said = (): string[] => calls.filter((call) => call.method === "sendMessage").map((call) => call.payload.text);
@@ -185,6 +217,7 @@ function world(options: { answer?: (request: AgentRequest) => Promise<string> | 
 	});
 	const channel = new TelegramChannel({
 		api,
+		...(options.files ? { files: options.files } : {}),
 		store,
 		allowed: new Set(options.allowed ?? [OWNER]),
 		agentId: ME,
@@ -319,6 +352,41 @@ describe("telegram channel and the thread engine", () => {
 		await w.jobs.idle();
 	});
 
+	it("shows a picture to the model together with its caption, and keeps it for a restart", async () => {
+		const fetched: string[] = [];
+		const w = world({ files: async (fileId) => (fetched.push(fileId), Buffer.from("jpeg-bytes")) });
+		await w.channel.handleUpdate(update(30, undefined, { photo: [{ file_id: "small", width: 90, height: 90 }, { file_id: "big", width: 800, height: 600 }], caption: "what is wrong here?" }));
+		await w.engine.idle();
+		assert.deepEqual(fetched, ["big"]);
+		assert.equal(w.requests.length, 1);
+		assert.deepEqual(w.requests[0]!.images, [{ data: Buffer.from("jpeg-bytes").toString("base64"), mimeType: "image/jpeg" }]);
+		assert.match(w.requests[0]!.instruction, /what is wrong here\?/);
+		assert.match(w.requests[0]!.instruction, /It carries 1 picture\(s\), shown to you with the message/);
+		const kept = new TelegramStore(join(w.dir, "telegram"), ME).message("tg:30");
+		assert.equal(kept?.images?.length, 1);
+		assert.equal(readFileSync(kept!.images![0]!.path, "utf8"), "jpeg-bytes");
+		assert.match(kept!.text!, /\[1 picture\(s\) attached\]/);
+	});
+
+	it("takes a picture without a caption, and says so when it cannot fetch it or does not read pictures", async () => {
+		const w = world({ files: async () => Buffer.from("png") });
+		await w.channel.handleUpdate(update(31, undefined, { document: { file_id: "doc", mime_type: "image/png", file_size: 3 } }));
+		await w.engine.idle();
+		assert.match(w.requests[0]!.instruction, /\(a picture without text\)/);
+		assert.equal(w.requests[0]!.images![0]!.mimeType, "image/png");
+
+		const failing = world({ files: async () => { throw new Error("Telegram file download failed"); } });
+		await failing.channel.handleUpdate(update(32, "look", { photo: [{ file_id: "p", width: 1, height: 1 }] }));
+		await failing.engine.idle();
+		assert.match(failing.said().at(-1)!, /could not fetch that picture/);
+		assert.equal(failing.requests.length, 0, "no model run for a message that could not be read");
+
+		const textOnly = world();
+		await textOnly.channel.handleUpdate(update(33, undefined, { photo: [{ file_id: "p", width: 1, height: 1 }] }));
+		assert.equal(textOnly.said().at(-1), "I read text messages only.");
+		assert.equal(textOnly.requests.length, 0);
+	});
+
 	it("asks for an approval on the chat and takes the answer from /approve and /deny, from the person asked only", async () => {
 		const w = world();
 		const asked = w.approvals.ask({ approver: { kind: "human", id: "telegram/4242" }, conversationId: "tg:4242", agent: ME, tool: "bash", summary: "run the migration", signal: new AbortController().signal });
@@ -332,6 +400,47 @@ describe("telegram channel and the thread engine", () => {
 		assert.deepEqual(await asked, { approved: true });
 		await w.channel.handleUpdate(update(2, `/deny ${id}`));
 		assert.match(w.said().at(-1)!, /no open question/);
+	});
+
+	it("puts Approve and Deny buttons on the question, and a tap decides and takes the buttons off", async () => {
+		const w = world();
+		const asked = w.approvals.ask({ approver: { kind: "human", id: "telegram/4242" }, conversationId: "tg:4242", agent: ME, tool: "bash", summary: "run the migration", signal: new AbortController().signal });
+		await tick();
+		const sent = w.calls.find((call) => call.method === "sendMessage")!.payload;
+		const id = /\/approve ([0-9a-f]+)/.exec(sent.text)![1]!;
+		assert.deepEqual(sent.reply_markup, { inline_keyboard: [[{ text: "Approve", callback_data: `approve:${id}` }, { text: "Deny", callback_data: `deny:${id}` }]] });
+		await w.channel.handleUpdate(press(1, `approve:${id}`, {}, OWNER, sent.text));
+		assert.deepEqual(await asked, { approved: true });
+		assert.deepEqual(w.calls.find((call) => call.method === "answerCallbackQuery")!.payload, { callback_query_id: "q1", text: "Approved." });
+		const edit = w.calls.find((call) => call.method === "editMessageText")!.payload;
+		assert.deepEqual([edit.chat_id, edit.message_id, edit.reply_markup], [OWNER, 55, { inline_keyboard: [] }]);
+		assert.equal(edit.text, `${sent.text}\n\nApproved.`);
+	});
+
+	it("takes a denial from the Deny button, and says when the question is already closed", async () => {
+		const w = world();
+		const asked = w.approvals.ask({ approver: { kind: "human", id: "telegram/4242" }, conversationId: "tg:4242", agent: ME, tool: "bash", summary: "x", signal: new AbortController().signal });
+		await tick();
+		const id = /\/deny ([0-9a-f]+)/.exec(w.said()[0]!)![1]!;
+		await w.channel.handleUpdate(press(1, `deny:${id}`));
+		assert.deepEqual(await asked, { approved: false, reason: "denied by the approver" });
+		await w.channel.handleUpdate(press(2, `approve:${id}`));
+		const toasts = w.calls.filter((call) => call.method === "answerCallbackQuery").map((call) => call.payload.text);
+		assert.deepEqual(toasts, ["Denied.", "That question is closed (it may have timed out)."]);
+		assert.match(w.calls.filter((call) => call.method === "editMessageText").at(-1)!.payload.text, /closed/);
+	});
+
+	it("lets nobody else decide by button, and ignores buttons that are not approvals", async () => {
+		const w = world({ allowed: [OWNER, 99] });
+		const asked = w.approvals.ask({ approver: { kind: "human", id: "telegram/4242" }, conversationId: "tg:4242", agent: ME, tool: "bash", summary: "x", signal: AbortSignal.timeout(60) });
+		await tick();
+		const id = /\/approve ([0-9a-f]+)/.exec(w.said()[0]!)![1]!;
+		await w.channel.handleUpdate(press(1, `approve:${id}`, {}, 99));
+		assert.equal(w.calls.filter((call) => call.method === "editMessageText").length, 0);
+		assert.equal(w.calls.find((call) => call.method === "answerCallbackQuery")!.payload.text, "That question was not put to you here.");
+		await w.channel.handleUpdate(press(2, "something:else"));
+		assert.equal(w.calls.filter((call) => call.method === "answerCallbackQuery").at(-1)!.payload.text, "I do not know that button.");
+		assert.equal((await asked).approved, false);
 	});
 
 	it("takes a denial from the chat", async () => {
@@ -355,6 +464,33 @@ describe("telegram channel and the thread engine", () => {
 });
 
 describe("telegram polling", () => {
+	it("asks Telegram for button presses as well as messages", async () => {
+		const w = world();
+		const stop = new AbortController();
+		const asked: any[] = [];
+		const channel = new TelegramChannel({
+			api: async (method, payload) => {
+				if (method === "getUpdates") {
+					asked.push(payload);
+					stop.abort();
+				}
+				return [];
+			},
+			store: w.store,
+			allowed: new Set([OWNER]),
+			agentId: ME,
+			accept: (message) => w.engine.acceptLocal(message),
+			about: () => "",
+			status: async () => "",
+			jobs: w.jobs,
+			approvals: w.approvals,
+			pollSeconds: 0,
+			sleep: async () => undefined,
+		});
+		await channel.run(stop.signal);
+		assert.deepEqual(asked[0].allowed_updates, ["message", "callback_query"]);
+	});
+
 	it("reads updates in batches, keeps the position, and starts from it after a restart", async () => {
 		const w = world({ answer: () => "ok" });
 		const stop = new AbortController();
