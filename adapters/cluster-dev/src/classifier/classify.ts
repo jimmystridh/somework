@@ -19,8 +19,10 @@ export interface ClassifyContext {
 	host?: string;
 	/** Directories the agent may change freely (its workspace). Unset or empty: there are none, so every change to files is destructive. */
 	workspaces?: readonly string[];
-	/** The one git remote that may be pushed to (default `org`). */
+	/** The git remote that may be pushed to (default `org`). */
 	remote?: string;
+	/** More remotes that may be pushed to: the other repositories the deployment names. Never `origin`. */
+	extraRemotes?: readonly string[];
 	/** Names the hypervisor goes by. */
 	hypervisorHosts?: readonly string[];
 	/** systemd units the agent may start, stop and restart (patterns with `*`). */
@@ -47,6 +49,7 @@ function resolve(context: ClassifyContext): Settings {
 		...(context.host !== undefined ? { host: context.host } : {}),
 		workspaces: (context.workspaces ?? []).map((root) => root.replace(/\/+$/, "") || "/"),
 		remote: context.remote ?? "org",
+		extraRemotes: (context.extraRemotes ?? []).filter((name) => name !== "origin"),
 		hypervisorHosts: [...(context.hypervisorHosts ?? DEFAULT_HYPERVISOR_HOSTS)],
 		ownServices: [...(context.ownServices ?? [])],
 		scripts: [...(context.scripts ?? DEFAULT_SCRIPTS)],

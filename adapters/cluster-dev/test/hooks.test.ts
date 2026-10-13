@@ -75,6 +75,8 @@ describe("conversations", () => {
 		const facts = await chat.context!();
 		assert.match(facts, /Repository: https:\/\/github.com\/acme\/somework; the only remote you push to is the organisation's \(org\)/);
 		assert.match(facts, /Hosts for host_exec: agents, services, pve-host/);
+		const withExtra = await clusterChat({ settings: settingsFor({ CLUSTER_DEV_EXTRA_REPOSITORIES: "somework=https://github.com/acme/public" }) }).context!();
+		assert.match(withExtra, /you push to the organisation's remote \(org\) and to somework \(https:\/\/github.com\/acme\/public\), through git_push \(its repository argument names which one\)/);
 		assert.match(facts, /Agents deploy_status reads: reviewer, developer/);
 		assert.match(facts, /CI: Woodpecker, repository acme\/somework/);
 		assert.equal(clusterChat({ settings: settingsFor({ CLUSTER_DEV_REPOSITORY: "" }) }).checkout, undefined);

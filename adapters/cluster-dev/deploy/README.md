@@ -41,6 +41,7 @@ needs the permission `events.publish:agent.cluster-dev.*` (`scripts/grant-job-ev
 | `secrets/sandbox-token` | random, mode 0440, group 10010: shared by agent and sandbox of THIS project |
 | `secrets/pi/auth.json` | the model login (step 6), uid 10001; the directory must be writable because an OAuth refresh rewrites the file |
 | `secrets/git-token` | the GitHub token (step 5), uid 10001, 0600 |
+| `secrets/git/git-token-<name>` | the token of each repository in `CLUSTER_DEV_EXTRA_REPOSITORIES` (the directory must exist, uid 10001, files 0600) |
 | `secrets/ssh/<host name>` | one private key per host of `CLUSTER_DEV_HOSTS`, named like the host, **0600, owner uid 10001** (ssh refuses anything else) |
 | `secrets/ssh/known_hosts` | one line per host, taken from the host itself (step 4), never from the first connection |
 | `secrets/ci-token`, `secrets/grafana-token`, `secrets/telegram-bot-token` | steps 5 and 7; leave the variable out of `.env` to run without it |

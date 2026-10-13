@@ -146,3 +146,62 @@ describe("git_push", () => {
 		assert.equal(createGitPush({ settings: { repositoryUrl: "https://github.com/a/b", gitRemote: "org" } }).replay, "unsafe");
 	});
 });
+
+describe("git_push to another repository", () => {
+	const OTHER_TOKEN = "ghs_zyxwvutsrqponmlkjihgfedcba9876543210";
+
+	function twoRepositories(over: { extraToken?: (() => Promise<string>) | undefined } = {}) {
+		const main = makeRemote();
+		const other = makeRemote();
+		const workspace = mkdtempSync(join(tmpdir(), "git-push-two-"));
+		const checkout = join(workspace, "repo");
+		sh(workspace, "clone", main.remote, "repo");
+		sh(checkout, "config", "user.name", "t");
+		sh(checkout, "config", "user.email", "t@t");
+		const inner = new NodeExecutionEnv({ cwd: workspace });
+		const seen: { env?: Record<string, string>; command: string }[] = [];
+		const env = Object.assign(Object.create(inner), {
+			cwd: workspace,
+			exec: (command: string, options: any, context: unknown) => {
+				seen.push({ command, env: options?.env });
+				return inner.exec(command, options, context as never);
+			},
+		});
+		const tool = createGitPush({
+			settings: { repositoryUrl: `file://${main.remote}`, gitRemote: "org", extraRepositories: [{ name: "somework", url: `file://${other.remote}`, tokenFile: "/unused" }] },
+			token: async () => TOKEN,
+			extraTokens: "extraToken" in over ? (over.extraToken ? { somework: over.extraToken } : {}) : { somework: async () => OTHER_TOKEN },
+			secrets: () => [TOKEN, OTHER_TOKEN],
+		});
+		writeFileSync(join(checkout, "a.txt"), "a");
+		sh(checkout, "add", "-A");
+		sh(checkout, "commit", "-m", "a");
+		return { main: main.remote, other: other.remote, seen, sha: sh(checkout, "rev-parse", "HEAD").trim(), push: (args: Record<string, unknown>) => callTool(tool, args, { env }) };
+	}
+
+	it("pushes to the named repository with that repository's own token, and to the organisation's by default", async () => {
+		const w = twoRepositories();
+		const { text, isError } = await w.push({ repository: "somework", to: "fix/x", directory: "repo" });
+		assert.equal(isError, false, text);
+		assert.match(text, /pushed HEAD to somework\/fix\/x/);
+		assert.equal(remoteSha(w.other, "fix/x"), w.sha);
+		assert.equal(w.seen[0]!.env?.GIT_TOKEN, OTHER_TOKEN, "the other repository's token, not the organisation's");
+		assert.ok(!text.includes(OTHER_TOKEN));
+		assert.equal((await w.push({ to: "fix/y", directory: "repo" })).isError, false);
+		assert.equal(remoteSha(w.main, "fix/y"), w.sha);
+		assert.equal(w.seen[1]!.env?.GIT_TOKEN, TOKEN);
+		assert.equal((await w.push({ repository: "org", to: "fix/z", directory: "repo" })).isError, false, "the organisation remote may be named too");
+		assert.equal(remoteSha(w.main, "fix/z"), w.sha);
+	});
+
+	it("refuses a repository it does not list, and one it has no credential for, before running git", async () => {
+		const w = twoRepositories();
+		const unknown = await w.push({ repository: "origin", to: "x", directory: "repo" });
+		assert.equal(unknown.isError, true);
+		assert.match(unknown.text, /unknown repository "origin": org, somework/);
+		const noCredential = await twoRepositories({ extraToken: undefined }).push({ repository: "somework", to: "x", directory: "repo" });
+		assert.equal(noCredential.isError, true);
+		assert.match(noCredential.text, /no credential for somework/);
+		assert.equal(w.seen.length, 0, "git did not run");
+	});
+});

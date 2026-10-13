@@ -15,6 +15,8 @@ export interface Settings {
 	host?: string;
 	workspaces: string[];
 	remote: string;
+	/** More git remotes that may be pushed to (other repositories the deployment names). */
+	extraRemotes: string[];
 	hypervisorHosts: string[];
 	ownServices: string[];
 	scripts: string[];

@@ -54,6 +54,8 @@ services:
       # pushes; the sandbox holds no credential). A GitHub App instead of the token file: see packages/agent-kit/README.md.
       CLUSTER_DEV_REPOSITORY: ${CLUSTER_DEV_REPOSITORY:?https URL of the organisation repository}
       CLUSTER_DEV_GIT_REMOTE: ${CLUSTER_DEV_GIT_REMOTE:-org}
+      CLUSTER_DEV_EXTRA_REPOSITORIES: ${CLUSTER_DEV_EXTRA_REPOSITORIES:-}     # name=https://host/owner/repository,...: more repositories git_push may push to, each with ./secrets/git/git-token-<name>
+      CLUSTER_DEV_GIT_TOKEN_DIR: /run/secrets/git
       GIT_TOKEN_FILE: /run/secrets/git-token                # fine-grained, this repository only: Contents and Pull requests write, Metadata read
       GIT_TOKEN_EXPIRES: ${GIT_TOKEN_EXPIRES:-}              # optional note for /profile: the token's expiry date, YYYY-MM-DD
       GIT_TOKEN_HOSTS: ${GIT_TOKEN_HOSTS:-github.com}       # the only hosts the token may ever be sent to
@@ -96,6 +98,11 @@ services:
       # This agent's own Telegram bot: how the owner talks to it and answers its questions. Off while no token file is mounted or TELEGRAM_ALLOWED_USER_IDS is empty.
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram-bot-token
       TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      # The agent's own Slack app in Socket Mode (packages/agent-kit/README.md, "Slack"). Off while either token file is empty or SLACK_ALLOWED_USER_IDS is empty.
+      SLACK_BOT_TOKEN_FILE: /run/secrets/slack-bot-token
+      SLACK_APP_TOKEN_FILE: /run/secrets/slack-app-token
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS:-}
       HEALTH_PORT: "8081"
     volumes:
       - ${CLUSTER_DEV_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
@@ -103,6 +110,7 @@ services:
       - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
       - ./secrets/git-token:/run/secrets/git-token:ro       # the organisation repository only. Must exist.
+      - ./secrets/git:/run/secrets/git:ro                   # git-token-<name>: one credential for each repository of CLUSTER_DEV_EXTRA_REPOSITORIES (the directory may be empty)
       - ./secrets/ssh:/run/secrets/ssh:ro                   # one private key per host (named like the host, 0600, uid 10001) and known_hosts
       - ${CI_TOKEN_HOST:-/dev/null}:/run/secrets/ci-token:ro           # ci: ./secrets/ci-token (a Woodpecker token that may read this repository's pipelines)
       - ${CI_CA_HOST:-/dev/null}:/run/somework/ci-ca.pem:ro            # ci: the private CA of the Woodpecker server, when it has one
@@ -110,6 +118,8 @@ services:
       - ${GRAFANA_TOKEN_HOST:-/dev/null}:/run/secrets/grafana-token:ro # observe: ./secrets/grafana-token (the Viewer service account's token)
       - ${GRAFANA_CA_HOST:-/dev/null}:/run/somework/grafana-ca.pem:ro  # observe: ./config/grafana-ca.pem
       - ${TELEGRAM_TOKEN_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro   # telegram: ./secrets/telegram-bot-token (the BotFather token); /dev/null = no bot
+      - ${SLACK_BOT_TOKEN_HOST:-/dev/null}:/run/secrets/slack-bot-token:ro   # slack: ./secrets/slack-bot-token (the xoxb- bot token); /dev/null = no Slack app
+      - ${SLACK_APP_TOKEN_HOST:-/dev/null}:/run/secrets/slack-app-token:ro   # slack: ./secrets/slack-app-token (the xapp- app-level token with connections:write)
       - state:/state
     tmpfs: ["/tmp:size=64m,noexec,nosuid"]
     ports: ["${HEALTH_BIND:-127.0.0.1}:8081:8081"]      # health, handlers and token pools: this VM runs this agent alone

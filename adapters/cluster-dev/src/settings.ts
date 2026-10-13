@@ -8,11 +8,21 @@ export interface HostEntry {
 	port: number;
 }
 
+/** Another repository the agent may push to: its own remote name and its own credential (a fine-grained token belongs to one owner). */
+export interface ExtraRepository {
+	/** The name the model uses and the remote the classifier allows. */
+	name: string;
+	url: string;
+	tokenFile: string;
+}
+
 export interface ClusterSettings {
 	/** The one repository the agent changes (https URL); empty until the deployment sets it. */
 	repositoryUrl?: string;
 	/** The git remote that may be pushed to: the organisation's, never `origin`. */
 	gitRemote: string;
+	/** Other repositories git_push may push to, each with its own credential file. */
+	extraRepositories: ExtraRepository[];
 	hosts: HostEntry[];
 	hypervisorHosts: string[];
 	sshKeyDir: string;
@@ -82,12 +92,36 @@ export function parseAgentUrls(text: string | undefined): Record<string, string>
 	return urls;
 }
 
+const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$/;
+
+/** `somework=https://github.com/owner/repo,tools=https://github.com/owner/tools`: more repositories, each pushed to under its own name and token (`<tokenDir>/git-token-<name>`). */
+export function parseExtraRepositories(text: string | undefined, tokenDir: string, taken: readonly string[]): ExtraRepository[] {
+	const repositories: ExtraRepository[] = [];
+	for (const item of list(text)) {
+		const equals = item.indexOf("=");
+		const name = item.slice(0, equals);
+		const url = item.slice(equals + 1);
+		if (equals <= 0 || !REMOTE_NAME.test(name)) throw new Error(`CLUSTER_DEV_EXTRA_REPOSITORIES: "${item.slice(0, 40)}" is not name=https://host/owner/repository`);
+		if (name === "origin") throw new Error("CLUSTER_DEV_EXTRA_REPOSITORIES: a repository must not be called origin");
+		if (taken.includes(name) || repositories.some((entry) => entry.name === name)) throw new Error(`CLUSTER_DEV_EXTRA_REPOSITORIES: the name ${name} is used twice`);
+		let parsed: URL;
+		try {
+			parsed = new URL(url);
+		} catch {
+			throw new Error(`CLUSTER_DEV_EXTRA_REPOSITORIES: the address of ${name} is not a URL`);
+		}
+		if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error(`CLUSTER_DEV_EXTRA_REPOSITORIES: the address of ${name} must be https without a password`);
+		repositories.push({ name, url: `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, ""), tokenFile: `${tokenDir}/git-token-${name}` });
+	}
+	return repositories;
+}
+
 /** The role's settings from the environment (`CLUSTER_DEV_*`, `CI_*`; the kit's own variables are the kit's). Fails at startup, not at the first command. */
 export function loadSettings(env: NodeJS.ProcessEnv = process.env): ClusterSettings {
 	const repositoryUrl = env.CLUSTER_DEV_REPOSITORY?.trim() || undefined;
 	if (repositoryUrl && !/^https:\/\/[^\s]{1,400}$/.test(repositoryUrl)) throw new Error("CLUSTER_DEV_REPOSITORY must be an https URL");
 	const gitRemote = env.CLUSTER_DEV_GIT_REMOTE?.trim() || "org";
-	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,40}$/.test(gitRemote)) throw new Error("CLUSTER_DEV_GIT_REMOTE must be a plain remote name");
+	if (!REMOTE_NAME.test(gitRemote)) throw new Error("CLUSTER_DEV_GIT_REMOTE must be a plain remote name");
 	if (gitRemote === "origin") throw new Error("CLUSTER_DEV_GIT_REMOTE must not be origin: the agent pushes to the organisation's remote only");
 	const sshKeyDir = (env.CLUSTER_DEV_SSH_KEY_DIR?.trim() || "/run/secrets/ssh").replace(/\/+$/, "");
 	const ciUrl = env.CI_URL?.trim();
@@ -108,6 +142,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): ClusterSetti
 	return {
 		...(repositoryUrl ? { repositoryUrl } : {}),
 		gitRemote,
+		extraRepositories: parseExtraRepositories(env.CLUSTER_DEV_EXTRA_REPOSITORIES, (env.CLUSTER_DEV_GIT_TOKEN_DIR?.trim() || "/run/secrets/git").replace(/\/+$/, ""), [gitRemote]),
 		hosts: parseHosts(env.CLUSTER_DEV_HOSTS),
 		hypervisorHosts: list(env.CLUSTER_DEV_HYPERVISOR_HOSTS, DEFAULT_HYPERVISOR_HOSTS),
 		sshKeyDir,
@@ -127,6 +162,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): ClusterSetti
 export function classifyContext(settings: ClusterSettings, host?: string): ClassifyContext {
 	return {
 		remote: settings.gitRemote,
+		extraRemotes: settings.extraRepositories.map((repository) => repository.name),
 		hypervisorHosts: settings.hypervisorHosts,
 		ownServices: settings.ownServices,
 		scripts: settings.scripts,

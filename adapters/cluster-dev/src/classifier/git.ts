@@ -63,7 +63,8 @@ function push(parsed: Parsed, call: Call): Finding | undefined {
 	const [remote, ...refspecs] = parsed.positionals;
 	const dry = hasFlag(parsed, "-n", "--dry-run");
 	if (!remote) return dry ? undefined : found("git", `git push must name the organisation remote (${call.settings.remote}) explicitly`, true);
-	if (remote.dynamic || remote.text !== call.settings.remote) return found("git", `git push may only go to the organisation remote "${call.settings.remote}", not ${remote.text.slice(0, 60)}`, true);
+	const allowed = [call.settings.remote, ...call.settings.extraRemotes];
+	if (remote.dynamic || !allowed.includes(remote.text)) return found("git", `git push may only go to ${allowed.length > 1 ? `one of the configured remotes (${allowed.join(", ")})` : `the organisation remote "${call.settings.remote}"`}, not ${remote.text.slice(0, 60)}`, true);
 	for (const refspec of refspecs) {
 		if (refspec.dynamic) return found("git", "git push with a refspec that is computed when the command runs");
 		if (refspec.text.startsWith("+")) return found("git", "git push +refspec overwrites the remote branch");

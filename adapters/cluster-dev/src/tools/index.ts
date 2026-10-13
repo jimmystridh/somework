@@ -19,6 +19,8 @@ export interface ClusterToolOptions {
 	ci?: CiToolOptions["client"];
 	/** The credential for the organisation repository, when the service has one. */
 	gitToken?: () => Promise<string>;
+	/** The credential of each other repository, by its name. */
+	extraGitTokens?: Readonly<Record<string, () => Promise<string>>>;
 	approved?: (api: ApprovalApi, context: unknown) => Promise<boolean>;
 	log?: Log;
 	boundary?: () => string;
@@ -29,7 +31,7 @@ export function createClusterTools(options: ClusterToolOptions): { extension: Ex
 	const withBoundary = { ...common, ...(options.boundary ? { boundary: options.boundary } : {}) };
 	const tools = [
 		createHostExec({ settings: options.settings, ...withBoundary, ...(options.spawn ? { spawn: options.spawn } : {}), approved: options.approved ?? approvedByGate }),
-		createGitPush({ settings: options.settings, ...common, ...(options.gitToken ? { token: options.gitToken } : {}) }),
+		createGitPush({ settings: options.settings, ...common, ...(options.gitToken ? { token: options.gitToken } : {}), ...(options.extraGitTokens ? { extraTokens: options.extraGitTokens } : {}) }),
 		...createCiTools({ client: options.ci, ...withBoundary }),
 		createDeployStatus({ settings: options.settings, ...withBoundary, fetch: options.fetch ?? createFetch(options.settings.agentsCaFile ? { caFile: options.settings.agentsCaFile } : {}) }),
 	];

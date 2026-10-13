@@ -39,8 +39,8 @@ know, a command name or path computed when the command runs, and text it cannot 
 | `system` | `systemctl` start/stop/restart/enable/mask/daemon-reload of a unit that is not in `CLUSTER_DEV_OWN_SERVICES`, `service`, `reboot`, `shutdown`, accounts, `apt`/`dpkg` changes, `mount`, `sysctl -w`, `crontab`, `kill`/`pkill` on a machine, `ip` and `nmcli` changes, `sudo -i`, `nsenter`, `chroot`, `docker run` with `-v`, `--privileged`, `--network host` | `systemctl status`, `journalctl`, `ps`, `df`, `free`, `docker ps`, `docker logs`, `docker compose up -d`/`restart`/`ps`/`logs`/`pull`/`build`, `deploy/agents/roll-agent.sh` and `deploy-from-ci.sh`, `npm test`, `node --test`, `cargo test` |
 | `unknown` | a program the classifier does not know, a computed command name, a script file on a cluster machine (other than the deploy scripts), `bash` reading a script from stdin, text it cannot parse, anything nested too deep | the developer's loop in the workspace |
 
-`forbidden` is the one thing that is not even asked about: **`git push` anywhere but the organisation remote** (`CLUSTER_DEV_GIT_REMOTE`, default `org`;
-`origin` is refused at startup as that setting). It wins over every other finding in the same command.
+`forbidden` is the one thing that is not even asked about: **`git push` anywhere but the organisation remote** (`CLUSTER_DEV_GIT_REMOTE`, default `org`, and the
+repositories the deployment lists in `CLUSTER_DEV_EXTRA_REPOSITORIES`; `origin` is refused at startup as either). It wins over every other finding in the same command.
 
 How it is enforced, in three layers that do not trust each other:
 1. **The approval gate** (`profile.toolApprovals`): `bash` and `host_exec` call the classifier; a destructive command waits for a person, with the exact
@@ -73,6 +73,8 @@ the service pushes `cluster/<job>` and opens the pull request. It does not merge
 |---|---|---|
 | `CLUSTER_DEV_REPOSITORY` | none | the one repository (https URL): jobs and `git_push` accept no other; also `CHAT_REPOSITORY_URL` and the read-only checkout |
 | `CLUSTER_DEV_GIT_REMOTE` | `org` | the git remote that may be pushed to; `origin` is refused |
+| `CLUSTER_DEV_EXTRA_REPOSITORIES` | none | `name=https://host/owner/repository`, comma separated: more repositories `git_push` may push to (its `repository` argument names one). Each is also an allowed remote name for the classifier; `origin` is refused. Each has its own credential, `<CLUSTER_DEV_GIT_TOKEN_DIR>/git-token-<name>`, because a fine-grained token belongs to one owner |
+| `CLUSTER_DEV_GIT_TOKEN_DIR` | `/run/secrets/git` | the directory holding those credential files |
 | `CLUSTER_DEV_HOSTS` | none | `name=user@address[:port]`, comma separated: the machines `host_exec` may use |
 | `CLUSTER_DEV_SSH_KEY_DIR` | `/run/secrets/ssh` | one private key per host, named like the host; `CLUSTER_DEV_SSH_KNOWN_HOSTS` defaults to `<dir>/known_hosts` |
 | `CLUSTER_DEV_HYPERVISOR_HOSTS` | `pve-host,proxmox,pve` | names and addresses of the hypervisor (anything on it asks) |

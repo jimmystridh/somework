@@ -39,7 +39,11 @@ export interface ClusterChatOptions {
 
 function facts(settings: ClusterSettings): string {
 	return [
-		`Repository: ${settings.repositoryUrl ?? "not configured"}; the only remote you push to is the organisation's (${settings.gitRemote}), through git_push.`,
+		`Repository: ${settings.repositoryUrl ?? "not configured"}; ${
+			settings.extraRepositories.length === 0
+				? `the only remote you push to is the organisation's (${settings.gitRemote}), through git_push.`
+				: `you push to the organisation's remote (${settings.gitRemote})${settings.extraRepositories.map((repository) => ` and to ${repository.name} (${repository.url})`).join("")}, through git_push (its repository argument names which one).`
+		}`,
 		`Hosts for host_exec: ${settings.hosts.map((host) => host.name).join(", ") || "none configured"}.`,
 		`Agents deploy_status reads: ${Object.keys(settings.agentUrls).join(", ") || "none configured"}.`,
 		`CI: ${settings.ci ? `Woodpecker, repository ${settings.ci.repository}` : "not configured"}.`,

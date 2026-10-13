@@ -4,6 +4,24 @@ import { classifyContext, loadSettings, parseAgentUrls, parseHosts, roleEnvironm
 
 const env = (values: Record<string, string>): NodeJS.ProcessEnv => values as NodeJS.ProcessEnv;
 
+describe("the extra repositories", () => {
+	it("are none by default, and are read with a token file each", () => {
+		assert.deepEqual(loadSettings(env({})).extraRepositories, []);
+		const settings = loadSettings(env({ CLUSTER_DEV_EXTRA_REPOSITORIES: "somework=https://github.com/acme/somework/, tools = https://github.com/acme/tools".replace(" = ", "="), CLUSTER_DEV_GIT_TOKEN_DIR: "/run/secrets/git/" }));
+		assert.deepEqual(settings.extraRepositories, [
+			{ name: "somework", url: "https://github.com/acme/somework", tokenFile: "/run/secrets/git/git-token-somework" },
+			{ name: "tools", url: "https://github.com/acme/tools", tokenFile: "/run/secrets/git/git-token-tools" },
+		]);
+		assert.deepEqual(classifyContext(settings).extraRemotes, ["somework", "tools"]);
+	});
+
+	it("refuse origin, the organisation remote's name, a name used twice, a password, and anything but https", () => {
+		for (const bad of ["origin=https://github.com/a/b", "org=https://github.com/a/b", "x=https://github.com/a/b,x=https://github.com/a/c", "x=https://user:pw@github.com/a/b", "x=http://github.com/a/b", "x=git@github.com:a/b.git", "https://github.com/a/b", "=https://github.com/a/b"]) {
+			assert.throws(() => loadSettings(env({ CLUSTER_DEV_EXTRA_REPOSITORIES: bad })), /CLUSTER_DEV_EXTRA_REPOSITORIES/, bad);
+		}
+	});
+});
+
 describe("the settings", () => {
 	it("have safe defaults and need nothing to load", () => {
 		const settings = loadSettings(env({}));

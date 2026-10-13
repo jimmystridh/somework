@@ -12,6 +12,8 @@ export interface ClusterHookOptions {
 	settings: ClusterSettings;
 	/** The credential for the organisation repository, when the service has one. */
 	gitToken?: () => Promise<string>;
+	/** The credential of each other repository, by its name. */
+	extraGitTokens?: Readonly<Record<string, () => Promise<string>>>;
 	/** Secret values the service holds besides the key and token files it reads itself (they are scrubbed from every tool answer). */
 	extraSecrets?: () => string[];
 	spawn?: ClusterToolOptions["spawn"];
@@ -32,7 +34,7 @@ const readOrEmpty = (path: string): string => {
 
 /** Every secret the service can read: the ssh key of each host, the CI token and the repository credential. */
 export function secretValues(settings: ClusterSettings, extra: readonly string[] = []): string[] {
-	const files = [...settings.hosts.map((host) => join(settings.sshKeyDir, host.name)), ...(settings.ci ? [settings.ci.tokenFile] : [])];
+	const files = [...settings.hosts.map((host) => join(settings.sshKeyDir, host.name)), ...settings.extraRepositories.map((repository) => repository.tokenFile), ...(settings.ci ? [settings.ci.tokenFile] : [])];
 	return [...files.map(readOrEmpty), ...extra].filter((value) => value.length >= 8);
 }
 
@@ -55,6 +57,7 @@ export function createClusterHooks(options: ClusterHookOptions): RoleHooks {
 		...(options.spawn ? { spawn: options.spawn } : {}),
 		...(options.fetch ? { fetch: options.fetch } : {}),
 		...(options.gitToken ? { gitToken: options.gitToken } : {}),
+		...(options.extraGitTokens ? { extraGitTokens: options.extraGitTokens } : {}),
 		...(options.approved ? { approved: options.approved } : {}),
 		...(options.boundary ? { boundary: options.boundary } : {}),
 		ci: options.ci ?? ciClientFor(settings, options.fetch),
@@ -86,5 +89,7 @@ export async function clusterDevHooksFor(context: ServiceContext): Promise<RoleH
 	for (const host of settings.hosts) if (!existsSync(join(settings.sshKeyDir, host.name))) throw new Error(`the ssh key of the host ${host.name} is missing: ${join(settings.sshKeyDir, host.name)}`);
 	if (settings.hosts.length > 0 && !existsSync(settings.sshKnownHosts)) throw new Error(`the known hosts file is missing: ${settings.sshKnownHosts}`);
 	const gitToken = context.gitTokenSource ?? (context.gitToken ? async () => context.gitToken! : undefined);
-	return createClusterHooks({ settings, ...(gitToken ? { gitToken } : {}), extraSecrets: () => (context.gitToken ? [context.gitToken] : []), log: context.log });
+	for (const repository of settings.extraRepositories) if (!existsSync(repository.tokenFile)) throw new Error(`the credential of the repository ${repository.name} is missing: ${repository.tokenFile}`);
+	const extraGitTokens = Object.fromEntries(settings.extraRepositories.map((repository) => [repository.name, async () => readOrEmpty(repository.tokenFile)]));
+	return createClusterHooks({ settings, ...(gitToken ? { gitToken } : {}), extraGitTokens, extraSecrets: () => (context.gitToken ? [context.gitToken] : []), log: context.log });
 }

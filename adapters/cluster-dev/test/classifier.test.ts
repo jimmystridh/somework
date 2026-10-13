@@ -368,6 +368,18 @@ describe("git", () => {
 		);
 	});
 
+	it("pushes to the other repositories the deployment names, and still never to origin or anything else", () => {
+		const context = { ...LOCAL, extraRemotes: ["somework"] };
+		expectAllowed(["git push somework main", "git push somework HEAD:fix/thing", "git push org main"], context);
+		for (const command of ["git push origin main", "git push", "git push upstream main", "git push https://github.com/public/repo main", "git push somework2 main"]) {
+			const verdict = classifyCommand(command, context);
+			assert.equal(verdict.destructive, true, `destructive: ${command}`);
+			assert.equal(verdict.forbidden, true, `forbidden: ${command}`);
+		}
+		assert.equal(classifyCommand("git push --force somework main", context).forbidden, undefined, "a force push is asked about, not forbidden");
+		assert.equal(classifyCommand("git push origin main", { ...LOCAL, extraRemotes: ["origin"] }).forbidden, true, "origin is never an extra remote");
+	});
+
 	it("never pushes anywhere but the organisation remote, and says so with `forbidden`", () => {
 		for (const command of ["git push origin main", "git push", "git push -u origin HEAD", "git push https://github.com/public/repo main", "git push upstream main", "git push git@github.com:public/repo.git main", "git push origin main && git push org main", "cd repo && git push origin fix"]) {
 			const verdict = classifyCommand(command, LOCAL);
