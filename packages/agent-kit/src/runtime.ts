@@ -41,6 +41,7 @@ export interface AgentRequest {
 export interface Usage {
 	inputTokens: number;
 	outputTokens: number;
+	/** What counts against a token budget (`budgetTokens`): fresh input, output and cache writes in full, cache reads at a tenth. Not the provider's raw total. */
 	totalTokens: number;
 	costUsd: number;
 }

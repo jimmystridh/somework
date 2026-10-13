@@ -351,7 +351,7 @@ export class PiDurableRuntime implements AgentRuntime {
 		for (const usage of Object.values<any>(models)) {
 			total.inputTokens += usage.input ?? 0;
 			total.outputTokens += usage.output ?? 0;
-			total.totalTokens += usage.totalTokens ?? (usage.input ?? 0) + (usage.output ?? 0);
+			total.totalTokens += budgetTokens(usage);
 			total.costUsd += usage.cost?.total ?? 0;
 		}
 		return total;
@@ -390,6 +390,20 @@ export class PiDurableRuntime implements AgentRuntime {
 /** Pi stores the model by provider and id only; the effort is the agent's `thinkingLevel`. */
 const piModel = (model: ModelRef): { provider: string; modelId: string } => ({ provider: model.provider, modelId: model.modelId });
 const thinkingOf = (effort: Effort | undefined): { thinkingLevel?: Effort } => (effort ? { thinkingLevel: effort } : {});
+
+/** A cache read costs a tenth of fresh input or less, but a long conversation re-reads its whole context on every turn: counted in full it would dwarf the work done. */
+export const CACHE_READ_WEIGHT = 0.1;
+
+/**
+ * What a model's usage counts against a token budget: the fresh input, the output and the cache writes in full, the cache reads at `CACHE_READ_WEIGHT`.
+ * A usage without that breakdown counts as the provider's total (or input plus output).
+ */
+export function budgetTokens(usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number }): number {
+	const input = usage.input ?? 0;
+	const output = usage.output ?? 0;
+	if (usage.cacheRead === undefined && usage.cacheWrite === undefined) return Math.max(0, usage.totalTokens ?? input + output);
+	return Math.max(0, input + output + (usage.cacheWrite ?? 0) + Math.round((usage.cacheRead ?? 0) * CACHE_READ_WEIGHT));
+}
 
 const diff = (now: Usage, before: Usage): Usage => ({
 	inputTokens: now.inputTokens - before.inputTokens,

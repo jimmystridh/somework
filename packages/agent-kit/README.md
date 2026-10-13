@@ -224,6 +224,12 @@ The tool exists only while the record is kept (`RUN_TRACE` on); without it the p
 
 Settings: `RUN_TRACE=0` turns it off, `RUN_TRACE_DIR` (default `<state dir>/runs`), `RUN_TRACE_KEEP_DAYS` (30) and `RUN_TRACE_MAX_MB` (1024; the oldest days go first, today is never removed).
 
+## Token budgets: what is counted, and what is left
+
+A token budget (the per-job cap, the daily limit, the pools of the ledger) counts **fresh input, output and cache writes in full and cache reads at a tenth** (`budgetTokens` in `src/pi-runtime.ts`, `CACHE_READ_WEIGHT`). A long job re-reads its whole context from the cache on every turn: a job with 84k tokens of fresh input and 8k of output read about 1.9M tokens from the cache, which cost a few cents and which the provider's raw total of 2.03M would have counted as work. The numbers Operations shows as "in" and "out" are the fresh input and the output, so they are far below what the raw total was; the budget now counts the cache reads at a tenth on top of them.
+
+The daily limit is one envelope: the tasks' spend, the events' spend and the chat's spend (each pool up to its own share) all come off it. A task may start while `tokenPools.tasks.remaining` is at least a twentieth of the per-job cap (at most 100,000) and then runs on what is left, up to the cap. `/status` shows `remaining` next to each pool's `used` and `limit`, because the task pool's own `used` and `limit` alone can look as if there were tokens left when the chat has taken them.
+
 ## Drain: deploying without waiting for a gap
 
 A file named `drain` in the state directory (`PI_STATE_DIR`) puts the agent in drain mode, so a deployment does not have to wait for a quiet moment in a busy agent: it creates the file, waits until the jobs that run have finished, replaces the agent and removes the file.

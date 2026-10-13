@@ -21,7 +21,8 @@ export interface ChatPoolOptions {
 }
 
 export interface PoolUsage {
-	tasks: { used: number; limit: number };
+	/** `remaining` is what a task may still start with: the daily limit minus the tasks' spend and the events' and the chat's, which come off the same day. */
+	tasks: { used: number; limit: number; remaining: number };
 	events: { used: number; limit: number; weeklyUsed?: number; weeklyLimit?: number; throttled: boolean; stopped: boolean };
 	/** Present only when the role answers chat with a model. */
 	chat?: { used: number; limit: number; throttled: boolean; stopped: boolean };
@@ -204,7 +205,7 @@ export class DailyLedger {
 		const events = this.eventsState();
 		const chat = this.chatState();
 		return {
-			tasks: { used: state.tokens, limit: this.#limit + this.#raised(state, "tasks") },
+			tasks: { used: state.tokens, limit: this.#limit + this.#raised(state, "tasks"), remaining: this.remaining() },
 			events: {
 				used: state.events ?? 0,
 				limit: this.eventsLimit,
