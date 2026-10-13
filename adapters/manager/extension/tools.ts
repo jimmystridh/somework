@@ -133,19 +133,23 @@ export function registerSomeworkTools(pi: ToolHost, Type: any, env: Env, fetchAp
 
 	pi.registerTool({
 		name: "somework_control",
-		label: "Ask To Pause, Switch Off, Raise A Budget Or Change Instructions",
+		label: "Ask To Pause, Switch Off, Raise A Budget, Change The Fleet Limits Or Change Instructions",
 		description:
-			"Ask the owner to pause or resume an event rule, pause or resume an event source, switch an agent's handler (or all) off or on, or give an agent more tokens for today (raise_budget with agent, pool and tokens; pool tasks is the daily limit for jobs, events and chat are their own pools; the raise ends tomorrow). This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. set_instructions replaces an agent's operator instructions (the part of its prompt that comes after the role's own, which cannot be edited) with the complete new text in instructions, an empty text clears it; read the current text with somework_setup first and keep what should stay. Creating rules is not possible.",
-		promptSnippet: "Ask the owner to pause or resume a rule or source, switch a handler off, raise an agent's token budget for today, or change an agent's operator instructions",
+			"Ask the owner to pause or resume an event rule, pause or resume an event source, switch an agent's handler (or all) off or on, or give an agent more tokens for today (raise_budget with agent, pool and tokens; pool tasks is the daily limit for jobs, events and chat are their own pools; the raise ends tomorrow). set_fleet_limits changes the limits every agent is held to, from now on, for everyone: dailyTokens (the daily token limit of every agent), perJobTokens, perJobMinutes, raiseCeiling; give only the fields that change. This only creates a request: the owner is asked on Telegram and nothing changes until they confirm. set_instructions replaces an agent's operator instructions (the part of its prompt that comes after the role's own, which cannot be edited) with the complete new text in instructions, an empty text clears it; read the current text with somework_setup first and keep what should stay. Creating rules is not possible.",
+		promptSnippet: "Ask the owner to pause or resume a rule or source, switch a handler off, raise an agent's token budget for today, change the fleet-wide limits (daily and per-job tokens), or change an agent's operator instructions",
 		promptGuidelines: ["Tell the owner what you asked for and why, then stop; never say it has taken effect before they confirm."],
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("pause_rule"), Type.Literal("resume_rule"), Type.Literal("pause_source"), Type.Literal("resume_source"), Type.Literal("kill_handler"), Type.Literal("unkill_handler"), Type.Literal("raise_budget"), Type.Literal("set_instructions")]),
+			action: Type.Union([Type.Literal("pause_rule"), Type.Literal("resume_rule"), Type.Literal("pause_source"), Type.Literal("resume_source"), Type.Literal("kill_handler"), Type.Literal("unkill_handler"), Type.Literal("raise_budget"), Type.Literal("set_fleet_limits"), Type.Literal("set_instructions")]),
 			rule: Type.Optional(Type.String()),
 			source: Type.Optional(Type.String()),
 			agent: Type.Optional(Type.String()),
 			handler: Type.Optional(Type.String({ description: "handler name, or all" })),
 			pool: Type.Optional(Type.Union([Type.Literal("tasks"), Type.Literal("events"), Type.Literal("chat")], { description: "raise_budget: which pool to raise" })),
 			tokens: Type.Optional(Type.Integer({ description: "raise_budget: how many tokens to add for today" })),
+			dailyTokens: Type.Optional(Type.Integer({ description: "set_fleet_limits: the daily token limit of every agent" })),
+			perJobTokens: Type.Optional(Type.Integer({ description: "set_fleet_limits: the token cap of one job" })),
+			perJobMinutes: Type.Optional(Type.Integer({ description: "set_fleet_limits: the minute cap of one job" })),
+			raiseCeiling: Type.Optional(Type.Integer({ description: "set_fleet_limits: the most a raise can lift an agent's daily limit to (follows the daily limit upwards when left out)" })),
 			instructions: Type.Optional(Type.String({ description: "set_instructions: the complete new operator instructions (at most 16000 characters); an empty text clears them" })),
 			reason: Type.Optional(Type.String()),
 		}),

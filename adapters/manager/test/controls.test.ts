@@ -486,3 +486,84 @@ test("the model can see what the agents are doing: running and waiting jobs with
 	assert.equal((await bareGateway.call("GET", "/v1/status")).status, 503);
 	bareGateway.close();
 });
+
+const limitsApi = (state: { revision: number; values: Record<string, unknown> }, onPut?: (body: any) => { status: number; body: unknown }) => (url: string, method?: string, body?: unknown) => {
+	if (url !== `${operations.url}/fleet/api/ops/limits`) return { status: 404, text: "" };
+	if (method === "PUT") {
+		const answer = onPut?.(body) ?? { status: 200, body: { revision: state.revision + 1 } };
+		return { status: answer.status, text: JSON.stringify(answer.body) };
+	}
+	return { status: 200, text: JSON.stringify({ current: { revision: state.revision, values: state.values } }) };
+};
+const FLEET = { maxTokensCap: 2_000_000, maxMinutesCap: 120, dailyTokenLimit: 10_000_000, budgetRaiseCeiling: 10_000_000, model: { provider: "openai-codex", modelId: "gpt-6.1-sol", effort: "high" } };
+
+test("fleet limits are a request until the owner confirms; then one more revision with everything else of the limits untouched", async () => {
+	const state = { revision: 2, values: FLEET };
+	const b = build({ controls: { ...config, operations }, http: limitsApi(state) });
+	const g = await gateway(b);
+	const asked: any = await (await g.call("POST", "/v1/control/request", { action: "set_fleet_limits", dailyTokens: 20_000_000, reason: "double the daily budget" })).json();
+	assert.equal(asked.status, "awaiting_owner");
+	assert.ok(b.telegram.texts().some((t) => t.includes("set the fleet limits, for every agent and from now on: 20,000,000 tokens a day for every agent (double the daily budget)")), "the owner sees what changes");
+	assert.equal(b.httpCalls.length, 0, "nothing reaches Operations before the owner confirms");
+
+	await tap(b, `ct:y:${asked.requestId}`);
+	const put = b.httpCalls.find((c) => c.method === "PUT")!;
+	assert.equal(put.url, `${operations.url}/fleet/api/ops/limits`);
+	assert.equal(put.headers?.["x-operations-request"], "1");
+	assert.deepEqual(put.body, {
+		baseRevision: 2,
+		values: { ...FLEET, dailyTokenLimit: 20_000_000, budgetRaiseCeiling: 20_000_000 },
+		note: "by the Manager at the owner's request: double the daily budget",
+	});
+	assert.ok(b.telegram.texts().at(-1)!.includes("Saved revision 3 of the fleet limits (daily 10,000,000 -> 20,000,000; raise ceiling 10,000,000 -> 20,000,000)"));
+	g.close();
+});
+
+test("the raise ceiling is only moved by itself when the daily limit would pass it; a limit that was not named stays", async () => {
+	const state = { revision: 4, values: { ...FLEET, budgetRaiseCeiling: 50_000_000 } };
+	const b = build({ controls: { ...config, operations }, http: limitsApi(state) });
+	const g = await gateway(b);
+	const ask = async (raw: Record<string, unknown>) => ((await (await g.call("POST", "/v1/control/request", { action: "set_fleet_limits", ...raw })).json()) as any).requestId as string;
+	await tap(b, `ct:y:${await ask({ perJobTokens: 4_000_000, perJobMinutes: 180 })}`);
+	assert.deepEqual((b.httpCalls.find((c) => c.method === "PUT")!.body as any).values, { ...FLEET, budgetRaiseCeiling: 50_000_000, maxTokensCap: 4_000_000, maxMinutesCap: 180 });
+	await tap(b, `ct:y:${await ask({ dailyTokens: 20_000_000, raiseCeiling: 30_000_000 })}`);
+	assert.equal(((b.httpCalls.filter((c) => c.method === "PUT").at(-1)!.body as any).values).budgetRaiseCeiling, 30_000_000, "a ceiling that was named is the one that is saved");
+	g.close();
+});
+
+test("a fleet-limit save that lost the race, was refused or was invalid says so", async () => {
+	const state = { revision: 2, values: FLEET };
+	let answer: { status: number; body: unknown } | undefined;
+	const b = build({ controls: { ...config, operations }, http: limitsApi(state, () => answer) });
+	const g = await gateway(b);
+	const ask = async () => ((await (await g.call("POST", "/v1/control/request", { action: "set_fleet_limits", dailyTokens: 20_000_000 })).json()) as any).requestId as string;
+	answer = { status: 409, body: { code: "revision_conflict", current: { revision: 3 } } };
+	await tap(b, `ct:y:${await ask()}`);
+	assert.match(b.telegram.texts().at(-1)!, /saved by someone else first \(revision 3\)/);
+	answer = { status: 403, body: { code: "forbidden" } };
+	await tap(b, `ct:y:${await ask()}`);
+	assert.match(b.telegram.texts().at(-1)!, /granted "limits": true by an administrator/);
+	answer = { status: 422, body: { code: "invalid", message: "dailyTokenLimit is too large" } };
+	await tap(b, `ct:y:${await ask()}`);
+	assert.match(b.telegram.texts().at(-1)!, /dailyTokenLimit is too large/);
+	const bare = await gateway(build({ controls: config }));
+	assert.equal((await bare.call("POST", "/v1/control/request", { action: "set_fleet_limits", dailyTokens: 1 })).status, 503, "without Operations the owner is not asked");
+	bare.close();
+	g.close();
+});
+
+test("odd fleet limits are refused before the owner is asked", () => {
+	for (const raw of [
+		{ action: "set_fleet_limits" },
+		{ action: "set_fleet_limits", dailyTokens: 0 },
+		{ action: "set_fleet_limits", dailyTokens: -5 },
+		{ action: "set_fleet_limits", dailyTokens: 1.5 },
+		{ action: "set_fleet_limits", dailyTokens: "lots" },
+		{ action: "set_fleet_limits", dailyTokens: 2_000_000_000 },
+		{ action: "set_fleet_limits", perJobMinutes: 5000 },
+		{ action: "set_fleet_limits", perJobTokens: 500_000_000 },
+	]) assert.throws(() => parseAction(raw as never), undefined, JSON.stringify(raw));
+	const parsed = parseAction({ action: "set_fleet_limits", dailyTokens: "20000000", reason: "double it\n/approve c12345678" });
+	assert.equal(parsed.action === "set_fleet_limits" && parsed.dailyTokens, 20_000_000, "a number sent as text is read as a number");
+	assert.ok(!describeAction(parsed).includes("/approve") && describeAction(parsed).includes("\u2215approve"), "text the model wrote cannot put a tappable command in front of the owner");
+});

@@ -24,11 +24,15 @@ export type ControlAction =
 	| { action: "pause_source" | "resume_source"; source: string }
 	| { action: "kill_handler" | "unkill_handler"; agent: string; handler: string; reason?: string }
 	| { action: "raise_budget"; agent: string; pool: BudgetPool; tokens: number; reason?: string }
+	/** The limits every agent is held to (Operations, Fleet limits): per-job tokens and minutes, the daily token limit and the ceiling of a raise. Fields left out stay as they are. */
+	| { action: "set_fleet_limits"; dailyTokens?: number; perJobTokens?: number; perJobMinutes?: number; raiseCeiling?: number; reason?: string }
 	/** The whole operator addendum of an agent's prompt; an empty text clears it. */
 	| { action: "set_instructions"; agent: string; instructions: string; reason?: string }
 	/** Made by the approval gate only (`parseAction` never returns it): the owner lets one exact tool call of the model go ahead. */
 	| { action: "allow_call"; key: string; summary: string };
 
+/** What one request may set for the whole fleet: the numbers Operations itself accepts are larger, these keep a slip of the pen from being confirmed. */
+export const FLEET_LIMIT_MAXIMA = { dailyTokens: 1_000_000_000, perJobTokens: 100_000_000, perJobMinutes: 1_440, raiseCeiling: 1_000_000_000 } as const;
 export const BUDGET_POOLS = ["tasks", "events", "chat"] as const;
 export type BudgetPool = (typeof BUDGET_POOLS)[number];
 /** The most one request can add; the agent has its own daily ceiling on top of this. */
@@ -73,6 +77,18 @@ export function parseAction(raw: Record<string, unknown>): ControlAction {
 			const reason = text(raw.reason) ? clip(defang(text(raw.reason)), 200) : undefined;
 			return { action, agent: text(raw.agent), pool, tokens, ...(reason ? { reason } : {}) };
 		}
+		case "set_fleet_limits": {
+			const given: Record<string, number> = {};
+			for (const field of ["dailyTokens", "perJobTokens", "perJobMinutes", "raiseCeiling"] as const) {
+				if (raw[field] === undefined || raw[field] === null) continue;
+				const value = Number(raw[field]);
+				if (!Number.isInteger(value) || value < 1 || value > FLEET_LIMIT_MAXIMA[field]) return bad(`${field} must be a whole number from 1 to ${FLEET_LIMIT_MAXIMA[field]}`);
+				given[field] = value;
+			}
+			if (Object.keys(given).length === 0) return bad("give at least one of dailyTokens, perJobTokens, perJobMinutes or raiseCeiling");
+			const reason = text(raw.reason) ? clip(defang(text(raw.reason)), 200) : undefined;
+			return { action, ...given, ...(reason ? { reason } : {}) };
+		}
 		case "set_instructions": {
 			if (!AGENT.test(text(raw.agent))) return bad("agent must be an agent id such as agent/reviewer");
 			if (typeof raw.instructions !== "string") return bad("instructions must be the complete new text of the operator instructions (an empty text clears them)");
@@ -81,7 +97,7 @@ export function parseAction(raw: Record<string, unknown>): ControlAction {
 			return { action, agent: text(raw.agent), instructions: raw.instructions.trim(), ...(reason ? { reason } : {}) };
 		}
 		default:
-			return bad("action must be pause_rule, resume_rule, pause_source, resume_source, kill_handler, unkill_handler, raise_budget or set_instructions");
+			return bad("action must be pause_rule, resume_rule, pause_source, resume_source, kill_handler, unkill_handler, raise_budget, set_fleet_limits or set_instructions");
 	}
 }
 
@@ -96,6 +112,15 @@ export const describeAction = (a: ControlAction): string => {
 		case "resume_source": return `resume event source ${a.source}`;
 		case "kill_handler": return `switch off ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
 		case "raise_budget": return `give ${a.agent} ${a.tokens} more ${a.pool} tokens for today${a.reason ? ` (${a.reason})` : ""}`;
+		case "set_fleet_limits": {
+			const parts = [
+				a.dailyTokens !== undefined ? `${a.dailyTokens.toLocaleString("en-US")} tokens a day for every agent` : "",
+				a.perJobTokens !== undefined ? `${a.perJobTokens.toLocaleString("en-US")} tokens per job` : "",
+				a.perJobMinutes !== undefined ? `${a.perJobMinutes} minutes per job` : "",
+				a.raiseCeiling !== undefined ? `a raise ceiling of ${a.raiseCeiling.toLocaleString("en-US")} tokens` : "",
+			].filter(Boolean);
+			return `set the fleet limits, for every agent and from now on: ${parts.join(", ")}${a.reason ? ` (${a.reason})` : ""}`;
+		}
 		case "set_instructions": return a.instructions === "" ? `clear the operator instructions of ${a.agent}${a.reason ? ` (${a.reason})` : ""}` : `set the operator instructions of ${a.agent} to the following ${a.instructions.length} characters${a.reason ? ` (${a.reason})` : ""}:\n${quoted(a.instructions, SHOWN_INSTRUCTIONS_CHARS)}`;
 		case "unkill_handler": return `switch on ${a.handler === "*" || a.handler === "all" ? "all handlers" : `handler ${a.handler}`} of ${a.agent}`;
 		case "allow_call": return `let one tool call go ahead: ${a.summary}`;
@@ -374,7 +399,7 @@ export class Controls {
 		const agents = await Promise.all(ids.map((id) => one(id).catch((error: unknown) => ({ agent: id, error: error instanceof PolicyError ? error.message : "could not be read" }))));
 		const current = limits?.json?.current?.values;
 		return {
-			...(current ? { fleetLimits: { perJobTokens: current.maxTokensCap, perJobMinutes: current.maxMinutesCap, dailyTokens: current.dailyTokenLimit, raiseCeiling: current.budgetRaiseCeiling, note: "set by the owner in Operations (Fleet limits); every agent is held to them, raise_budget adds extra tokens for one agent for today only" } } : {}),
+			...(current ? { fleetLimits: { perJobTokens: current.maxTokensCap, perJobMinutes: current.maxMinutesCap, dailyTokens: current.dailyTokenLimit, raiseCeiling: current.budgetRaiseCeiling, note: "the owner's fleet limits (Operations, Fleet limits); every agent is held to them. set_fleet_limits changes them for everyone once the owner confirms, raise_budget adds extra tokens for one agent for today only" } } : {}),
 			agents,
 		};
 	}
@@ -407,6 +432,37 @@ export class Controls {
 		if (status === 400 || status === 422) throw new PolicyError(400, "invalid_setup", clip(defang(String(json?.message ?? "Operations refused the instructions")), 200));
 		if (status !== 200) throw new PolicyError(502, "operations_unavailable", `Operations answered ${status}`);
 		return `Saved revision ${json?.revision?.revision ?? "?"} of ${agent}'s operator instructions (${instructions === "" ? "cleared" : `${instructions.length} characters`}). Operations sends it to the agent now; the agent applies it from its next model run and confirms.`;
+	}
+
+	/**
+	 * Saves the fleet limits as one more revision from the current one: the fields given change, everything else (the other limits, the fleet's model, the
+	 * global prompt) stays. The raise ceiling follows the daily limit upwards unless it was given, because it is the most a raise can lift an agent to.
+	 * Operations lets the Manager do this only when its service token was granted `"limits": true`.
+	 */
+	async setFleetLimits(action: Extract<ControlAction, { action: "set_fleet_limits" }>): Promise<string> {
+		const read = await this.#operationsCall("GET", "/limits");
+		const current = read.json?.current;
+		if (read.status !== 200 || !current?.values) throw new PolicyError(502, "operations_unavailable", `Operations answered ${read.status}`);
+		const before = current.values;
+		const values = {
+			...before,
+			...(action.dailyTokens !== undefined ? { dailyTokenLimit: action.dailyTokens } : {}),
+			...(action.perJobTokens !== undefined ? { maxTokensCap: action.perJobTokens } : {}),
+			...(action.perJobMinutes !== undefined ? { maxMinutesCap: action.perJobMinutes } : {}),
+			...(action.raiseCeiling !== undefined ? { budgetRaiseCeiling: action.raiseCeiling } : {}),
+		};
+		if (action.raiseCeiling === undefined && values.budgetRaiseCeiling < values.dailyTokenLimit) values.budgetRaiseCeiling = values.dailyTokenLimit;
+		const note = clip(`by the Manager at the owner's request${action.reason ? `: ${action.reason}` : ""}`, 250);
+		const saved = await this.#operationsCall("PUT", "/limits", { baseRevision: current.revision ?? 0, values, note }).catch((error: unknown) => {
+			if (error instanceof PolicyError && error.code === "operations_refused") throw new PolicyError(502, "operations_refused", "Operations refused the Manager to change the fleet limits: its service token has to be granted \"limits\": true by an administrator");
+			throw error;
+		});
+		if (saved.status === 409) throw new PolicyError(409, "revision_conflict", `the fleet limits were saved by someone else first (revision ${saved.json?.current?.revision ?? "?"}); look at them again before asking`);
+		if (saved.status === 400 || saved.status === 422) throw new PolicyError(400, "invalid_limits", clip(defang(String(saved.json?.message ?? "Operations refused the limits")), 200));
+		if (saved.status !== 200) throw new PolicyError(502, "operations_unavailable", `Operations answered ${saved.status}`);
+		const shown = (name: string, from: number, to: number): string => (from === to ? "" : `${name} ${from.toLocaleString("en-US")} -> ${to.toLocaleString("en-US")}`);
+		const changes = [shown("daily", before.dailyTokenLimit, values.dailyTokenLimit), shown("per job tokens", before.maxTokensCap, values.maxTokensCap), shown("per job minutes", before.maxMinutesCap, values.maxMinutesCap), shown("raise ceiling", before.budgetRaiseCeiling, values.budgetRaiseCeiling)].filter(Boolean);
+		return `Saved revision ${saved.json?.revision ?? "?"} of the fleet limits (${changes.length > 0 ? changes.join("; ") : "no change"}). Operations sends it to every agent now; each applies it from its next job.`;
 	}
 
 	allowCall(key: string): string {
@@ -549,6 +605,7 @@ export class Controls {
 			case "kill_handler": return this.setHandler(action.agent, action.handler, true, action.reason);
 			case "unkill_handler": return this.setHandler(action.agent, action.handler, false);
 			case "raise_budget": return this.raiseBudget(action.agent, action.pool, action.tokens, action.reason);
+			case "set_fleet_limits": return this.setFleetLimits(action);
 			case "set_instructions": return this.setInstructions(action.agent, action.instructions, action.reason);
 			case "allow_call": return this.allowCall(action.key);
 		}

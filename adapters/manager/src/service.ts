@@ -154,6 +154,7 @@ export class ManagerService {
 	/** A switch the model asked for: nothing changes until the owner confirms it in Telegram. */
 	async controlRequest(raw: Record<string, unknown>): Promise<unknown> {
 		const action = parseAction(raw);
+		if (action.action === "set_fleet_limits" && !this.#controls().operationsConfigured) throw new PolicyError(503, "operations_not_configured", "the Manager has no access to Operations, so it cannot change the fleet limits (MANAGER_OPERATIONS_URL and MANAGER_OPERATIONS_TOKEN_FILE)");
 		if (action.action === "set_instructions" && !this.#controls().operationsConfigured) throw new PolicyError(503, "operations_not_configured", "the Manager has no access to Operations, so it cannot change instructions (MANAGER_OPERATIONS_URL and MANAGER_OPERATIONS_TOKEN_FILE)");
 		const request = await this.#askOwner(action);
 		return { status: "awaiting_owner", requestId: request.id, note: "The owner has been asked on Telegram. Nothing changes until they confirm. Tell them what you asked for." };
