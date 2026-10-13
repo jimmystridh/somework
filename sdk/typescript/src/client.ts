@@ -155,10 +155,22 @@ export class SomeWorkClient {
 			classification: options.classification ?? "internal",
 		});
 		const parts: { partNumber: number; etag: string }[] = [];
+		// putting the same bytes to the same grant again is harmless, so a connection that resets or an object store that answers 5xx is tried again before the upload fails
 		const put = async (url: string, body: Buffer, headers: Record<string, string> = {}) => {
-			const response = await httpCall(this.#http, { method: "PUT", path: url, headers, body });
-			if (response.status < 200 || response.status >= 300) throw new SomeWorkError(response.status, "unavailable", `object upload failed: ${response.status}`);
-			return String(response.headers.etag ?? "").replaceAll('"', "");
+			for (let attempt = 0; ; attempt++) {
+				let failure: unknown;
+				let tryAgain = true;
+				try {
+					const response = await httpCall(this.#http, { method: "PUT", path: url, headers, body });
+					if (response.status >= 200 && response.status < 300) return String(response.headers.etag ?? "").replaceAll('"', "");
+					failure = new SomeWorkError(response.status, "unavailable", `object upload failed: ${response.status}`);
+					tryAgain = response.status >= 500 || response.status === 429;
+				} catch (error) {
+					failure = error;
+				}
+				if (!tryAgain || attempt >= this.#retries) throw failure;
+				await sleep(500 * 2 ** attempt);
+			}
 		};
 		if (grant.multipart) {
 			const partSize: number = grant.multipart.partSize ?? 5 * 1024 * 1024;
