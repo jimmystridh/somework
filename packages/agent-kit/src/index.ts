@@ -18,6 +18,7 @@ export * from "./observe/index.ts";
 export * from "./slack/index.ts";
 export * from "./telegram/index.ts";
 export * from "./timers/index.ts";
+export * from "./plane/index.ts";
 export * from "./watches/index.ts";
 export * from "./threads/index.ts";
 export * from "./threads/helpers.ts";

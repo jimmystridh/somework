@@ -57,6 +57,7 @@ import { overlayFromDirectory, skillsExtension } from "./skills.ts";
 import { createObserve } from "./observe/index.ts";
 import { llmUsageCounters } from "./usage-metrics.ts";
 import { createTimers } from "./timers/index.ts";
+import { createPlane } from "./plane/index.ts";
 import { createWatches } from "./watches/index.ts";
 import { resolveSlack, SlackChannel, slackApi, slackApprovals, SlackSender, slackSocketUrl, SlackStore, type SlackStart } from "./slack/index.ts";
 import { resolveTelegram, TelegramChannel, telegramApi, telegramApprovals, telegramFiles, TelegramSender, TelegramStore, type TelegramStart } from "./telegram/index.ts";
@@ -145,6 +146,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			if (defaultRefusal) throw new Error(`the configured model cannot be used: ${defaultRefusal}`);
 			let ledgerRef: DailyLedger | undefined;
 			let runtimeRef: PiDurableRuntime | undefined;
+			const plane = createPlane({ env, conversationOf: (api) => (runtimeRef?.contextOf(api.conversationId as number) as RunContext | undefined)?.conversationId, log });
 			const mcpHub = new McpHub({ root: join(config.state.dir, "mcp"), env, log });
 			// what an operator set is loaded before anything that reads it is built: the limits go into config.limits, the model into the runtime below
 			const setup = new Setup({
@@ -275,6 +277,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 				...(observe ? [observe.extension] : []),
 				...(timers ? [timers.extension] : []),
 				...(watches ? [watches.extension] : []),
+				...(plane ? [plane.extension] : []),
 				...(hooks.chat?.extension ? [hooks.chat.extension] : []),
 				skillsExtension({ allow: () => setup.repositorySkills(skillAllow), version: () => setup.version(), readOverlay: (name) => setup.overlay(name) ?? fileOverlay(name), log }),
 				libraryExtension(() => setup.librarySkills()).extension,
@@ -370,7 +373,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			});
 			jobsRef = jobs;
 			const knownTools = new Set(runtime.knownTools());
-			const conversationTools = [...new Set(["read", "write", "edit", "bash", ...(profile.allowedTools ?? []), AGENT_STATUS_TOOL, ...(hooks.chat?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? []), ...(watches?.toolNames ?? []), ...threadTools.toolNames])].filter((name) => knownTools.has(name));
+			const conversationTools = [...new Set(["read", "write", "edit", "bash", ...(profile.allowedTools ?? []), AGENT_STATUS_TOOL, ...(hooks.chat?.toolNames ?? []), ...(observe?.toolNames ?? []), ...(timers?.toolNames ?? []), ...(watches?.toolNames ?? []), ...(plane?.toolNames ?? []), ...threadTools.toolNames])].filter((name) => knownTools.has(name));
 			const threadWorkspace = async (key: string): Promise<string> => {
 				const directory = `${root}/.threads/${key}`;
 				await envFor(root).createDir(directory, { recursive: true }, BACKGROUND_CONTEXT);
@@ -436,6 +439,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 					observe: { enabled: Boolean(observe), ...(observe ? { scope: env.OBSERVE_SCOPE || "own" } : {}) },
 					timers: { enabled: Boolean(timers) },
 					watches: { enabled: Boolean(watches) },
+					plane: { enabled: Boolean(plane) },
 					telegram: { enabled: Boolean(telegram), allowedUsers: telegram?.start.allowed.size ?? 0 },
 					slack: { enabled: Boolean(slack), allowedUsers: slack?.start.allowedUsers.size ?? 0, channels: slack?.start.allowedChannels.size ?? 0 },
 					setup: setup.report({ model: runtime.model }),
