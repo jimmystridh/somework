@@ -33,7 +33,7 @@ requester ── code.review@3 {repository:{url,ref}, pullRequest?, ticket?, foc
 5. `src/hooks.ts` (`result`) maps the review to the task result and uploads the Markdown report.
 
 ## What the model may run
-`bash` is classified command by command (`src/commands.ts`); `;`, `&`, `|` split a command, quotes are ignored on purpose (splitting too much only
+`bash` is classified command by command (the kit's `src/read-only-commands.ts`); `;`, `&`, `|` split a command, quotes are ignored on purpose (splitting too much only
 turns "allow" into "approve"):
 
 | Class | Examples | What happens |
@@ -63,7 +63,7 @@ Settings (written into the handler when it is installed; `REVIEWER_RESEED_HANDLE
 |---|---|
 | `card.json` · `src/profile.ts` · `src/main.ts` | the role contract: card, profile (read-only, `["read","bash"]`, budget required, review skills), entry point |
 | `src/prompt.ts` | standing orders, the instruction from the job input, the repair instruction |
-| `src/commands.ts` | the read-only command classifier and the approval patterns built from it |
+| `src/commands.ts` | the kit's read-only command policy under the names the reviewer uses |
 | `src/result.ts` | extract, validate and cap the review; render the report |
 | `src/context.ts` | read-only pull request context (REST + GraphQL), host-restricted |
 | `src/review-runtime.ts` · `src/hooks.ts` | the repair turn and auto-denial; the kit hooks: PR context, instruction, task result and artifacts |

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { approvalPolicy } from "@somework/agent-kit";
-import { classifyCommand, DENIED_REASON, REVIEW_APPROVAL_PATTERNS } from "../src/commands.ts";
+import { approvalPolicy } from "../src/policy.ts";
+import { classifyCommand, DENIED_REASON, READ_ONLY_APPROVAL_PATTERNS } from "../src/read-only-commands.ts";
 
-const policy = approvalPolicy([], REVIEW_APPROVAL_PATTERNS);
+const policy = approvalPolicy([], READ_ONLY_APPROVAL_PATTERNS);
 
 describe("read-only command classification", () => {
 	it("allows plain inspection, alone or piped through filters", () => {

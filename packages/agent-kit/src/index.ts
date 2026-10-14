@@ -25,6 +25,7 @@ export * from "./threads/state.ts";
 export * from "./pi-runtime.ts";
 export * from "./usage-metrics.ts";
 export * from "./policy.ts";
+export * from "./read-only-commands.ts";
 export * from "./preflight.ts";
 export * from "./github-preflight.ts";
 export * from "./profile.ts";
