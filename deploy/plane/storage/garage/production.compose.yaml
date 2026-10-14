@@ -1,0 +1,29 @@
+# CANDIDATE: merge LAST with upstream/compose.yaml and ../../compose.yaml.
+# No production activation by this PR. deploy.sh still gates on AIStor licensing.
+# Review and separately adapt deployment/bootstrap ordering before rollout.
+services:
+  plane-minio:
+    image: dxflrs/garage:v2.4.1@sha256:0d7c74fc8ca6fef68a5a941c0e7558c8b1e92ba3588fa7505400e1350456c796
+    command: !override [/garage, server]
+    tmpfs: !override []
+    environment: !override {}
+    volumes: !override
+      - garage_meta:/data/meta
+      - garage_objects:/data/objects
+      - type: bind
+        source: ./storage/garage/production.toml
+        target: /etc/garage.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/plane/garage_rpc
+        target: /run/secrets/garage_rpc
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, /garage, health]
+volumes:
+  garage_meta:
+  garage_objects:

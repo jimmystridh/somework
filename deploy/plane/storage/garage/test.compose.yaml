@@ -1,0 +1,47 @@
+# Public isolated contract fixture; NEVER use these credentials in production.
+name: plane-garage-contract
+services:
+  storage:
+    image: dxflrs/garage:v2.4.1@sha256:0d7c74fc8ca6fef68a5a941c0e7558c8b1e92ba3588fa7505400e1350456c796
+    platform: linux/amd64
+    command: [/garage, server]
+    mem_limit: 512m
+    cpus: 1
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - data:/data
+      - type: bind
+        source: ./garage.toml
+        target: /etc/garage.toml
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      isolated:
+        aliases: [plane-garage-contract]
+  client:
+    profiles: [test]
+    # Use the actual application's boto3, not a hand-written signature emulator.
+    image: makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae
+    platform: linux/amd64
+    entrypoint: [python]
+    command: [/test/boto3-contract.py]
+    mem_limit: 256m
+    cpus: 1
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - type: bind
+        source: ./boto3-contract.py
+        target: /test/boto3-contract.py
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [isolated]
+volumes:
+  data:
+networks:
+  isolated:
+    internal: true

@@ -29,3 +29,18 @@ test('reject broad directory permissions and unreviewed origins',()=>{
    assert.throws(()=>generate(dir,url),/reviewed/);
  }finally{rmSync(dir,{recursive:true});}
 });
+test('opt-in Garage uses compatible key IDs, explicit region, private exclusive RPC secret',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'plane-env-test-'));chmodSync(dir,0o700);
+ try {
+  generate(dir,origin,'garage');
+  const text=readFileSync(join(dir,'plane.env'),'utf8');
+  assert.match(text,/AWS_ACCESS_KEY_ID=GK[a-f0-9]{24}\n/);
+  assert.match(text,/AWS_REGION=garage\n/);
+  const rpc=readFileSync(join(dir,'garage_rpc'),'utf8');
+  assert.match(rpc,/^[a-f0-9]{64}$/);
+  assert.equal(statSync(join(dir,'garage_rpc')).mode&0o777,0o600);
+  assert.throws(()=>generate(dir,origin,'garage'),/EEXIST/);
+  assert.equal(readFileSync(join(dir,'garage_rpc'),'utf8'),rpc);
+  assert.throws(()=>generate(dir,origin,'minio-ce'),/unreviewed/);
+ }finally{rmSync(dir,{recursive:true});}
+});

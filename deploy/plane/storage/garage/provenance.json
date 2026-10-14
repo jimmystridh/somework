@@ -1,0 +1,28 @@
+{
+  "status": "runtime-tested candidate, NOT deployed or security-approved",
+  "checked_on": "2026-10-14",
+  "release": "v2.4.1",
+  "published_at": "2026-09-08T08:44:05Z",
+  "upstream_archived": false,
+  "upstream_updated_at": "2026-10-12T16:31:02Z",
+  "source_commit": "268334bd2530fa99f8b06c7383b2e9f776691edd",
+  "tag_object": "cdc4ca791f1b0cdc8c93d2ba5a9db797c10143ad",
+  "license": "AGPL-3.0",
+  "image": "dxflrs/garage:v2.4.1@sha256:0d7c74fc8ca6fef68a5a941c0e7558c8b1e92ba3588fa7505400e1350456c796",
+  "platform": "linux/amd64",
+  "runtime_version": "garage v2.4.1",
+  "provenance_limit": "Registry image has no source labels or supplied attestation; source tag and binary version are checked separately, NOT a reproducible-build claim. No comprehensive vulnerability scan performed.",
+  "sources": [
+    "https://git.deuxfleurs.fr/Deuxfleurs/garage/releases/tag/v2.4.1",
+    "https://git.deuxfleurs.fr/Deuxfleurs/garage/raw/tag/v2.4.1/SECURITY.md",
+    "https://git.deuxfleurs.fr/Deuxfleurs/garage/raw/tag/v2.4.1/LICENSE",
+    "https://garagehq.deuxfleurs.fr/documentation/reference-manual/s3-compatibility/",
+    "https://garagehq.deuxfleurs.fr/api/garage-admin-v2.json"
+  ],
+  "limitations": [
+    "No S3 ACL or bucket-policy APIs: use private per-key grants; Plane update_bucket is incompatible",
+    "Single node has no redundancy; upstream recommends against replication_factor=1 outside tests",
+    "No existing AIStor volume conversion: preserve plane_uploads, use new Garage volumes only",
+    "Actual Plane browser/proxy path and authenticated HTTPS still untested"
+  ]
+}

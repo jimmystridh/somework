@@ -1,0 +1,13 @@
+# Isolated test configuration; public fixture RPC secret, NEVER production.
+metadata_dir = "/data/meta"
+data_dir = "/data/objects"
+db_engine = "lmdb"
+replication_factor = 1
+rpc_bind_addr = "127.0.0.1:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+[s3_api]
+api_bind_addr = "0.0.0.0:9000"
+s3_region = "garage"
+[admin]
+api_bind_addr = "127.0.0.1:3903"

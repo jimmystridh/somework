@@ -1,6 +1,40 @@
 # Plane v1.4.2 — implemented remediation, NOT deployed
 
-## Current continuation — 2026-10-14, still blocked
+## Current continuation — 2026-10-14, storage contract executed
+
+- Main `b924d31` is confirmed by CI #120 success; production Plane is absent.
+- No license/env appeared. Garage v2.4.1 exact amd64 image pulled and actual
+  Plane-image boto3 POST/GET/disposition/copy/head/upload/auth/restart tests passed.
+  See [candidate implementation and exact limitations](storage/garage/README.md).
+  This branch does not activate Garage or claim Plane/HTTPS readiness.
+- Services now has NEW dedicated `plane-forward` account (UID 994, GID 982,
+  nologin shell) and exact main `sshd-plane-forward.conf` installed as
+  `/etc/ssh/sshd_config.d/80-plane-forward.conf`. `sshd -t` and effective Match
+  settings passed; SSH reloaded. No key enrolled, no application forwarded yet.
+- Agents now has `/etc/plane-gateway/known_hosts` (0600), verified against the
+  Services-authoritative ED25519 fingerprint
+  `SHA256:Zgp48m7EKbxWhfKfGDRk+g15gLeYamaOZYKLE284p/0`.
+  Existing dedicated ingress private key is preserved, never printed/rotated.
+- Authoritative Tailscale status maps Self UserID 6515314141556660 to
+  `jimmystridh@github`, tailnet `jimmystridh.github`. This proves node/tailnet
+  identity, not a Telegram-to-tailnet ownership link. Exact owner identity still
+  needs approval before activating the owner-only unit/route.
+- Services private Git authentication still fails. Tool-approved readable file
+  transfer successfully staged the small exact-main SSH restriction file.
+  A large boto3 file write and live subprocess-based provisioning execution were
+  refused for the tool's 600-character approval-request cap; neither retried.
+  A public-key-only bounded transfer server attempt timed out (120s) after copying
+  the dedicated PUBLIC key and printing its fingerprint, not key contents; stopped
+  that step, no retry or enrollment. Preserve partial staging and check state.
+- Remaining exact implementation/approval gates: replacement review and single-node
+  durability decision (or legitimate AIStor license); supported exact-commit full
+  deployment staging; host-local secret generation; key enrollment and forwarding/
+  gateway units; verified owner mapping and Serve :8443 approval; then migrations,
+  actual Plane object transfer and private HTTPS verification. No Funnel or routes
+  changed. Existing stacks remained healthy. QA activity was seen in metrics;
+  no shared QA resource or paused audio work used.
+
+## Earlier continuation — 2026-10-14, historical
 
 - Resumed from `a98e272`. Actual Services pulls exposed five application
   digests assigned to the wrong repositories. Fixed in `3177740`;
