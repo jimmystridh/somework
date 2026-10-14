@@ -1,8 +1,11 @@
 # Garage v2.4.1 candidate — tested storage contract, NOT Plane deployment
 
 Main `b924d31224397818e82de53d5beef2b54f3a426b` still selects licensed AIStor.
-This focused change does **not** activate a replacement, change `deploy.sh`, accept
-vendor terms or use old/unmaintained MinIO CE. Review is required before rollout.
+The original candidate `5c59937` did **not** activate a replacement or change
+`deploy.sh`. This separate continuation adds an explicit, still-unreviewed Garage
+ordering to that script, leaving licensed AIStor as the default. Neither change
+accepts vendor terms or uses old/unmaintained MinIO CE. Review is required before
+rollout; see [current concrete gates and ordering](../../ROLLOUT.md).
 
 ## Authoritative maintenance/security and actual image identity
 
@@ -69,11 +72,13 @@ owner privileges are rejected rather than silently weakened. It preprovisions
 unused `update_bucket` command calls unsupported bucket-policy APIs: do NOT enable
 that command or claim ACL/policy compatibility.
 
-Before rollout, review the replacement/durability choice, test helper's new-key
-path, initialize a measured explicit capacity/layout, adapt deployment ordering
-(start Garage, initialize layout/provision, then health/migrations), and test the
-actual Plane proxy Host/presigned signature path. Current `deploy.sh` still requires
-an AIStor license intentionally; do not bypass it or call this layer a deployment.
+Before rollout, review the replacement/durability choice and new script ordering,
+test helper's new-key path, initialize a measured explicit capacity/layout, and
+test the actual Plane proxy Host/presigned signature path. `deploy.sh` still requires
+an AIStor license in its default mode. Explicit Garage mode requires private env
+preflight, initialized healthy layout and successful provisioning before migrations.
+Its storage-only phase is preparation, never application deployment. No host
+execution of this continuation has occurred.
 
 ## Reproducible isolated contract
 

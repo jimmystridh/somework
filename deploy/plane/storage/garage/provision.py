@@ -11,13 +11,17 @@ import sys
 from pathlib import Path
 
 
-def bootstrap(api, access, secret, bucket):
+def validate_credentials(access, secret, bucket):
     if not re.fullmatch(r'GK[0-9a-f]{24}', access):
         raise ValueError('Garage access key must be GK plus 24 hex digits')
     if not re.fullmatch(r'[0-9a-f]{64}', secret):
         raise ValueError('requires a host-generated 256-bit secret')
     if bucket != 'uploads':
         raise ValueError('requires the reviewed uploads bucket')
+
+
+def bootstrap(api, access, secret, bucket):
+    validate_credentials(access, secret, bucket)
     buckets = api('ListBuckets', None)
     matches = [b for b in buckets if bucket in b['globalAliases']]
     if len(matches) > 1:
@@ -67,18 +71,26 @@ def load_env(path):
     values = dict(line.split('=', 1) for line in p.read_text().splitlines() if line)
     if values.get('AWS_REGION') != 'garage' or values.get('AWS_S3_ENDPOINT_URL') != 'http://plane-minio:9000':
         raise ValueError('requires explicit matching Garage region and private endpoint')
+    validate_credentials(values['AWS_ACCESS_KEY_ID'], values['AWS_SECRET_ACCESS_KEY'],
+                         values['AWS_S3_BUCKET_NAME'])
     return values
 
 
-if __name__ == '__main__':
+def main(argv):
     try:
-        if len(sys.argv) != 3:
-            raise ValueError('usage: provision.py PRIVATE_PLANE_ENV STORAGE_CONTAINER')
-        env = load_env(sys.argv[1])
-        bootstrap(docker_api(sys.argv[2]), env['AWS_ACCESS_KEY_ID'],
-                  env['AWS_SECRET_ACCESS_KEY'], env['AWS_S3_BUCKET_NAME'])
-        print('Private Garage bucket and read/write-only Plane key provisioned')
+        if len(argv) != 2:
+            raise ValueError('usage: provision.py PRIVATE_PLANE_ENV CONTAINER_OR_--check')
+        env = load_env(argv[0])
+        if argv[1] != '--check':
+            bootstrap(docker_api(argv[1]), env['AWS_ACCESS_KEY_ID'],
+                      env['AWS_SECRET_ACCESS_KEY'], env['AWS_S3_BUCKET_NAME'])
+            print('Private Garage bucket and read/write-only Plane key provisioned')
+        return 0
     except Exception:
         # Even malformed secret-file content must not leak through a traceback.
         print('Garage provisioning failed; inspect prerequisites without printing secrets', file=sys.stderr)
-        sys.exit(1)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

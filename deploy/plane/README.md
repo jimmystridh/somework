@@ -1,5 +1,10 @@
 # Plane v1.4.2 — implemented remediation, NOT deployed
 
+See [current rollout continuation](ROLLOUT.md): reviewer clone failed HTTP 403,
+PR CI #122 lacks `github_token`, supported host staging is absent. The separate
+Garage deployment-ordering continuation is **not reviewed or activated**. The
+historical checkpoints below do not establish current deployment readiness.
+
 ## Current continuation — 2026-10-14, storage contract executed
 
 - Main `b924d31` is confirmed by CI #120 success; production Plane is absent.

@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from provision import bootstrap, docker_api, load_env
+from provision import bootstrap, docker_api, load_env, main
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
 
 KEY = 'GK0123456789abcdef01234567'
 SECRET = '0123456789abcdef' * 4
@@ -83,7 +85,8 @@ class PrivacyTest(unittest.TestCase):
     def test_private_file_region_and_symlink_gates(self):
         with tempfile.TemporaryDirectory() as directory:
             p = Path(directory) / 'plane.env'
-            p.write_text('AWS_REGION=garage\nAWS_S3_ENDPOINT_URL=http://plane-minio:9000\n')
+            p.write_text('AWS_REGION=garage\nAWS_S3_ENDPOINT_URL=http://plane-minio:9000\n'
+                         f'AWS_ACCESS_KEY_ID={KEY}\nAWS_SECRET_ACCESS_KEY={SECRET}\nAWS_S3_BUCKET_NAME=uploads\n')
             p.chmod(0o600)
             self.assertEqual(load_env(p)['AWS_REGION'], 'garage')
             p.chmod(0o644)
@@ -97,6 +100,27 @@ class PrivacyTest(unittest.TestCase):
             p.write_text('AWS_REGION=wrong\nAWS_S3_ENDPOINT_URL=http://plane-minio:9000\n')
             with self.assertRaises(ValueError):
                 load_env(p)
+
+class PreflightTest(unittest.TestCase):
+    def test_check_has_no_docker_effect_or_output(self):
+        env = {'AWS_ACCESS_KEY_ID': KEY, 'AWS_SECRET_ACCESS_KEY': SECRET,
+               'AWS_S3_BUCKET_NAME': 'uploads'}
+        out, err = StringIO(), StringIO()
+        with patch('provision.load_env', return_value=env), patch('provision.docker_api') as api, redirect_stdout(out), redirect_stderr(err):
+            self.assertEqual(main(['fixture', '--check']), 0)
+            api.assert_not_called()
+        self.assertEqual(out.getvalue() + err.getvalue(), '')
+    def test_malformed_file_does_not_echo_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / 'plane.env'
+            p.write_text('AWS_REGION=garage\nAWS_S3_ENDPOINT_URL=http://plane-minio:9000\n'
+                         f'AWS_ACCESS_KEY_ID={SECRET}\nAWS_SECRET_ACCESS_KEY={SECRET}\nAWS_S3_BUCKET_NAME=uploads\n')
+            p.chmod(0o600)
+            out, err = StringIO(), StringIO()
+            with redirect_stdout(out), redirect_stderr(err), patch('provision.docker_api') as api:
+                self.assertEqual(main([str(p), '--check']), 1)
+                api.assert_not_called()
+            self.assertNotIn(SECRET, out.getvalue() + err.getvalue())
 
 if __name__ == '__main__':
     unittest.main()
