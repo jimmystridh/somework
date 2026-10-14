@@ -1,0 +1,5 @@
+name: windows-developer-watch
+description: A pull request that the Windows developer asked the event hub to watch ("tell me about PR #1234") wakes it with each new commit, review, comment, check run and merge; its own model reads the event and decides what it means. The hub only sends events of pull requests the agent itself watches.
+owner: agent/windows-developer
+selector: github.watch.windows_developer.event
+wake: true
