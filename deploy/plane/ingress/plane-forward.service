@@ -1,0 +1,18 @@
+[Unit]
+Description=Plane loopback SSH forwarding from Agents to Services
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=js
+# New, owner-approved dedicated key and verified Services host key; NOT agent keys.
+ExecStart=/usr/bin/ssh -F /dev/null -N -T -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/plane-gateway/known_hosts -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -i /etc/plane-gateway/plane_ed25519 -L 127.0.0.1:18090:127.0.0.1:8090 plane-forward@10.10.10.14
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=64M
+[Install]
+WantedBy=multi-user.target

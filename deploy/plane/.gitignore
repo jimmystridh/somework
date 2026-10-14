@@ -1,0 +1,5 @@
+plane.env
+*.secret
+backups/
+
+*.license

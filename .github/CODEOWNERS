@@ -3,3 +3,5 @@
 /.woodpecker/      @jimmystridh
 /docs/adr/         @jimmystridh
 /CONTEXT.md        @jimmystridh
+
+/deploy/plane/     @jimmystridh

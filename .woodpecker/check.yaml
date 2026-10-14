@@ -22,6 +22,7 @@ steps:
     commands:
       - timeout 600 npm test --workspace packages/rules-cli
       - timeout 300 node --test --test-force-exit sdk/typescript/test/events.test.ts sdk/typescript/test/identity.test.ts
+      - node --test scripts/repository-packaging.test.ts
       - timeout 600 npm test --workspace packages/events-receiver --workspace packages/events-hub --if-present
 
   - name: validate-rules

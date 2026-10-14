@@ -1,0 +1,109 @@
+{
+  "observed": "2026-10-14",
+  "upstreamArchived": true,
+  "rejectedCE": {
+    "release": "RELEASE.2025-10-15T17-29-55Z",
+    "commit": "9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a",
+    "sourceArchiveSHA256": "7b8bbbeebfb0c9829ac3b1b85473a18d2691b6873e76d1770c6a2dea0b08b985",
+    "fixAncestor": "c1a49490c78e9c3ebcad86ba0662319138ace190",
+    "reason": "Fixes the 2025 session-policy issue, but not later CE advisories. Do not build/deploy as a secure replacement."
+  },
+  "advisories": [
+    {
+      "id": "GHSA-xh8f-g2qw-gcm7",
+      "cve": "CVE-2026-42600",
+      "summary": "Path Traversal via msgpack Body in `ReadMultiple` Storage-REST Endpoint",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-xh8f-g2qw-gcm7",
+      "affected": [
+        ">= RELEASE.2022-07-24T01-54-52Z"
+      ],
+      "patched": [
+        ">= RELEASE.2026-04-14T21-32-45Z"
+      ]
+    },
+    {
+      "id": "GHSA-hv4r-mvr4-25vw",
+      "cve": "CVE-2026-41145",
+      "summary": "Unauthenticated Object Write via Query-String Credential Signature Bypass in Unsigned-Trailer Uploads",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-hv4r-mvr4-25vw",
+      "affected": [
+        ">= RELEASE.2023-05-18T00-05-36Z"
+      ],
+      "patched": [
+        ">= RELEASE.2026-04-11T03-20-12Z"
+      ]
+    },
+    {
+      "id": "GHSA-9c4q-hq6p-c237",
+      "cve": "CVE-2026-40344",
+      "summary": "Unauthenticated Object Write via Missing Signature Verification in Snowball Auto-Extract",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-9c4q-hq6p-c237",
+      "affected": [
+        ">= RELEASE.2023-05-18T00-05-36Z"
+      ],
+      "patched": [
+        ">= RELEASE.2026-04-11T03-20-12Z"
+      ]
+    },
+    {
+      "id": "GHSA-h749-fxx7-pwpg",
+      "cve": "CVE-2026-39414",
+      "summary": "DoS via Unbounded Memory Allocation in S3 Select CSV Parsing",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-h749-fxx7-pwpg",
+      "affected": [
+        ">= RELEASE.2018-08-18T03-49-57Z"
+      ],
+      "patched": [
+        "MinIO AIStor RELEASE.2025-12-20T04-58-37Z"
+      ]
+    },
+    {
+      "id": "GHSA-3rh2-v3gr-35p9",
+      "cve": "CVE-2026-34204",
+      "summary": "SSE Metadata Injection via Replication Headers",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-3rh2-v3gr-35p9",
+      "affected": [
+        "> RELEASE.2024-03-30T09-41-56Z"
+      ],
+      "patched": [
+        ">= RELEASE.2026-03-26T21-24-40Z"
+      ]
+    },
+    {
+      "id": "GHSA-jv87-32hw-hh99",
+      "cve": "CVE-2026-33419",
+      "summary": "LDAP login brute-force via user enumeration and missing rate limit",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-jv87-32hw-hh99",
+      "affected": [
+        "< RELEASE.2026-03-17T21-25-16Z"
+      ],
+      "patched": [
+        "RELEASE.2026-03-17T21-25-16Z"
+      ]
+    },
+    {
+      "id": "GHSA-5cx5-wh4m-82fh",
+      "cve": "CVE-2026-33322",
+      "summary": "JWT Algorithm Confusion in OIDC Authentication",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-5cx5-wh4m-82fh",
+      "affected": [
+        ">= RELEASE.2022-11-08T05-27-07Z"
+      ],
+      "patched": [
+        "RELEASE.2026-03-17T21-25-16Z"
+      ]
+    },
+    {
+      "id": "GHSA-jjjj-jwhf-8rgr",
+      "cve": "CVE-2025-62506",
+      "summary": "Privilege Escalation via Session Policy Bypass in Service Accounts and STS",
+      "url": "https://github.com/minio/minio/security/advisories/GHSA-jjjj-jwhf-8rgr",
+      "affected": [
+        "all"
+      ],
+      "patched": [
+        "RELEASE.2025-10-15T17-29-55Z"
+      ]
+    }
+  ]
+}

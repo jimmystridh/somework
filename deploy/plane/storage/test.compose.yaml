@@ -1,0 +1,54 @@
+# Owner-approved license mount required. Public fixtures, never production keys.
+# Entirely isolated; NO host ports. Keep this project separate from `plane`.
+services:
+  storage:
+    image: quay.io/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z@sha256:a94e1fe399bd050fe6d6148839597a4995350c0e62c9e83f0cec8b5630ed0a1e
+    platform: linux/amd64
+    command: [server, /export, --console-address, ':9090', --license, /minio.license]
+    environment:
+      MINIO_ROOT_USER: storage-contract-fixture
+      MINIO_ROOT_PASSWORD: public-storage-contract-fixture-not-for-production
+    volumes:
+      - data:/export
+      - type: bind
+        source: /srv/plane/minio.license
+        target: /minio.license
+        read_only: true
+        bind:
+          create_host_path: false
+    mem_limit: 512m
+    cpus: 1
+    tmpfs: ['/data:rw,noexec,nosuid,size=8m']
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --max-time, '4', http://127.0.0.1:9000/minio/health/ready]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks: [isolated]
+  client:
+    profiles: [test]
+    image: node:22.22.1-bookworm-slim@sha256:af5818e10f6294a719b4314f34ec03d8e8ad8f571a8d23742418790e6ebb5c90
+    platform: linux/amd64
+    user: '10001:10001'
+    command: [node, /test/s3-smoke.mjs]
+    volumes:
+      - type: bind
+        source: ./s3-smoke.mjs
+        target: /test/s3-smoke.mjs
+        read_only: true
+        bind:
+          create_host_path: false
+    mem_limit: 128m
+    cpus: 1
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [isolated]
+volumes:
+  data:
+networks:
+  isolated:
+    internal: true

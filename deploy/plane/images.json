@@ -1,0 +1,17 @@
+{
+  "release": "v1.4.2",
+  "platform": "linux/amd64",
+  "observed": "2026-10-14",
+  "evidence": "Services: docker manifest inspect makeplane/<repository>:v1.4.2, select linux/amd64; docker pull each repository@digest succeeded. Registry identity/pull checks only, not source-build or vulnerability verification.",
+  "images": {
+    "web": "makeplane/plane-frontend:v1.4.2@sha256:686faa25da4bb031ef5cbf8f6ad1fea60c416dcec11d113643c3d2bb99e70d44",
+    "space": "makeplane/plane-space:v1.4.2@sha256:69d0f9d545931e3c7195eb0335c3a7739da849a12c3827971e48e9f6babf2a54",
+    "admin": "makeplane/plane-admin:v1.4.2@sha256:40c0f58f4de29f8e30d4fa4c5db2c8bc88e64e1ea14ea81c48368e8408b0a609",
+    "live": "makeplane/plane-live:v1.4.2@sha256:1e7c180f16e568db51b8739d9cccee8c450b52dab6335e06ed1c29fc45aecae9",
+    "proxy": "makeplane/plane-proxy:v1.4.2@sha256:0647b6be3494571e7dbef862462cde0b5bf6a7c8b10303104234baa4e76b889b",
+    "api": "makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae",
+    "worker": "makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae",
+    "beat-worker": "makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae",
+    "migrator": "makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae"
+  }
+}

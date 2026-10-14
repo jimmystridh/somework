@@ -1,0 +1,154 @@
+# Merge with upstream/compose.yaml; never start the upstream file by itself.
+name: plane
+
+x-runtime: &runtime
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-required-app: &required-app
+  WEB_URL: ${WEB_URL:?Set the verified tailnet HTTPS origin}
+  CORS_ALLOWED_ORIGINS: ${WEB_URL:?Set the verified tailnet HTTPS origin}
+  DATABASE_URL: ${DATABASE_URL:?Generate plane.env securely on the host}
+  AMQP_URL: ${AMQP_URL:?Generate plane.env securely on the host}
+  SECRET_KEY: ${SECRET_KEY:?Generate plane.env securely on the host}
+  LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:?Generate plane.env securely on the host}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?Generate plane.env securely on the host}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?Generate plane.env securely on the host}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate plane.env securely on the host}
+  MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?Generate plane.env securely on the host}
+  MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?Generate plane.env securely on the host}
+
+services:
+  web:
+    <<: *runtime
+    image: makeplane/plane-frontend:v1.4.2@sha256:686faa25da4bb031ef5cbf8f6ad1fea60c416dcec11d113643c3d2bb99e70d44
+    platform: linux/amd64
+    mem_limit: 256m
+  space:
+    <<: *runtime
+    image: makeplane/plane-space:v1.4.2@sha256:69d0f9d545931e3c7195eb0335c3a7739da849a12c3827971e48e9f6babf2a54
+    platform: linux/amd64
+    mem_limit: 256m
+  admin:
+    <<: *runtime
+    image: makeplane/plane-admin:v1.4.2@sha256:40c0f58f4de29f8e30d4fa4c5db2c8bc88e64e1ea14ea81c48368e8408b0a609
+    platform: linux/amd64
+    mem_limit: 256m
+  live:
+    <<: *runtime
+    image: makeplane/plane-live:v1.4.2@sha256:1e7c180f16e568db51b8739d9cccee8c450b52dab6335e06ed1c29fc45aecae9
+    platform: linux/amd64
+    mem_limit: 256m
+    environment:
+      LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY:?Generate plane.env securely on the host}
+  api:
+    <<: *runtime
+    image: makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae
+    platform: linux/amd64
+    mem_limit: 768m
+    environment: *required-app
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_healthy
+      plane-mq:
+        condition: service_healthy
+      plane-minio:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/instances/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+  worker:
+    <<: *runtime
+    image: makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae
+    platform: linux/amd64
+    mem_limit: 768m
+    environment: *required-app
+  beat-worker:
+    <<: *runtime
+    image: makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae
+    platform: linux/amd64
+    mem_limit: 256m
+    environment: *required-app
+  migrator:
+    image: makeplane/plane-backend:v1.4.2@sha256:01a159fa9947ec6cd553d360fcfdac63743f2b1503e631ca7e3e5deeb7346cae
+    platform: linux/amd64
+    restart: on-failure
+    mem_limit: 768m
+    environment: *required-app
+  plane-db:
+    <<: *runtime
+    mem_limit: 512m
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate plane.env securely on the host}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  plane-redis:
+    <<: *runtime
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, valkey-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  plane-mq:
+    <<: *runtime
+    mem_limit: 512m
+    environment:
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Generate plane.env securely on the host}
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+  plane-minio:
+    <<: *runtime
+    # Supported vendor distribution, not archived/vulnerable CE or a fork.
+    image: quay.io/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z@sha256:a94e1fe399bd050fe6d6148839597a4995350c0e62c9e83f0cec8b5630ed0a1e
+    platform: linux/amd64
+    command: [server, /export, --console-address, ':9090', --license, /minio.license]
+    # Vendor image declares /data; actual objects use /export. Avoid anonymous volumes.
+    tmpfs: ['/data:rw,noexec,nosuid,size=8m']
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - type: bind
+        source: ${MINIO_LICENSE_FILE:?Owner must obtain and install an AIStor license}
+        target: /minio.license
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --max-time, '4', http://127.0.0.1:9000/minio/health/ready]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    mem_limit: 512m
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:?Generate plane.env securely on the host}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:?Generate plane.env securely on the host}
+  proxy:
+    <<: *runtime
+    image: makeplane/plane-proxy:v1.4.2@sha256:0647b6be3494571e7dbef862462cde0b5bf6a7c8b10303104234baa4e76b889b
+    platform: linux/amd64
+    mem_limit: 128m
+    environment:
+      SITE_ADDRESS: ":80"
+      APP_DOMAIN: ${APP_DOMAIN:?Set the verified tailnet DNS name}
+    # HTTPS termination must be provided by a reviewed tailnet-only ingress.
+    # !override requires Compose >= 2.24.4 and removes BOTH public upstream ports.
+    ports: !override
+      - "127.0.0.1:8090:80"

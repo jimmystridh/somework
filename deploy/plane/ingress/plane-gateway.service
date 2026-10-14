@@ -1,0 +1,17 @@
+[Unit]
+Description=Owner-only Plane proxy behind Tailscale Serve
+After=network-online.target plane-forward.service tailscaled.service
+Requires=plane-forward.service
+[Service]
+User=js
+Environment=PLANE_OWNER_LOGIN=jimmystridh@github
+ExecStart=/usr/bin/node /opt/plane-gateway/gateway.mjs
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=128M
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,26 @@
+{
+  "distribution": "MinIO AIStor (vendor-supported software, Free Tier available; license required)",
+  "image": "quay.io/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z@sha256:a94e1fe399bd050fe6d6148839597a4995350c0e62c9e83f0cec8b5630ed0a1e",
+  "platform": "linux/amd64",
+  "binaryVersion": "RELEASE.2026-09-19T17-05-25Z",
+  "binaryCommit": "cea38c7e83d1ebafea7b9b5d1be53878deaa9772",
+  "imageLabelRevision": "b3f01943b83e7975e01233fc613cb5f0941b57d1",
+  "goRuntime": "go1.26.6",
+  "observed": "2026-10-14",
+  "checks": {
+    "datedTagMatchesDigest": true,
+    "digestPullVerifiedOnServices": true,
+    "isolatedVersionCommandPassed": true,
+    "serverLicenseAndConsoleFlagsVerified": true,
+    "curlHealthProbePresent": true,
+    "licensedStorageRuntime": false,
+    "planeUploadsAndRestartPersistence": false
+  },
+  "authorities": [
+    "https://github.com/minio/minio/blob/master/README.md",
+    "https://api.github.com/repos/minio/minio/security-advisories",
+    "https://docs.min.io/enterprise/aistor-object-store/installation/container/install/",
+    "https://min.io/pricing"
+  ],
+  "note": "Image revision label differs from binary commit: record both, do not invent source reproducibility for proprietary software. Review vendor license and current advisories/scans before deployment."
+}
