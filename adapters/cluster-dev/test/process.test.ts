@@ -89,6 +89,7 @@ describe("the service process", { skip: existsSync(binary) ? false : `no domain 
 			SOMEWORK_LEASE_SECONDS: "5",
 			CLUSTER_DEV_REPOSITORY: "https://example.test/o/r",
 			CLUSTER_DEV_HOSTS: "agents=js@127.0.0.1",
+			CLUSTER_DEV_CONFIRM: "1",
 			CLUSTER_DEV_SSH_KEY_DIR: keys,
 			CLUSTER_DEV_AGENT_URLS: `reviewer=${agentUrl}`,
 			APPROVERS: "agent/ts-author",

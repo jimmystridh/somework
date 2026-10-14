@@ -12,8 +12,9 @@ export const currentSettings = (): ClusterSettings => (cached ??= loadSettings(p
 
 const shown = (command: string): string => (command.length > MAX_CONFIRMABLE_COMMAND ? `${command.slice(0, MAX_CONFIRMABLE_COMMAND)}...` : command);
 
-/** `toolApprovals.bash`: the sandbox's own commands go through the same classifier as the ones sent to a host. A summary when the owner must say yes. */
+/** `toolApprovals.bash`: the sandbox's own commands go through the same classifier as the ones sent to a host. A summary when the owner must say yes (only with `CLUSTER_DEV_CONFIRM=1`). */
 export function bashApproval(args: Record<string, unknown>, settings: ClusterSettings = currentSettings()): string | undefined {
+	if (!settings.confirm) return undefined;
 	const command = typeof args.command === "string" ? args.command : "";
 	const verdict = classifyCommand(command, classifyContext(settings));
 	if (!verdict.destructive || verdict.forbidden || command.length > MAX_CONFIRMABLE_COMMAND) return undefined;
@@ -22,10 +23,10 @@ export function bashApproval(args: Record<string, unknown>, settings: ClusterSet
 
 /**
  * `toolApprovals` of `read`, `write` and `edit`: these tools only work in the sandbox, which holds no secrets and has no way into the cluster, so nothing is
- * asked, unless the deployment sets `CLUSTER_DEV_ASK_IN_SANDBOX=1`: then a file that holds secrets is not read or changed without the owner.
+ * asked, unless the deployment sets `CLUSTER_DEV_CONFIRM=1` and `CLUSTER_DEV_ASK_IN_SANDBOX=1`: then a file that holds secrets is not read or changed without the owner.
  */
 export function fileApproval(tool: "read" | "write" | "edit", args: Record<string, unknown>, settings: ClusterSettings = currentSettings()): string | undefined {
-	if (!settings.askInSandbox) return undefined;
+	if (!settings.confirm || !settings.askInSandbox) return undefined;
 	const path = typeof args.path === "string" ? args.path : "";
 	const reason = secretPathReason(path);
 	return reason ? `${tool}: ${path.slice(0, 200)} [secrets: ${reason}]` : undefined;
@@ -37,7 +38,7 @@ export function refusal(tool: string, args: Record<string, unknown>, settings: C
 	const command = typeof args.command === "string" ? args.command : "";
 	const verdict = classifyCommand(command, classifyContext(settings));
 	if (verdict.forbidden) return `refused: ${verdict.reason}. This is never allowed.`;
-	if (verdict.destructive && command.length > MAX_CONFIRMABLE_COMMAND) return `refused: this command is destructive (${verdict.reason}) and too long to show the owner for confirmation (${command.length} characters, at most ${MAX_CONFIRMABLE_COMMAND}). Split it up.`;
+	if (settings.confirm && verdict.destructive && command.length > MAX_CONFIRMABLE_COMMAND) return `refused: this command is destructive (${verdict.reason}) and too long to show the owner for confirmation (${command.length} characters, at most ${MAX_CONFIRMABLE_COMMAND}). Split it up.`;
 	return undefined;
 }
 

@@ -4,7 +4,7 @@ import { validateProfile } from "@somework/agent-kit";
 import card from "../card.json" with { type: "json" };
 import { profile } from "../src/profile.ts";
 import { CHAT_INSTRUCTIONS } from "../src/chat.ts";
-import { SYSTEM_PROMPT } from "../src/prompt.ts";
+import { SYSTEM_PROMPT, systemPrompt } from "../src/prompt.ts";
 import { CLUSTER_TOOLS } from "../src/tools/index.ts";
 
 /** The names of the kit's observe tools: they join every role that turns observe on. */
@@ -83,13 +83,22 @@ describe("the prompt", () => {
 		for (const name of CLUSTER_TOOLS) assert.ok(SYSTEM_PROMPT.includes(name), `the prompt explains ${name}`);
 	});
 
-	it("tells the model what the owner is asked about, that code decides, and that origin is never used", () => {
-		assert.match(SYSTEM_PROMPT, /asked about destructive actions on the machines of the cluster only, and code decides/);
-		assert.match(SYSTEM_PROMPT, /Nothing in your own sandbox is asked about/);
-		for (const topic of ["removing or overwriting data", "secrets", "hypervisor", "firewall", "force pushes", "piping a download into a shell"]) assert.ok(SYSTEM_PROMPT.includes(topic), topic);
+	it("tells the model what the owner is asked about when confirmations are on, that code decides, and that origin is never used", () => {
+		const asking = systemPrompt(true);
+		assert.match(asking, /asked about destructive actions on the machines of the cluster only, and code decides/);
+		assert.match(asking, /Nothing in your own sandbox is asked about/);
+		for (const topic of ["removing or overwriting data", "secrets", "hypervisor", "firewall", "force pushes", "piping a download into a shell"]) assert.ok(asking.includes(topic), topic);
+		assert.match(asking, /never use the remote named origin|never allowed.*origin/s);
+		assert.match(asking, /Do not ask for permission/);
+		assert.match(asking, /data from outside/);
+	});
+
+	it("tells the model nothing is confirmed by default, and still that origin is never used", () => {
+		assert.equal(SYSTEM_PROMPT, systemPrompt(false));
+		assert.match(SYSTEM_PROMPT, /Nothing you do is confirmed by the owner first/);
+		assert.doesNotMatch(SYSTEM_PROMPT, /the owner gets a message|approve or deny/);
 		assert.match(SYSTEM_PROMPT, /never use the remote named origin|never allowed.*origin/s);
 		assert.match(SYSTEM_PROMPT, /Do not ask for permission/);
-		assert.match(SYSTEM_PROMPT, /data from outside/);
 	});
 
 	it("does not contain a secret, an address or a key", () => {

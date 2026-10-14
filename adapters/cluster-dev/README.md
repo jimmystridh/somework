@@ -1,7 +1,7 @@
 # Cluster development agent (`agent/cluster-dev`)
 
 An agent that does the work a developer does in this cluster: reads logs and metrics, finds causes, changes the Manager's and the other agents' code, runs
-the tests, pushes to the organisation repository, deploys through the CI and checks afterwards. **It asks the owner only before destructive actions;**
+the tests, pushes to the organisation repository, deploys through the CI and checks afterwards. **It asks the owner nothing by default (`CLUSTER_DEV_CONFIRM=1` brings back a question before every destructive action);**
 everything else it does on its own and reports afterwards. The decision is `docs/CLUSTER_DEV_AGENT.md`; this directory is a card, a profile, hooks, a
 classifier of destructive commands, five host-side tools and the deployment files, on top of `@somework/agent-kit`.
 
@@ -15,7 +15,7 @@ owner ── Telegram ──► conversation run (model) ──► read / write 
                               ├───────────► deploy_status ──► /ready /status /profile of every agent
                               └───────────► the kit's observe tools: logs, metrics, alerts of the whole fleet
 
-   destructive?  classifier says yes ──► approval gate ──► Telegram: the exact command and why ──► approve | deny (silence is a denial)
+   with CLUSTER_DEV_CONFIRM=1 only, destructive?  classifier says yes ──► approval gate ──► Telegram: the exact command and why ──► approve | deny (silence is a denial)
 ```
 
 ## What needs the owner is code, not a sentence in the prompt
@@ -52,7 +52,7 @@ Two things are deliberately **not** asked about, because they cannot sweep up se
 `forbidden` is the one thing that is not even asked about: **`git push` anywhere but the organisation remote** (`CLUSTER_DEV_GIT_REMOTE`, default `org`, and the
 repositories the deployment lists in `CLUSTER_DEV_EXTRA_REPOSITORIES`; `origin` is refused at startup as either). It wins over every other finding in the same command.
 
-How it is enforced, in three layers that do not trust each other:
+Confirmations are **off by default**: a destructive command runs (and `host_exec` logs `host_exec_destructive`), and only `forbidden` is refused. With `CLUSTER_DEV_CONFIRM=1` the three layers below ask the owner. They are:
 1. **The approval gate** (`profile.toolApprovals`): `bash` and `host_exec` call the classifier; a destructive command waits for a person, with the exact
    command, the category and the reason in the question. `read`, `write` and `edit` ask for files that hold secrets. Only people may answer
    (`chat.approvers: ["kind:human"]`); an agent cannot approve. Silence is a denial.
@@ -82,7 +82,8 @@ the service pushes `cluster/<job>` and opens the pull request. It does not merge
 | Variable | Default | Meaning |
 |---|---|---|
 | `CLUSTER_DEV_REPOSITORY` | none | the one repository (https URL): jobs and `git_push` accept no other; also `CHAT_REPOSITORY_URL` and the read-only checkout |
-| `CLUSTER_DEV_ASK_IN_SANDBOX` | off | `1`: the sandbox's own commands and files are judged and asked about too, as on a machine. Off: nothing in the sandbox is asked (it holds no secret and has no way into the cluster), except the one thing that is never allowed (a push anywhere but the repositories listed) |
+| `CLUSTER_DEV_CONFIRM` | off | `1`: a destructive command waits for the owner's approval (the layers above). Off: nothing is asked and destructive commands run, except the one thing that is never allowed (a push anywhere but the repositories listed) |
+| `CLUSTER_DEV_ASK_IN_SANDBOX` | off | with `CLUSTER_DEV_CONFIRM=1`, `1`: the sandbox's own commands and files are judged and asked about too, as on a machine. Off: nothing in the sandbox is asked (it holds no secret and has no way into the cluster), except the one thing that is never allowed (a push anywhere but the repositories listed) |
 | `CLUSTER_DEV_GIT_REMOTE` | `org` | the git remote that may be pushed to; `origin` is refused |
 | `CLUSTER_DEV_EXTRA_REPOSITORIES` | none | `name=https://host/owner/repository`, comma separated: more repositories `git_push` may push to (its `repository` argument names one). Each is also an allowed remote name for the classifier; `origin` is refused. Each has its own credential, `<CLUSTER_DEV_GIT_TOKEN_DIR>/git-token-<name>`, because a fine-grained token belongs to one owner |
 | `CLUSTER_DEV_GIT_TOKEN_DIR` | `/run/secrets/git` | the directory holding those credential files |

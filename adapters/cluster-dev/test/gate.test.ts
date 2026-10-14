@@ -17,8 +17,9 @@ Object.assign(process.env, {
 	CLUSTER_DEV_SSH_KEY_DIR: "/keys",
 	CLUSTER_DEV_REPOSITORY: "https://github.com/acme/somework",
 	CLUSTER_DEV_ASK_IN_SANDBOX: "1",
+	CLUSTER_DEV_CONFIRM: "1",
 });
-const settings = settingsFor({ CLUSTER_DEV_HOSTS: process.env.CLUSTER_DEV_HOSTS!, CLUSTER_DEV_ASK_IN_SANDBOX: "1" });
+const settings = settingsFor({ CLUSTER_DEV_HOSTS: process.env.CLUSTER_DEV_HOSTS!, CLUSTER_DEV_ASK_IN_SANDBOX: "1", CLUSTER_DEV_CONFIRM: "1" });
 
 const open: PiDurableRuntime[] = [];
 afterEach(async () => {

@@ -8,6 +8,7 @@ export const boundary = () => BOUNDARY;
 export const settingsFor = (values: Record<string, string> = {}): ClusterSettings =>
 	loadSettings({
 		CLUSTER_DEV_REPOSITORY: "https://github.com/acme/somework",
+		CLUSTER_DEV_CONFIRM: "1",
 		CLUSTER_DEV_HOSTS: "agents=js@10.10.10.20,services=ops@10.10.10.11:2222,pve-host=root@10.10.10.1",
 		CLUSTER_DEV_SSH_KEY_DIR: "/keys",
 		CLUSTER_DEV_AGENT_URLS: "reviewer=http://10.10.10.20:8082,developer=http://10.10.10.20:8081",

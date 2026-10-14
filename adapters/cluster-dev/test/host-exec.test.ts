@@ -112,6 +112,23 @@ describe("host_exec", () => {
 		assert.equal((await run({ host: "agents", command: `echo ${"x".repeat(1000)}` })).isError, false, "a long harmless command is fine");
 	});
 
+	it("runs a destructive command without asking when confirmations are off, and still refuses a forbidden one", async () => {
+		const open = settingsFor({ CLUSTER_DEV_CONFIRM: "" });
+		const { spawn, calls } = fakeSpawn({ stdout: "gone\n" });
+		const logs: string[] = [];
+		const tool = createHostExec({ settings: open, spawn, boundary, log: (_level, event) => void logs.push(event) });
+		const long = `rm -rf ${"/srv/very/long/path ".repeat(60)}`;
+		for (const command of ["docker system prune -af", long]) assert.equal((await callTool(tool, { host: "agents", command }, ungatedApi)).isError, false, command.slice(0, 30));
+		assert.equal((await callTool(tool, { host: "pve-host", command: "qm list" }, deniedApi)).isError, false, "the hypervisor too, whatever the gate remembered");
+		assert.equal(calls.length, 3);
+		assert.ok(logs.includes("host_exec_destructive"));
+		assert.equal(hostExecApproval({ host: "agents", command: "docker system prune -af" }, open), undefined, "no question is built");
+		const forbidden = await callTool(tool, { host: "agents", command: "cd ~/repo && git push origin main" }, approvedApi);
+		assert.equal(forbidden.isError, true);
+		assert.match(forbidden.text, /never allowed/);
+		assert.equal(calls.length, 3);
+	});
+
 	it("says what asked: the approval summary names the host, the exact command, the category and the reason", () => {
 		const summary = hostExecApproval({ host: "agents", command: "docker system prune -af" }, settings)!;
 		assert.match(summary, /^host_exec on agents: docker system prune -af \[data: docker system prune removes unused data for good\]$/);

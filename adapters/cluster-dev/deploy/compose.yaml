@@ -58,7 +58,8 @@ services:
       # pushes; the sandbox holds no credential). A GitHub App instead of the token file: see packages/agent-kit/README.md.
       CLUSTER_DEV_REPOSITORY: ${CLUSTER_DEV_REPOSITORY:?https URL of the organisation repository}
       CLUSTER_DEV_GIT_REMOTE: ${CLUSTER_DEV_GIT_REMOTE:-org}
-      CLUSTER_DEV_ASK_IN_SANDBOX: ${CLUSTER_DEV_ASK_IN_SANDBOX:-}     # 1: ask about the sandbox's own commands and files too (default: only commands on a machine are asked about)
+      CLUSTER_DEV_CONFIRM: ${CLUSTER_DEV_CONFIRM:-}     # 1: ask the owner before a destructive command (default: nothing is asked; only what is never allowed is refused)
+      CLUSTER_DEV_ASK_IN_SANDBOX: ${CLUSTER_DEV_ASK_IN_SANDBOX:-}     # 1: with CLUSTER_DEV_CONFIRM=1, ask about the sandbox's own commands and files too (default: only commands on a machine)
       CLUSTER_DEV_EXTRA_REPOSITORIES: ${CLUSTER_DEV_EXTRA_REPOSITORIES:-}     # name=https://host/owner/repository,...: more repositories git_push may push to, each with ./secrets/git/git-token-<name>
       CLUSTER_DEV_GIT_TOKEN_DIR: /run/secrets/git
       GIT_TOKEN_FILE: /run/secrets/git-token                # fine-grained, this repository only: Contents and Pull requests write, Metadata read

@@ -21,7 +21,9 @@ export interface ClusterSettings {
 	repositoryUrl?: string;
 	/** The git remote that may be pushed to: the organisation's, never `origin`. */
 	gitRemote: string;
-	/** Ask the owner about the sandbox's own commands and files as well (off: the sandbox holds no secrets and has no way into the cluster, so nothing there is asked). */
+	/** Ask the owner before a destructive command (off: nothing is asked, only what is never allowed is refused). The questions come back with `CLUSTER_DEV_CONFIRM=1`. */
+	confirm: boolean;
+	/** With `confirm`: ask about the sandbox's own commands and files as well (off: the sandbox holds no secrets and has no way into the cluster, so nothing there is asked). */
 	askInSandbox: boolean;
 	/** Other repositories git_push may push to, each with its own credential file. */
 	extraRepositories: ExtraRepository[];
@@ -144,6 +146,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): ClusterSetti
 	return {
 		...(repositoryUrl ? { repositoryUrl } : {}),
 		gitRemote,
+		confirm: confirmFrom(env),
 		askInSandbox: env.CLUSTER_DEV_ASK_IN_SANDBOX?.trim() === "1",
 		extraRepositories: parseExtraRepositories(env.CLUSTER_DEV_EXTRA_REPOSITORIES, (env.CLUSTER_DEV_GIT_TOKEN_DIR?.trim() || "/run/secrets/git").replace(/\/+$/, ""), [gitRemote]),
 		hosts: parseHosts(env.CLUSTER_DEV_HOSTS),
@@ -160,6 +163,9 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): ClusterSetti
 		...(env.CLUSTER_DEV_AGENTS_CA_FILE ? { agentsCaFile: env.CLUSTER_DEV_AGENTS_CA_FILE } : {}),
 	};
 }
+
+/** Whether the deployment asked for confirmations; read on its own so the profile can pick its prompt without loading every setting. */
+export const confirmFrom = (env: NodeJS.ProcessEnv): boolean => env.CLUSTER_DEV_CONFIRM?.trim() === "1";
 
 /** What the classifier needs to know about a command: in the agent's sandbox, or on one of the hosts. */
 export function classifyContext(settings: ClusterSettings, host?: string): ClassifyContext {

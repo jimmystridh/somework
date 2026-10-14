@@ -122,10 +122,24 @@ describe("asking in the sandbox", () => {
 
 	it("decides what the owner is asked: nothing in the sandbox by default, the old questions with the flag", () => {
 		const free = loadSettings(env({}));
-		const strict = loadSettings(env({ CLUSTER_DEV_ASK_IN_SANDBOX: "1" }));
+		const strict = loadSettings(env({ CLUSTER_DEV_CONFIRM: "1", CLUSTER_DEV_ASK_IN_SANDBOX: "1" }));
 		assert.equal(bashApproval({ command: "rm -rf /srv/old" }, free), undefined);
 		assert.equal(fileApproval("read", { path: "/home/js/.ssh/id_rsa" }, free), undefined);
 		assert.match(bashApproval({ command: "rm -rf /srv/old" }, strict)!, /^bash: rm -rf \/srv\/old \[data:/);
 		assert.match(fileApproval("read", { path: "/home/js/.ssh/id_rsa" }, strict)!, /\[secrets: the ssh directory\]/);
+	});
+});
+
+describe("confirmations", () => {
+	it("are off by default and come back with CLUSTER_DEV_CONFIRM=1", () => {
+		assert.equal(loadSettings(env({})).confirm, false);
+		assert.equal(loadSettings(env({ CLUSTER_DEV_CONFIRM: "1" })).confirm, true);
+		assert.equal(loadSettings(env({ CLUSTER_DEV_CONFIRM: "0" })).confirm, false);
+	});
+
+	it("ask nothing without the flag, not even for what the flag would ask about", () => {
+		const off = loadSettings(env({ CLUSTER_DEV_ASK_IN_SANDBOX: "1" }));
+		assert.equal(bashApproval({ command: "rm -rf /srv/old" }, off), undefined);
+		assert.equal(fileApproval("read", { path: "/home/js/.ssh/id_rsa" }, off), undefined);
 	});
 });
