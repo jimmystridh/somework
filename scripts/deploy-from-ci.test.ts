@@ -9,7 +9,7 @@ const SCRIPT = join(import.meta.dirname, "..", "deploy", "agents", "deploy-from-
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 /** A pilot directory with a fake roll-agent.sh, and fake `docker` and `flock` that record what they were asked to do. */
-function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean; smokeInventory?: boolean; smokeFails?: boolean } = {}) {
+function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean; productManagerStack?: boolean; smokeInventory?: boolean; smokeFails?: boolean } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "deploy-"));
 	const bin = join(root, "bin");
 	const pilot = join(root, "pilot");
@@ -19,6 +19,10 @@ function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean; 
 		mkdirSync(join(pilot, "jira-triage"));
 		writeFileSync(join(pilot, "jira-triage", "compose.yaml"), "name: somework-jira-triage\n");
 	}
+	if (options.productManagerStack) {
+		mkdirSync(join(pilot, "product-manager"));
+		writeFileSync(join(pilot, "product-manager", "compose.yaml"), "name: somework-product-manager\n");
+	}
 	const write = (path: string, text: string) => {
 		writeFileSync(path, text);
 		chmodSync(path, 0o755);
@@ -27,7 +31,7 @@ function rig(options: { failRoll?: string; busy?: boolean; jiraStack?: boolean; 
 	write(join(bin, "flock"), options.busy ? "#!/bin/sh\nexit 1\n" : "#!/bin/sh\nexit 0\n");
 	write(join(pilot, "bin", "roll-agent.sh"), `#!/bin/sh\necho "roll $(basename "$1") $2 $3 $4 $(cat "$5")" >> "${root}/calls.log"\necho "$(basename "$1") \${DRAIN_SERVICE:-none}" >> "${root}/drain.log"\n[ "$(basename "$1")" != "${options.failRoll ?? "-"}" ]\n`);
 	const repository = join(root, "repository");
-	for (const dir of ["adapters/pi", "adapters/reviewer", "adapters/aikido-fixer", "adapters/datadog-triage", "adapters/jira-triage", "packages/events-hub"]) {
+	for (const dir of ["adapters/pi", "adapters/reviewer", "adapters/aikido-fixer", "adapters/datadog-triage", "adapters/jira-triage", "adapters/product-manager", "packages/events-hub"]) {
 		mkdirSync(join(repository, dir, "deploy"), { recursive: true });
 		writeFileSync(join(repository, dir, "deploy", "compose.yaml"), `# ${dir.split("/")[1]}\n`);
 	}
@@ -86,6 +90,25 @@ describe("deploy-from-ci.sh", () => {
 			["roll events-hub HUB_VERSION ci-0123456 # events-hub", "roll datadog-triage DATADOG_VERSION ci-0123456 # datadog-triage", "roll reviewer REVIEWER_VERSION,SANDBOX_VERSION ci-0123456 # reviewer", "roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION ci-0123456 # aikido-fixer", "roll jira-triage TRIAGE_VERSION,SANDBOX_VERSION ci-0123456 # jira-triage", "roll pi-agent PI_VERSION ci-0123456 # pi"],
 		);
 		assert.match(calls.find((call) => call.startsWith("roll jira-triage")) ?? "", /http:\/\/10\.10\.10\.11:8085\/ready/);
+	});
+
+	it("skips the product manager stack until it exists on the host: no image is built for it and nothing is rolled", () => {
+		const r = rig();
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 0, out.stderr);
+		assert.match(out.stdout, /product-manager: no stack on this host yet, skipped/);
+		assert.ok(!r.calls().some((call) => call.includes("product-manager")), r.calls().join("\n"));
+	});
+
+	it("builds and rolls the product manager stack, with its own health port, once the host has it", () => {
+		const r = rig({ productManagerStack: true });
+		const out = r.run(`deploy ${SHA}`);
+		assert.equal(out.status, 0, out.stderr);
+		const calls = r.calls();
+		assert.ok(calls.some((call) => call.startsWith("docker build") && call.includes("-f adapters/product-manager/Dockerfile --target agent -t somework-product-manager:ci-0123456")));
+		assert.match(calls.find((call) => call.startsWith("roll product-manager")) ?? "", /roll product-manager PRODUCT_MANAGER_VERSION,SANDBOX_VERSION ci-0123456 http:\/\/10\.10\.10\.11:8086\/ready/);
+		assert.ok(calls.findIndex((call) => call.startsWith("roll product-manager")) < calls.findIndex((call) => call.startsWith("roll pi-agent")), "it is rolled before the developer agent, with the other optional stack");
+		assert.deepEqual(r.drains().filter((line) => line.startsWith("product-manager")), ["product-manager agent"]);
 	});
 
 	it("runs the smoke test after the last roll, for the tag it just rolled, when the host has an inventory", () => {

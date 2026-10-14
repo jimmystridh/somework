@@ -42,9 +42,10 @@ build adapters/reviewer/Dockerfile agent somework-reviewer
 build adapters/aikido-fixer/Dockerfile agent somework-aikido-fixer
 build adapters/datadog-triage/Dockerfile agent somework-datadog-triage
 build adapters/datadog-triage/Dockerfile sandbox somework-datadog-triage-sandbox "SANDBOX_BASE=somework-pi-sandbox:$tag"
-# optional stacks: the host has to set the stack up first (adapters/jira-triage/deploy/README.md); until then nothing about it is built or rolled
+# optional stacks: the host has to set the stack up first (adapters/jira-triage/deploy/README.md, adapters/product-manager/deploy/README.md); until then nothing about it is built or rolled
 present() { [ -f "$pilot/$1/compose.yaml" ] || { echo "$1: no stack on this host yet, skipped"; return 1; }; }
 if present jira-triage; then build adapters/jira-triage/Dockerfile agent somework-jira-triage; fi
+if present product-manager; then build adapters/product-manager/Dockerfile agent somework-product-manager; fi
 
 # the agent stacks run the kit in their compose service `agent`, which drains while it is replaced (roll-agent.sh); the hub is not an agent and does not
 roll() { DRAIN_SERVICE=${5:+agent} "$pilot/bin/roll-agent.sh" "$pilot/$1" "$2" "$tag" "$3" "$src/$4/deploy/compose.yaml"; }
@@ -53,6 +54,7 @@ roll datadog-triage DATADOG_VERSION "http://$host:8084/ready" adapters/datadog-t
 roll reviewer REVIEWER_VERSION,SANDBOX_VERSION "http://$host:8082/ready" adapters/reviewer drain
 roll aikido-fixer FIXER_VERSION,SANDBOX_VERSION "http://$host:8083/ready" adapters/aikido-fixer drain
 if present jira-triage; then roll jira-triage TRIAGE_VERSION,SANDBOX_VERSION "http://$host:8085/ready" adapters/jira-triage drain; fi
+if present product-manager; then roll product-manager PRODUCT_MANAGER_VERSION,SANDBOX_VERSION "http://$host:8086/ready" adapters/product-manager drain; fi
 roll pi-agent PI_VERSION "http://$host:8081/ready" adapters/pi drain
 
 # the smoke test of what was just rolled, when the host has an inventory for it (deploy/README.md, "Smoke test"): the deployment stays as it is, a failing check only fails this command (status 5)
