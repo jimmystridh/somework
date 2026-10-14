@@ -1,0 +1,21 @@
+{
+  "name": "@somework/product-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Cluster Product Manager: manages the product that is this agent cluster and SomeWork. Interviews whoever asks for a feature or a fix, asks the other agents and reads the code to understand it, and files the agreed outcome as a ticket in Plane. A card, a profile, a read-only guard and a chat on top of @somework/agent-kit.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 test/*.test.ts",
+    "start": "node src/main.ts"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.0.3",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-durable": "1.0.3",
+    "@somework/agent-kit": "0.1.0",
+    "@somework/sdk": "0.1.0"
+  }
+}

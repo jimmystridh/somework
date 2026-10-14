@@ -1,0 +1,160 @@
+# Cluster Product Manager on the agent Docker host: the harness and a sandbox, isolated from each other, in their own compose project.
+# - `sandbox-net` is internal: nothing on it has a route out except the egress proxy. The kit runs the clone of the repository through the sandbox,
+#   so the sandbox needs the code host and nothing else: the proxy here admits github.com only, private ranges are always refused.
+# - The harness holds the credentials (its OWN SomeWork key, its OWN model login, a READ-ONLY git token, the Plane key of its OWN Plane user), talks to
+#   the sandbox over `sandbox-net`, and reaches the domain, the model API, the code host and Plane over `outside`. The git token is handed to a git
+#   command only while it runs (and only for GIT_TOKEN_HOSTS), never to the model's tools; the Plane key is read by the Plane tools in the harness.
+# - The sandbox image is the developer role's `somework-pi-sandbox` (a role-agnostic daemon); only the harness image is the product manager's.
+name: somework-product-manager
+
+x-hardened: &hardened
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  privileged: false
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+networks:
+  sandbox-net:
+    internal: true
+  outside: {}
+
+services:
+  agent:
+    <<: *hardened
+    image: somework-product-manager:${PRODUCT_MANAGER_VERSION:?set PRODUCT_MANAGER_VERSION to the built image tag}
+    user: "10001:10001"
+    group_add: ["10010"]          # reads the shared sandbox token
+    networks: [sandbox-net, outside]
+    environment:
+      SOMEWORK_URL: ${SOMEWORK_URL:?https URL of the domain proxy}
+      SOMEWORK_KEY_FILE: /run/somework/keys/agent.key.json
+      SOMEWORK_CA_FILE: /run/somework/ca.pem
+      SOMEWORK_REQUIRE_TLS: "1"
+      SOMEWORK_LEASE_SECONDS: ${SOMEWORK_LEASE_SECONDS:-60}
+      PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
+      PI_MODEL: ${PI_MODEL:-gpt-5.5}
+      PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
+      PI_EFFORT: ${PI_EFFORT:-}
+      PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}
+      PI_AUTH_FILE: /run/secrets/pi/auth.json
+      PI_STATE_DIR: /state
+      PI_CONCURRENCY: ${PI_CONCURRENCY:-2}
+      SANDBOX_URL: http://sandbox:7070
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_WORKSPACES: /workspace
+      AGENT_VERSION: ${PRODUCT_MANAGER_VERSION}                   # shown on /profile (the image tag this container runs)
+      GIT_TOKEN_EXPIRES: ${GIT_TOKEN_EXPIRES:-}              # optional note for /profile: the token's expiry date, YYYY-MM-DD
+      GIT_TOKEN_FILE: /run/secrets/git-token                # READ-ONLY (Contents and Pull requests: read): the clone of the repository and the pull request context
+      GIT_TOKEN_HOSTS: ${GIT_TOKEN_HOSTS:-github.com}       # the only hosts the token may ever be sent to
+      GITHUB_API: ${GITHUB_API:-}                           # only for a GitHub Enterprise API
+      BUDGET_MAX_TOKENS_CAP: ${BUDGET_MAX_TOKENS_CAP:-300000}
+      BUDGET_MAX_MINUTES_CAP: ${BUDGET_MAX_MINUTES_CAP:-20}
+      DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-2000000}
+      CHAT_MODE: ${CHAT_MODE:-on}                            # on = every message is read by the model; off = the agent takes no part in conversations
+      APPROVERS: ${APPROVERS:-}                              # who may approve a ticket: ids or kind:<kind>; empty = every human (the profile's kind:human). Add the owner's principal id so a request from an agent can be approved
+      CHAT_REPOSITORY_URL: ${CHAT_REPOSITORY_URL:-}          # the repository whose default branch the conversations read (empty = no checkout)
+      CHAT_REPOSITORY_REF: ${CHAT_REPOSITORY_REF:-}
+      CHAT_TOKEN_SHARE: ${CHAT_TOKEN_SHARE:-0.5}             # share of DAILY_TOKEN_LIMIT that chat may use (this role does nothing else)
+      CHAT_TOKEN_CAP: ${CHAT_TOKEN_CAP:-40000}               # tokens of one answer to a question
+      CHAT_INSTRUCT_TOKENS: ${CHAT_INSTRUCT_TOKENS:-150000}  # tokens of one interview step
+      CHAT_INSTRUCT_MINUTES: ${CHAT_INSTRUCT_MINUTES:-15}
+      # Plane (packages/agent-kit/src/plane): the four ticket tools, fixed to one project. Off while PLANE_BASE_URL is empty.
+      PLANE_BASE_URL: ${PLANE_BASE_URL:-}
+      PLANE_WORKSPACE_SLUG: ${PLANE_WORKSPACE_SLUG:-}
+      PLANE_PROJECT_ID: ${PLANE_PROJECT_ID:-}
+      PLANE_API_KEY_FILE: /run/secrets/plane-key
+      PLANE_CA_FILE: /run/somework/plane-ca.pem
+      PLANE_LABELS: ${PLANE_LABELS:-feature,bug,product-feedback}
+      # The agent's own Telegram bot (packages/agent-kit/README.md, "Telegram"). Off while no token file is mounted or TELEGRAM_ALLOWED_USER_IDS is empty.
+      TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram-bot-token
+      TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+      # The agent's own Slack app in Socket Mode (packages/agent-kit/README.md, "Slack"). Off while either token file is empty or SLACK_ALLOWED_USER_IDS is empty.
+      SLACK_BOT_TOKEN_FILE: /run/secrets/slack-bot-token
+      SLACK_APP_TOKEN_FILE: /run/secrets/slack-app-token
+      SLACK_ALLOWED_USER_IDS: ${SLACK_ALLOWED_USER_IDS:-}
+      SLACK_ALLOWED_CHANNELS: ${SLACK_ALLOWED_CHANNELS:-}
+      HEALTH_PORT: "8081"
+    volumes:
+      - ${PRODUCT_MANAGER_KEY_DIR:?directory holding agent.key.json (uid 10001, 0700)}:/run/somework/keys:ro
+      - ./config/ca.pem:/run/somework/ca.pem:ro
+      - ./secrets/pi:/run/secrets/pi                        # auth.json: rw because an OAuth refresh rewrites it. THIS role's own login.
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - ./secrets/git-token:/run/secrets/git-token:ro       # fine-grained, read-only. Must exist: create an empty file to run without one.
+      - ${PLANE_KEY_HOST:-/dev/null}:/run/secrets/plane-key:ro      # plane: ./secrets/plane-key (the API key of the agent's own Plane user, readable by the container user); /dev/null = no Plane tools
+      - ${PLANE_CA_HOST:-/dev/null}:/run/somework/plane-ca.pem:ro   # plane: ./config/plane-ca.pem when Plane's certificate comes from a private CA
+      - ${TELEGRAM_TOKEN_HOST:-/dev/null}:/run/secrets/telegram-bot-token:ro   # telegram: ./secrets/telegram-bot-token (the BotFather token, readable by the container user); /dev/null = no bot
+      - ${SLACK_BOT_TOKEN_HOST:-/dev/null}:/run/secrets/slack-bot-token:ro   # slack: ./secrets/slack-bot-token (the xoxb- bot token); /dev/null = no Slack app
+      - ${SLACK_APP_TOKEN_HOST:-/dev/null}:/run/secrets/slack-app-token:ro   # slack: ./secrets/slack-app-token (the xapp- app-level token with connections:write); /dev/null = no Slack app
+      - state:/state
+    tmpfs: ["/tmp:size=64m,noexec,nosuid"]
+    ports: ["${HEALTH_BIND:-127.0.0.1}:8086:8081"]      # health and token pools (8081 developer, 8082 reviewer, 8083 Aikido fixer, 8084 Datadog triage, 8085 Jira triage)
+    depends_on:
+      sandbox: {condition: service_healthy}
+    mem_limit: 1g
+    pids_limit: 256
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  sandbox:
+    <<: *hardened
+    image: somework-pi-sandbox:${SANDBOX_VERSION:?set SANDBOX_VERSION to the developer role's sandbox image tag}
+    user: "10002:10002"
+    group_add: ["10010"]
+    networks: [sandbox-net]
+    environment:
+      SANDBOX_TOKEN_FILE: /run/secrets/sandbox-token
+      SANDBOX_ROOT: /workspace
+      SANDBOX_PORT: "7070"
+      HTTPS_PROXY: http://egress:8888
+      HTTP_PROXY: http://egress:8888
+      NO_PROXY: sandbox,localhost,127.0.0.1
+    volumes:
+      - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      - workspace:/workspace
+    tmpfs: ["/tmp:size=256m,nosuid"]
+    mem_limit: ${SANDBOX_MEMORY:-1g}
+    cpus: ${SANDBOX_CPUS:-1}
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:7070/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  # The sandbox's only way out: the code host (the clone of the repository), nothing else.
+  egress:
+    <<: *hardened
+    image: somework-pi-egress:${SANDBOX_VERSION:?set SANDBOX_VERSION}
+    user: "10003:10003"
+    networks: [sandbox-net, outside]
+    environment:
+      EGRESS_ALLOW: ${EGRESS_ALLOW:-github.com,*.github.com,*.githubusercontent.com}
+      EGRESS_PORTS: "443,80"
+    mem_limit: 128m
+    pids_limit: 64
+
+  # One-shot: named volumes start root-owned but each service runs as its own uid.
+  #   docker compose --profile init run --rm init-volumes
+  init-volumes:
+    image: somework-product-manager:${PRODUCT_MANAGER_VERSION:?set PRODUCT_MANAGER_VERSION}
+    profiles: ["init"]
+    user: "0:0"
+    entrypoint: ["sh", "-c", "chown 10001:10001 /state && chown 10002:10002 /workspace"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    volumes:
+      - state:/state
+      - workspace:/workspace
+
+volumes:
+  state:
+  workspace:

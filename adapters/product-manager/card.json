@@ -1,0 +1,62 @@
+{
+  "schemaVersion": "1.0",
+  "agentId": "agent/product-manager",
+  "domainId": "development",
+  "displayName": "Cluster Product Manager",
+  "description": "Manages the product that is this agent cluster and SomeWork. Tell it what you want changed (a new feature, a bug, a rough idea) in a message: it interviews you until the request is understood, asks the other agents what they know and reads the code, shows you the ticket it would file, and files it in Plane once you approve. It also gives product-fit, design and concept feedback on a design, an ADR, a pull request or a document you hand it. It only reads: it never changes code, never posts to the code host and never sets a ticket's priority, assignee or state. Talk to it in a message; there is no job to start.",
+  "owner": {
+    "team": "platform"
+  },
+  "interfaces": [
+    {
+      "protocol": "mcp"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "product.intake",
+      "version": "1",
+      "name": "Product request intake",
+      "description": "Send the agent a message that says what you want (a feature, a bug fix, a question about the product, or something to review) and answer its questions. It is a conversation, not a job: a task for this capability is refused. The outcome of an agreed request is one ticket in the product's Plane project, with the problem, who asked, what was agreed, what the agents it asked said, what is out of scope and the open questions. A ticket is filed only after the requester has approved its exact text.",
+      "tags": [
+        "product",
+        "intake",
+        "conversation"
+      ],
+      "sideEffects": "write",
+      "timeoutSeconds": 3600,
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "request"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "request": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000,
+            "description": "what you want changed or reviewed, in your own words"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "required": [
+          "status",
+          "summary"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "refused"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  ]
+}
