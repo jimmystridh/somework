@@ -92,6 +92,10 @@ export function composeTriage(context: ServiceContext, settings: TriageSettings,
 			markerLabel: settings.markerLabel,
 			needsInfoLabel: settings.needsInfoLabel,
 			language: settings.language,
+			mode: settings.mode,
+			quietMs: settings.quietMs,
+			quietMaxMs: settings.quietMaxMs,
+			areaLabels: settings.areaLabels,
 			enrichment: settings.enrichment,
 			developerWaitMs: settings.developerWaitMs,
 			developerPollMs: settings.developerPollMs,
@@ -132,6 +136,6 @@ export async function jiraTriageHooksFor(context: ServiceContext): Promise<RoleH
 	const jira = new JiraClient({ baseUrl: settings.jira.url, token: secrets.token, ...(secrets.pfx ? { pfx: secrets.pfx } : {}), ...(secrets.passphrase !== undefined ? { passphrase: secrets.passphrase } : {}), ...(secrets.ca ? { ca: secrets.ca } : {}) });
 	const slackStart = resolveSlack(context.config.slack);
 	const slack = slackStart.enabled ? slackWebApi(slackStart.botToken) : undefined;
-	context.log("info", "jira_triage_configured", { projects: settings.projects, slackQuestions: Boolean(slack), enrichment: settings.enrichment, dryRun: settings.dryRun, developer: settings.enrichment ? settings.developerAgent : undefined });
+	context.log("info", "jira_triage_configured", { mode: settings.mode, quietMinutes: settings.quietMs / 60_000, areaLabels: settings.areaLabels, projects: settings.projects, slackQuestions: Boolean(slack), enrichment: settings.enrichment, dryRun: settings.dryRun, developer: settings.enrichment ? settings.developerAgent : undefined });
 	return composeTriage(context, settings, { jira, ...(slack ? { slack } : {}) }).hooks;
 }

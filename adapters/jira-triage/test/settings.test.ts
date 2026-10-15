@@ -124,3 +124,27 @@ describe("the environment of the kit", () => {
 		assert.equal(roleEnvironment({ A: "b" }).A, "b");
 	});
 });
+
+describe("the label check and the quiet time", () => {
+	it("default to the labels mode, ten quiet minutes (an hour at most) and the four areas", () => {
+		const s = loadSettings(base, yes);
+		assert.equal(s.mode, "labels");
+		assert.equal(s.quietMs, 10 * 60_000);
+		assert.equal(s.quietMaxMs, 60 * 60_000);
+		assert.deepEqual(s.areaLabels, ["Backend", "Frontend", "Infrastructure", "Security"]);
+	});
+
+	it("follow the deployment, allow no quiet time, and never let the longest wait be shorter than the quiet time", () => {
+		const s = loadSettings({ ...base, TRIAGE_MODE: "checklist", TRIAGE_QUIET_MINUTES: "0", TRIAGE_AREA_LABELS: "Api, Ui" }, yes);
+		assert.deepEqual([s.mode, s.quietMs, s.areaLabels], ["checklist", 0, ["Api", "Ui"]]);
+		assert.equal(loadSettings({ ...base, TRIAGE_QUIET_MINUTES: "90" }, yes).quietMaxMs, 90 * 60_000);
+	});
+
+	it("refuse what cannot work", () => {
+		assert.throws(() => loadSettings({ ...base, TRIAGE_MODE: "both" }, yes), /TRIAGE_MODE/);
+		assert.throws(() => loadSettings({ ...base, TRIAGE_QUIET_MINUTES: "-1" }, yes), /TRIAGE_QUIET_MINUTES/);
+		assert.throws(() => loadSettings({ ...base, TRIAGE_AREA_LABELS: "Backend,backend" }, yes), /repeat/);
+		assert.throws(() => loadSettings({ ...base, TRIAGE_AREA_LABELS: "Back!end" }, yes), /Jira label/);
+		assert.throws(() => loadSettings({ ...base, TRIAGE_AREA_LABELS: "needs-info,Backend" }, yes), /bot's own labels/);
+	});
+});

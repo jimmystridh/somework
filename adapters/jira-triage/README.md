@@ -1,6 +1,6 @@
 # Jira triage agent (`jira.triage` v1, `jira.ticket.create` v1)
 
-Checks every new Jira ticket of the triaged projects against a fixed checklist for its issue type, asks the reporter for what is missing, and helps people in Slack to create good tickets in the first place. Built on `@somework/agent-kit` like the other roles; **built and tested, not deployed**. The runbook, with the steps only a person can do, is `deploy/README.md`.
+By default (`TRIAGE_MODE=labels`) it waits for a new ticket to be quiet for ten minutes and then checks the ticket's area labels (Backend, Frontend, Infrastructure, Security) with the developer agent, correcting them; that is the one thing it does to a ticket. In `TRIAGE_MODE=checklist` it checks every new Jira ticket of the triaged projects against a fixed checklist for its issue type, asks the reporter for what is missing, and helps people in Slack to create good tickets in the first place. Built on `@somework/agent-kit` like the other roles; **built and tested, not deployed**. The runbook, with the steps only a person can do, is `deploy/README.md`.
 
 ```
 Jira webhook -> receiver -> hub (mappings/jira.jsonata) -> jira.issue.created | .updated | jira.comment.created
@@ -19,6 +19,16 @@ Jira webhook -> receiver -> hub (mappings/jira.jsonata) -> jira.issue.created | 
                                                     v
                           answer -> notes + empty environment field -> judged again -> done | next round (at most 2) | no answer: ends, says what is open
 ```
+
+**The mode.** `TRIAGE_MODE=labels` (the default) makes the label check below the **only** thing the agent does to a ticket: the checklist, the questions to the reporter and the comments about them are off (`TRIAGE_MODE=checklist` brings that triage back, everything under "The checklist" and "The triage, step by step" is that mode). Either way a new ticket first sits through the **quiet time**.
+
+## The quiet time and the area labels (`TRIAGE_MODE=labels`)
+
+* **Quiet time.** A new ticket is left alone until `TRIAGE_QUIET_MINUTES` (10) have passed without an edit: every edit (any field, labels included) starts the time over, but never later than `TRIAGE_QUIET_MAX_MINUTES` (60) after the creation. `0` looks at the ticket at once. The handler passes edits on only inside that window; later edits and all comments are dropped, because a ticket is looked at **once** (so the bot never fights a person over a label).
+* **The question.** After the quiet time the engine asks the developer agent (`TRIAGE_DEVELOPER_AGENT`, `agent/pi-agent`) one read-only `chat.message` (`areaRequest` in `src/questions.ts`): which of `TRIAGE_AREA_LABELS` (`Backend,Frontend,Infrastructure,Security`, any combination or none) does the work touch? The agent may look in its checkout; it must answer with a line `AREAS: Backend, Security` (or `AREAS: none`) and a line `WHY: ...`. An answer without a line that names only known areas is not guessed at.
+* **The result.** The ticket's area labels are made to match: missing ones are added, **wrong ones are taken away** (the only labels the bot removes besides its own), every other label stays. The marker label is set, and when something changed one comment says what and why (so a person can see it and undo it; every change is also in the journal with the values before and after). Labels that are right get the marker and nothing else.
+* **When it cannot.** No answer within `TRIAGE_DEVELOPER_WAIT_MINUTES` or an answer that is not understood: nothing is written, the manager is told once, and `triage_ticket` (or asking the manager) starts it over. The developer agent not reachable at all is a retry like Jira being down.
+* **Dry run** (`TRIAGE_DRY_RUN=1`) still asks the developer agent (a question writes nothing) and records what it **would** do in the log and the ticket's record; nothing is written to Jira.
 
 A triage is **code, not a model run**. The model of this role only takes part in conversations (the Slack companion). That is deliberate: the verdict must come from the checklist, the questions are fixed texts, and a ticket flood costs no tokens.
 
@@ -92,6 +102,7 @@ A job ends before the model runs (`beforeWorkspace` returns `blocked`, the `resu
 | `JIRA_PROJECTS` | `SAD` | project keys triaged and created in; events of other projects are ignored |
 | `JIRA_TRIAGE_LABEL`, `JIRA_NEEDS_INFO_LABEL`, `JIRA_BOT_CREATED_LABEL` | `triaged-by-bot`, `needs-info`, `created-by-bot` | |
 | `JIRA_BOT_USER` | empty | the user name of the token's owner **when it is a service account**: the handler drops updates made by it (the bot's own echo, which would otherwise start a job that finds nothing changed). Leave it empty for a person's token: that person's own edits must still count |
+| `TRIAGE_MODE`, `TRIAGE_QUIET_MINUTES`, `TRIAGE_QUIET_MAX_MINUTES`, `TRIAGE_AREA_LABELS` | `labels`, `10`, `60`, `Backend,Frontend,Infrastructure,Security` | see "The quiet time and the area labels" |
 | `TRIAGE_DRY_RUN` | `0` | `1`: judge and record only |
 | `TRIAGE_LANGUAGE` | `en` | `en` or `sv`: the language of the questions to reporters |
 | `TRIAGE_ENRICH`, `TRIAGE_DEVELOPER_AGENT`, `TRIAGE_DEVELOPER_WAIT_MINUTES`, `TRIAGE_DEVELOPER_POLL_SECONDS` | `1`, `agent/pi-agent`, `10`, `20` | the read-only look |

@@ -51,6 +51,8 @@ export interface TicketRecord {
 	createdFor?: string;
 	/** The ticket is judged again on purpose (a person asked, or changed it), so the marker label does not exempt it. */
 	retriage?: boolean;
+	/** The ticket is in its quiet time: `nextAttemptAt` is when it is first looked at, and an edit pushes it back. */
+	quiet?: boolean;
 	/** A change by a person was reported and is still to be compared with what the bot last saw. */
 	recheck?: boolean;
 }

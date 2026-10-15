@@ -4,7 +4,7 @@ Two containers in their own compose project (`deploy/compose.yaml`, project `som
 
 * **Own everything.** Own SomeWork identity (`agent/jira-triage`), own model login, own Jira personal access token (recommended: a new one for this agent, so that it can be revoked alone), own Slack app, own sandbox volume and token, own state volume, own health port (`127.0.0.1:8085`; 8081 developer, 8082 reviewer, 8083 Aikido fixer, 8084 Datadog triage on the same host).
 * **It acts as the owner of the Jira token.** Every edit of the bot shows up in Jira as that person. That is why the loop protection is a marker label and why the bot never changes an assignee, a status or a reporter.
-* **Start in a dry run.** `.env.example` sets `TRIAGE_DRY_RUN=1`: it judges and records, writes nothing to Jira, messages nobody and asks nobody. Look at the verdicts, tune, then set it to 0.
+* **Start in a dry run.** `.env.example` sets `TRIAGE_DRY_RUN=1`: it judges and records, writes nothing to Jira and messages nobody (in the default `labels` mode it still asks the developer agent, which writes nothing, so that you can see what it would do to the labels). Look at the verdicts, tune, then set it to 0.
 
 ## Manual steps that remain, in order
 

@@ -3,7 +3,7 @@ import { applyChanges, type Change, type ChangeJournal, type JiraWriter } from "
 import { definitionOf, evaluate, type Evaluation, type Evidence } from "./checklist.ts";
 import type { DeveloperPort } from "./developer.ts";
 import { isUnreachable, JiraError, type Comment, type Issue, type JiraUser } from "./jira/client.ts";
-import { developerRequest, environmentLine, jiraQuestion, jiraSummary, notesText, parseFindings, slackQuestion, slackSummary, text, type Language } from "./questions.ts";
+import { areaRequest, areasComment, developerRequest, environmentLine, jiraQuestion, jiraSummary, notesText, parseAreas, parseFindings, slackQuestion, slackSummary, text, type Language } from "./questions.ts";
 import type { SlackPort } from "./slack.ts";
 import { changedSince, coversChecklist, fingerprintOf, projectOf, snapshotOf, type Snapshot } from "./snapshot.ts";
 import { newRecord, type Outbox, type Reply, type TicketRecord, type TriageStore } from "./store.ts";
@@ -23,6 +23,13 @@ export interface EngineSettings {
 	/** Added while the reporter is being asked, taken away when the triage ends. */
 	needsInfoLabel: string;
 	language: Language;
+	/** `labels`: check the area labels with the developer agent and nothing else; `checklist`: the checklist triage. */
+	mode: "labels" | "checklist";
+	/** A new ticket is left alone this long after its last edit (0: judged at once), and edits postpone it at most `quietMaxMs` after its creation. */
+	quietMs: number;
+	quietMaxMs: number;
+	/** The area labels a ticket may carry. */
+	areaLabels: readonly string[];
 	/** Ask the developer agent to look at a ticket whose technical context is missing, before the reporter is asked. */
 	enrichment: boolean;
 	developerWaitMs: number;
@@ -44,7 +51,7 @@ export type Trigger =
 	| { kind: "comment"; eventKey?: string; commentId?: string; author?: string; excerpt?: string }
 	| { kind: "manual"; force?: boolean; eventKey?: string };
 
-export type OutcomeStatus = "ignored" | "complete" | "asked_developer" | "asked_reporter" | "waiting" | "incomplete" | "no_answer" | "unreachable" | "retry" | "gave_up" | "dry_run";
+export type OutcomeStatus = "ignored" | "labels_correct" | "relabelled" | "complete" | "asked_developer" | "asked_reporter" | "waiting" | "incomplete" | "no_answer" | "unreachable" | "retry" | "gave_up" | "dry_run";
 
 export interface TriageOutcome {
 	ticket: string;
@@ -183,19 +190,24 @@ export class TriageEngine {
 		const now = this.#now();
 		let record = this.#d.store.get(key);
 		switch (trigger.kind) {
-			case "created":
+			case "created": {
 				if (record) return this.#ignored(key, "this ticket is already known");
-				record = this.#save({ ...newRecord(key, "event", now), nextAttemptAt: now });
+				const quiet = this.#d.settings.quietMs ?? 0;
+				record = this.#save({ ...newRecord(key, "event", now), nextAttemptAt: now + quiet, ...(quiet > 0 ? { quiet: true } : {}) });
+				if (quiet > 0) return this.#outcome(key, "waiting", `quiet time: the ticket is looked at in ${ago(quiet)} unless somebody edits it first`);
 				break;
+			}
 			case "manual":
 				if (!record || (trigger.force === true && (record.phase === "done" || record.phase === "gave_up"))) record = this.#save({ ...newRecord(key, "manual", now), nextAttemptAt: now, retriage: true });
 				else if (record.phase === "done") return this.#ignored(key, "this ticket was triaged already (ask again with force to run it again)");
 				break;
 			case "updated":
 				if (!record) return this.#ignored(key, "this agent did not triage this ticket");
+				if (this.#d.settings.mode === "labels") return this.#edited(record);
 				if (trigger.changed && !coversChecklist(trigger.changed)) return this.#ignored(key, "only fields the checklist does not read changed");
 				return this.#wake(this.#save({ ...record, recheck: true }));
 			case "comment":
+				if (this.#d.settings.mode === "labels") return this.#ignored(key, "in labels mode nobody is asked, so comments do not matter");
 				if (!record || record.phase !== "awaiting_reporter") return this.#ignored(key, "nobody was asked about this ticket");
 				if ((trigger.excerpt !== undefined && isBotComment(trigger.excerpt)) || (trigger.commentId !== undefined && record.botComments.includes(trigger.commentId))) return this.#ignored(key, "that comment is one the bot wrote");
 				if (trigger.author !== undefined && record.reporter?.name !== undefined && trigger.author !== record.reporter.name) return this.#ignored(key, "that comment is not from the reporter");
@@ -242,7 +254,18 @@ export class TriageEngine {
 			this.#save({ ...record, phase: "done", doneAt: this.#now(), nextAttemptAt: undefined, attempts: 0, baseline: fingerprintOf(snapshot), summary: `already carries ${this.#d.settings.markerLabel}` });
 			return this.#ignored(record.id, `the ticket already carries ${this.#d.settings.markerLabel}: it was triaged or created by the bot`);
 		}
-		return this.#evaluateAndAct({ ...record, attempts: 0 }, snapshot);
+		if (this.#d.settings.mode === "labels") return this.#askAreas({ ...record, attempts: 0, quiet: undefined }, snapshot);
+		return this.#evaluateAndAct({ ...record, attempts: 0, quiet: undefined }, snapshot);
+	}
+
+	/** An edit during the quiet time starts it over (never beyond `quietMaxMs` from the creation); after that the ticket is looked at once and edits are left alone. */
+	#edited(record: TicketRecord): TriageOutcome {
+		if (!record.quiet) return this.#ignored(record.id, "the ticket was looked at already; later edits are left alone");
+		const now = this.#now();
+		const settings = this.#d.settings;
+		const until = Math.min(now + settings.quietMs, record.createdAt + settings.quietMaxMs);
+		this.#save({ ...record, nextAttemptAt: Math.max(record.nextAttemptAt ?? 0, until) });
+		return this.#outcome(record.id, "waiting", `edited during the quiet time: the ticket is looked at in ${ago(Math.max(0, until - now))}`);
 	}
 
 	/** A person may have changed what the checklist reads since the bot last looked: the fingerprint says, whoever's token wrote the change. */
@@ -306,6 +329,7 @@ export class TriageEngine {
 	}
 
 	async #developerStep(record: TicketRecord, snapshot: Snapshot): Promise<TriageOutcome> {
+		if (this.#d.settings.mode === "labels") return this.#areasStep(record, snapshot);
 		const developer = record.developer;
 		const now = this.#now();
 		if (!developer || !this.#d.developer) return this.#evaluateAndAct({ ...record, phase: "queued", developer: developer ?? { conversationId: "", messageId: "", sentAt: "", deadline: now, status: "unavailable" } }, snapshot);
@@ -327,6 +351,91 @@ export class TriageEngine {
 		const next = this.#save({ ...record, phase: "queued", developer: { ...developer, status: answer ? "answered" : "timed_out", findings }, pending: notes ? pending : record.pending, nextAttemptAt: now });
 		const flushed = next.pending ? await this.#flush(next, snapshot) : next;
 		return this.#evaluateAndAct(flushed, snapshot);
+	}
+
+	// ---- the area labels (mode "labels") -----------------------------------------------------------------------------
+
+	#areaLabelsOf(labels: readonly string[]): string[] {
+		return labels.filter((label) => this.#d.settings.areaLabels.some((area) => area.toLowerCase() === label.toLowerCase()));
+	}
+
+	/** After the quiet time: the developer agent is asked which areas the ticket touches. Asking is read-only, so a dry run asks too. */
+	async #askAreas(record: TicketRecord, snapshot: Snapshot): Promise<TriageOutcome> {
+		const settings = this.#d.settings;
+		if (!this.#d.developer) {
+			this.#save({ ...record, phase: "done", doneAt: this.#now(), nextAttemptAt: undefined, baseline: fingerprintOf(snapshot), summary: "no developer agent to ask about the labels" });
+			return this.#outcome(record.id, "ignored", "the labels were not checked: this agent has no developer agent to ask (TRIAGE_ENRICH is off)");
+		}
+		const now = this.#now();
+		const sent = await this.#d.developer.ask({
+			ticket: record.id,
+			key: `${record.id}:${record.createdAt}:areas`,
+			text: areaRequest({ ticket: record.id, url: this.#d.browseUrl(record.id), type: snapshot.type, summary: snapshot.summary, description: snapshot.description, environment: snapshot.environment, areas: settings.areaLabels, current: this.#areaLabelsOf(snapshot.labels) }),
+		});
+		this.#save({ ...record, phase: "awaiting_developer", baseline: fingerprintOf(snapshot), developer: { ...sent, deadline: now + settings.developerWaitMs, status: "waiting" }, nextAttemptAt: now + settings.developerPollMs, summary: "waiting for the developer agent to classify the ticket" });
+		this.#log("info", "jira_triage_areas_asked", { ticket: record.id, conversationId: sent.conversationId });
+		return this.#outcome(record.id, "asked_developer", `asked the developer agent which areas the ticket touches (answer within ${ago(settings.developerWaitMs)})`);
+	}
+
+	async #areasStep(record: TicketRecord, snapshot: Snapshot): Promise<TriageOutcome> {
+		const settings = this.#d.settings;
+		const developer = record.developer;
+		const now = this.#now();
+		if (!developer || !this.#d.developer) return this.#giveUp(record, "the developer agent's request was lost");
+		let answer: Awaited<ReturnType<DeveloperPort["answer"]>>;
+		try {
+			answer = await this.#d.developer.answer({ conversationId: developer.conversationId, messageId: developer.messageId, sentAt: developer.sentAt, ticket: record.id });
+		} catch (error) {
+			this.#log("warn", "jira_triage_developer_unreadable", { ticket: record.id, error: String(error).slice(0, 160) });
+		}
+		if (!answer) {
+			if (now < developer.deadline) {
+				this.#save({ ...record, nextAttemptAt: now + settings.developerPollMs });
+				return this.#outcome(record.id, "waiting", "still waiting for the developer agent");
+			}
+			return this.#giveUp(record, `the developer agent did not answer within ${ago(settings.developerWaitMs)}`);
+		}
+		const parsed = parseAreas(answer.text, settings.areaLabels);
+		if (!parsed) return this.#giveUp({ ...record, developer: { ...developer, status: "answered" } }, "the developer agent's answer has no AREAS line this agent understands");
+		const current = this.#areaLabelsOf(snapshot.labels);
+		const wanted = new Set(parsed.areas.map((area) => area.toLowerCase()));
+		const have = new Set(current.map((label) => label.toLowerCase()));
+		const add = parsed.areas.filter((area) => !have.has(area.toLowerCase()));
+		const remove = current.filter((label) => !wanted.has(label.toLowerCase()));
+		const saidSo = `the developer agent says ${parsed.areas.length > 0 ? parsed.areas.join(", ") : "none of the areas"}; the ticket has ${current.length > 0 ? current.join(", ") : "none"}`;
+		this.#log("info", "jira_triage_areas_answered", { ticket: record.id, areas: parsed.areas, current, add, remove, dryRun: settings.dryRun });
+		const changed = add.length > 0 || remove.length > 0;
+		if (settings.dryRun) {
+			this.#save({ ...record, phase: "done", doneAt: now, nextAttemptAt: undefined, developer: { ...developer, status: "answered" }, summary: `dry run: ${changed ? `would add ${add.join(", ") || "nothing"} and remove ${remove.join(", ") || "nothing"}` : "labels are right"}` });
+			return this.#outcome(record.id, "dry_run", `dry run: ${saidSo}; ${changed ? `would add ${add.join(", ") || "nothing"} and remove ${remove.join(", ") || "nothing"}` : "the labels are right"}; nothing was written`);
+		}
+		const comments = [...(record.pending?.comments ?? [])];
+		if (changed) {
+			const token = commentToken(record.id, "labels", 0);
+			comments.push({ token, body: botComment(token, areasComment(settings.language, { added: add, removed: remove, why: parsed.why })) });
+		}
+		const summary = changed ? `labels changed: ${saidSo}` : `labels are right: ${saidSo}`;
+		const saved = this.#save({
+			...record,
+			phase: "done",
+			doneAt: now,
+			nextAttemptAt: undefined,
+			attempts: 0,
+			developer: { ...developer, status: "answered" },
+			pending: { ...record.pending, comments, labels: { add: [...new Set([...add, settings.markerLabel])], remove } },
+			summary,
+		});
+		const flushed = await this.#flush(saved, snapshot);
+		this.#d.store.prune();
+		this.#save({ ...flushed, nextAttemptAt: flushed.pending ? now : undefined });
+		return this.#outcome(record.id, changed ? "relabelled" : "labels_correct", summary);
+	}
+
+	/** The labels could not be checked: nothing is written, the manager is told once, and asking again (`triage_ticket`) starts it over. */
+	async #giveUp(record: TicketRecord, reason: string): Promise<TriageOutcome> {
+		this.#save({ ...record, phase: "gave_up", doneAt: this.#now(), nextAttemptAt: undefined, summary: reason });
+		await this.#d.notify?.(`Jira triage could not check the labels of ${record.id}: ${reason}. Nothing was changed. Ask me to triage it again when the developer agent is back.`).catch(() => undefined);
+		return this.#outcome(record.id, "gave_up", reason);
 	}
 
 	// ---- the reporter ----------------------------------------------------------------------------------------------
@@ -485,7 +594,7 @@ export class TriageEngine {
 		if (pending.labels) {
 			const after = [...current.labels];
 			for (const label of pending.labels.add) if (!after.includes(label)) (after.push(label), added.push(label));
-			for (const label of pending.labels.remove) if (record.addedLabels.includes(label) && after.includes(label)) after.splice(after.indexOf(label), 1);
+			for (const label of pending.labels.remove) if ((record.addedLabels.includes(label) || this.#mayRemove(label)) && after.includes(label)) after.splice(after.indexOf(label), 1);
 			changes.push({ field: "labels", before: current.labels, after });
 		}
 		let description = current.rawDescription;
@@ -499,6 +608,11 @@ export class TriageEngine {
 			if (id && !botComments.includes(id)) botComments.push(id);
 		}
 		return this.#save({ ...record, pending: undefined, botComments, addedLabels: [...new Set([...record.addedLabels, ...added])].filter((label) => !(pending.labels?.remove ?? []).includes(label)) });
+	}
+
+	/** The bot takes away only labels it added itself, and in labels mode the area labels: correcting those is the job. */
+	#mayRemove(label: string): boolean {
+		return this.#d.settings.mode === "labels" && this.#d.settings.areaLabels.some((area) => area.toLowerCase() === label.toLowerCase());
 	}
 
 	/** A comment is sent once by Jira's rules, so after an uncertain failure the ticket is read first: a comment with this token is the one already made. */

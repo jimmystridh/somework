@@ -9,7 +9,7 @@ const TEMPLATE = new URL("../handlers/jira.mjs", import.meta.url);
 const WATCH_DAYS = 30;
 
 /** The settings the handler needs, as the object written into its source. */
-export const handlerConfig = (settings: TriageSettings) => ({ projects: settings.projects, submitCapPerDay: settings.dailyCap, watchDays: WATCH_DAYS, botUser: settings.botUser ?? "" });
+export const handlerConfig = (settings: TriageSettings) => ({ projects: settings.projects, submitCapPerDay: settings.dailyCap, watchDays: WATCH_DAYS, botUser: settings.botUser ?? "", labelsMode: settings.mode === "labels", quietWindowMinutes: Math.ceil(settings.quietMaxMs / 60_000) });
 
 /** The shipped handler with the role's settings written in. */
 export function renderHandler(settings: TriageSettings, template: string = readFileSync(TEMPLATE, "utf8")): string {

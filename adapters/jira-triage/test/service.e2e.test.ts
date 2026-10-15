@@ -78,6 +78,8 @@ async function boot(options: { plan?: string[]; issues?: ReturnType<typeof issue
 		JIRA_PFX_FILE: file("jira.pfx", tls.clientPfx),
 		JIRA_PFX_PASSWORD_FILE: file("jira-pfx-password", tls.clientPassphrase),
 		JIRA_CA_FILE: file("jira-ca.pem", tls.ca),
+		TRIAGE_MODE: "checklist",
+		TRIAGE_QUIET_MINUTES: "0",
 		TRIAGE_ENRICH: "0",
 		SLACK_ALLOWED_USER_IDS: "U0123ABCD",
 		...options.env,

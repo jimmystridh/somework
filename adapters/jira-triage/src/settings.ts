@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { LANGUAGES, type Language } from "./questions.ts";
 
+export type TriageMode = "labels" | "checklist";
+
 export interface JiraSettings {
 	url: string;
 	/** The personal access token and the client certificate (PKCS#12) the host demands, with its password: files, never values in the environment. */
@@ -22,6 +24,13 @@ export interface TriageSettings {
 	/** Set, with the marker, on a ticket created from a Slack conversation, so that its creator can see it was made by the bot. */
 	botCreatedLabel: string;
 	language: Language;
+	/** `labels`: the one thing the agent does is check the ticket's area labels with the developer agent. `checklist`: the checklist triage that asks the reporter. */
+	mode: TriageMode;
+	/** How long a new ticket is left alone after its last edit before it is looked at, and the most a run of edits can postpone it (counted from creation). */
+	quietMs: number;
+	quietMaxMs: number;
+	/** The area labels a ticket may carry, in any combination, spelled as Jira holds them. */
+	areaLabels: string[];
 	enrichment: boolean;
 	developerAgent: string;
 	developerWaitMs: number;
@@ -59,6 +68,16 @@ function integer(env: NodeJS.ProcessEnv, name: string, fallback: number, max = N
 	return value;
 }
 
+/** Like `integer`, but 0 is allowed (no quiet time). */
+function minutes(env: NodeJS.ProcessEnv, name: string, fallback: number, max: number): number {
+	const raw = env[name];
+	if (raw === undefined || raw === "") return fallback;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < 0) throw new Error(`${name} must be a whole number of minutes, 0 or more`);
+	if (value > max) throw new Error(`${name} must be at most ${max}`);
+	return value;
+}
+
 const flag = (env: NodeJS.ProcessEnv, name: string, fallback: boolean): boolean => (env[name] === undefined || env[name] === "" ? fallback : env[name] === "1" || env[name]?.toLowerCase() === "true");
 
 const PROJECT = /^[A-Z][A-Z0-9_]{1,9}$/;
@@ -83,6 +102,7 @@ function schedule(raw: string | undefined): number[] {
  *   JIRA_PROJECTS                                       project keys, comma separated (default SAD); events of any other project are ignored
  *   JIRA_TRIAGE_LABEL, JIRA_NEEDS_INFO_LABEL, JIRA_BOT_CREATED_LABEL    labels (defaults triaged-by-bot, needs-info, created-by-bot)
  *   JIRA_BOT_USER                                       the user name of the token's owner when that is a service account: its updates are the bot's own echo and are dropped by the handler
+ *   TRIAGE_MODE (labels | checklist, default labels), TRIAGE_QUIET_MINUTES (10), TRIAGE_QUIET_MAX_MINUTES (60), TRIAGE_AREA_LABELS (Backend,Frontend,Infrastructure,Security)
  *   TRIAGE_LANGUAGE (en | sv), TRIAGE_ENRICH (default 1), TRIAGE_DEVELOPER_AGENT (default agent/pi-agent), TRIAGE_DEVELOPER_WAIT_MINUTES (10)
  *   TRIAGE_REPORTER_WAIT_HOURS (48), TRIAGE_REPORTER_POLL_MINUTES (5), TRIAGE_MAX_ROUNDS (2), TRIAGE_RETRY_MINUTES, TRIAGE_MAX_ATTEMPTS (12)
  *   TRIAGE_TICK_SECONDS (15), TRIAGE_DEVELOPER_POLL_SECONDS (20)   how often the queue is looked at, and the developer agent's answer is looked for
@@ -109,6 +129,15 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env, exists: (path
 	if (new Set([markerLabel, needsInfoLabel, botCreatedLabel]).size !== 3) throw new Error("the three labels (JIRA_TRIAGE_LABEL, JIRA_NEEDS_INFO_LABEL, JIRA_BOT_CREATED_LABEL) must differ");
 	const developerAgent = (env.TRIAGE_DEVELOPER_AGENT || "agent/pi-agent").trim();
 	if (!/^agent\/[a-z0-9][a-z0-9._-]*$/.test(developerAgent)) throw new Error("TRIAGE_DEVELOPER_AGENT must be an agent id like agent/pi-agent");
+	const mode = (env.TRIAGE_MODE || "labels").trim().toLowerCase();
+	if (mode !== "labels" && mode !== "checklist") throw new Error("TRIAGE_MODE must be labels or checklist");
+	const areaLabels = list(env.TRIAGE_AREA_LABELS ?? "Backend,Frontend,Infrastructure,Security");
+	if (areaLabels.length === 0) throw new Error("TRIAGE_AREA_LABELS must name at least one label");
+	for (const name of areaLabels) if (!LABEL.test(name)) throw new Error(`TRIAGE_AREA_LABELS holds something that is not a Jira label: ${name.slice(0, 20)}`);
+	if (new Set(areaLabels.map((name) => name.toLowerCase())).size !== areaLabels.length) throw new Error("TRIAGE_AREA_LABELS must not repeat a label");
+	if (areaLabels.some((name) => [markerLabel, needsInfoLabel, botCreatedLabel].some((other) => other.toLowerCase() === name.toLowerCase()))) throw new Error("TRIAGE_AREA_LABELS must not hold one of the bot's own labels");
+	const quietMinutes = minutes(env, "TRIAGE_QUIET_MINUTES", 10, 24 * 60);
+	const quietMaxMinutes = Math.max(quietMinutes, minutes(env, "TRIAGE_QUIET_MAX_MINUTES", 60, 24 * 60));
 	const botUser = env.JIRA_BOT_USER?.trim();
 	if (botUser && !/^[A-Za-z0-9._@-]{1,100}$/.test(botUser)) throw new Error("JIRA_BOT_USER must be a Jira user name");
 	const createTypes = list(env.TRIAGE_CREATE_TYPES ?? "Bug,Story,Task,Improvement");
@@ -120,6 +149,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env, exists: (path
 		needsInfoLabel,
 		botCreatedLabel,
 		language: language as Language,
+		mode,
+		quietMs: quietMinutes * MINUTE,
+		quietMaxMs: quietMaxMinutes * MINUTE,
+		areaLabels,
 		enrichment: flag(env, "TRIAGE_ENRICH", true),
 		developerAgent,
 		developerWaitMs: integer(env, "TRIAGE_DEVELOPER_WAIT_MINUTES", 10, 240) * MINUTE,
