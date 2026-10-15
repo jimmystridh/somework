@@ -26,9 +26,10 @@ export interface TriageSettings {
 	language: Language;
 	/** `labels`: the one thing the agent does is check the ticket's area labels with the developer agent. `checklist`: the checklist triage that asks the reporter. */
 	mode: TriageMode;
-	/** How long a new ticket is left alone after its last edit before it is looked at, and the most a run of edits can postpone it (counted from creation). */
+	/** How long after its creation a new ticket is left alone before it is looked at. Edits in that time change nothing: the time is not restarted. */
 	quietMs: number;
-	quietMaxMs: number;
+	/** Also give a ticket that has no component the component(s) the developer agent picks from the project's own. */
+	assignComponents: boolean;
 	/** The area labels a ticket may carry, in any combination, spelled as Jira holds them. */
 	areaLabels: string[];
 	enrichment: boolean;
@@ -102,7 +103,7 @@ function schedule(raw: string | undefined): number[] {
  *   JIRA_PROJECTS                                       project keys, comma separated (default SAD); events of any other project are ignored
  *   JIRA_TRIAGE_LABEL, JIRA_NEEDS_INFO_LABEL, JIRA_BOT_CREATED_LABEL    labels (defaults triaged-by-bot, needs-info, created-by-bot)
  *   JIRA_BOT_USER                                       the user name of the token's owner when that is a service account: its updates are the bot's own echo and are dropped by the handler
- *   TRIAGE_MODE (labels | checklist, default labels), TRIAGE_QUIET_MINUTES (10), TRIAGE_QUIET_MAX_MINUTES (60), TRIAGE_AREA_LABELS (Backend,Frontend,Infrastructure,Security)
+ *   TRIAGE_MODE (labels | checklist, default labels), TRIAGE_QUIET_MINUTES (10), TRIAGE_AREA_LABELS (Backend,Frontend,Infrastructure,Security), TRIAGE_COMPONENTS (1: also assign components to a ticket that has none)
  *   TRIAGE_LANGUAGE (en | sv), TRIAGE_ENRICH (default 1), TRIAGE_DEVELOPER_AGENT (default agent/pi-agent), TRIAGE_DEVELOPER_WAIT_MINUTES (10)
  *   TRIAGE_REPORTER_WAIT_HOURS (48), TRIAGE_REPORTER_POLL_MINUTES (5), TRIAGE_MAX_ROUNDS (2), TRIAGE_RETRY_MINUTES, TRIAGE_MAX_ATTEMPTS (12)
  *   TRIAGE_TICK_SECONDS (15), TRIAGE_DEVELOPER_POLL_SECONDS (20)   how often the queue is looked at, and the developer agent's answer is looked for
@@ -137,7 +138,6 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env, exists: (path
 	if (new Set(areaLabels.map((name) => name.toLowerCase())).size !== areaLabels.length) throw new Error("TRIAGE_AREA_LABELS must not repeat a label");
 	if (areaLabels.some((name) => [markerLabel, needsInfoLabel, botCreatedLabel].some((other) => other.toLowerCase() === name.toLowerCase()))) throw new Error("TRIAGE_AREA_LABELS must not hold one of the bot's own labels");
 	const quietMinutes = minutes(env, "TRIAGE_QUIET_MINUTES", 10, 24 * 60);
-	const quietMaxMinutes = Math.max(quietMinutes, minutes(env, "TRIAGE_QUIET_MAX_MINUTES", 60, 24 * 60));
 	const botUser = env.JIRA_BOT_USER?.trim();
 	if (botUser && !/^[A-Za-z0-9._@-]{1,100}$/.test(botUser)) throw new Error("JIRA_BOT_USER must be a Jira user name");
 	const createTypes = list(env.TRIAGE_CREATE_TYPES ?? "Bug,Story,Task,Improvement");
@@ -151,7 +151,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env, exists: (path
 		language: language as Language,
 		mode,
 		quietMs: quietMinutes * MINUTE,
-		quietMaxMs: quietMaxMinutes * MINUTE,
+		assignComponents: flag(env, "TRIAGE_COMPONENTS", true),
 		areaLabels,
 		enrichment: flag(env, "TRIAGE_ENRICH", true),
 		developerAgent,

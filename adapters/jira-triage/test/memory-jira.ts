@@ -108,6 +108,15 @@ export class MemoryJira {
 		};
 	}
 
+	/** The components the project offers; a test sets them. `componentsError` makes the lookup fail. */
+	projectComponentList: { name: string; description?: string }[] = [];
+	componentsError: Error | undefined;
+	async projectComponents(_project: string): Promise<{ name: string; description?: string }[]> {
+		this.#guard("projectComponents");
+		if (this.componentsError) throw this.componentsError;
+		return this.projectComponentList.map((component) => ({ ...component }));
+	}
+
 	async comments(key: string): Promise<Comment[]> {
 		this.#guard("comments", key);
 		return this.#issue(key).comments.map((comment) => ({ ...comment }));

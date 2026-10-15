@@ -149,7 +149,7 @@ describe("the shipped event handler", () => {
 
 describe("installing the handler", () => {
 	it("writes the settings into the template, for the three Jira topics, and nothing else", () => {
-		assert.deepEqual(handlerConfig(settings), { projects: ["SAD"], submitCapPerDay: 200, watchDays: 30, botUser: "", labelsMode: false, quietWindowMinutes: 60 });
+		assert.deepEqual(handlerConfig(settings), { projects: ["SAD"], submitCapPerDay: 200, watchDays: 30, botUser: "", labelsMode: false });
 		assert.deepEqual(TOPICS, ["jira.issue.created", "jira.issue.updated", "jira.comment.created"]);
 		assert.throws(() => renderHandler(settings, "export default () => ({})"), /no __CONFIG__ placeholder/);
 		assert.doesNotMatch(renderHandler(settings), /__CONFIG__/);
@@ -172,27 +172,17 @@ describe("installing the handler", () => {
 
 describe("the shipped event handler in labels mode", () => {
 	const labels = loadSettings({ JIRA_URL: "https://jira.example.test", JIRA_TOKEN_FILE: "/tmp/t" }, () => true);
-	const at = (minutes: number) => new Date(Date.parse(NOW) + minutes * 60_000).toISOString();
 
-	it("passes an edit during the quiet window on without counting it, and leaves later edits and every comment alone", async () => {
+	it("starts a triage for a new ticket once, and drops every edit and comment: a ticket is looked at once", async () => {
 		const { decide } = await world(labels);
 		assert.equal((await decide("jira.issue.created", { issue: issue() })).action, "submit");
-		const early = await decide("jira.issue.updated", { issue: issue(), changed: ["labels"] }, { now: at(3) });
-		assert.equal(early.action, "submit");
-		assert.deepEqual(early.task.input, { ticket: "SAD-1", trigger: { kind: "updated", eventKey: early.task.input.trigger.eventKey } });
-		assert.equal((await decide("jira.issue.updated", { issue: issue(), changed: ["labels"] }, { now: at(61) })).action, "drop", "the window is over");
-		assert.equal((await decide("jira.issue.updated", { issue: issue("SAD-9"), changed: ["summary"] }, { now: at(3) })).action, "drop", "a ticket this handler did not see created");
-		assert.equal((await decide("jira.comment.created", { issue: issue(), comment: { id: "1", author: "dana", body: "hi" } }, { now: at(3) })).action, "drop");
+		assert.equal((await decide("jira.issue.created", { issue: issue() })).action, "drop", "a triage was already started");
+		assert.equal((await decide("jira.issue.updated", { issue: issue(), changed: ["labels"] })).action, "drop");
+		assert.equal((await decide("jira.issue.updated", { issue: issue(), changed: ["summary"] })).action, "drop");
+		assert.equal((await decide("jira.comment.created", { issue: issue(), comment: { id: "1", author: "dana", body: "hi" } })).action, "drop");
 	});
 
-	it("handles one delivery of an edit once", async () => {
-		const { decide } = await world(labels);
-		await decide("jira.issue.created", { issue: issue() });
-		assert.equal((await decide("jira.issue.updated", { issue: issue(), changed: ["summary"] }, { key: "jira:5:updated", now: at(1) })).action, "submit");
-		assert.equal((await decide("jira.issue.updated", { issue: issue(), changed: ["summary"] }, { key: "jira:5:updated", now: at(1) })).action, "drop");
-	});
-
-	it("writes the mode and the window into the template", () => {
-		assert.deepEqual(handlerConfig(labels), { projects: ["SAD"], submitCapPerDay: 200, watchDays: 30, botUser: "", labelsMode: true, quietWindowMinutes: 60 });
+	it("writes the mode into the template", () => {
+		assert.deepEqual(handlerConfig(labels), { projects: ["SAD"], submitCapPerDay: 200, watchDays: 30, botUser: "", labelsMode: true });
 	});
 });

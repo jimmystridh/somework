@@ -2,8 +2,7 @@
 // The event handler of the jira-triage role, installed by the service on its first start (and versioned like any handler).
 // It decides what a Jira event is worth: nothing (drop), a note for a person (deliver) or one jira.triage job for this same agent (submit).
 //   created  : a ticket of a triaged project starts a triage.
-//   labels mode (CONFIG.labelsMode): an edit of any field during the quiet window after the creation (CONFIG.quietWindowMinutes) is passed on, because it pushes
-//              the first look back; it does not count against the daily cap. Later edits and all comments are dropped: the ticket is looked at once.
+//   labels mode (CONFIG.labelsMode): only a created ticket starts anything; edits and comments are dropped, because a ticket is looked at once, a fixed quiet time after its creation.
 //   updated  : only when a field the checklist reads changed, and only for a ticket this handler saw created (so an old ticket someone edits is left alone);
 //              with JIRA_BOT_USER set (a service account), never an edit made by that account: it is the bot's own echo.
 //   comment  : only on a ticket this handler saw created, and never a comment the bot wrote itself (it starts with the bot's anchor).
@@ -60,23 +59,9 @@ export default async function handle({ event, now }) {
 	const stamp = Date.parse(now);
 	const watched = integer(state.watch[ticket]) > 0 && stamp - integer(state.watch[ticket]) < CONFIG.watchDays * DAY;
 
-	const quietWindow = watched && stamp - integer(state.watch[ticket]) < CONFIG.quietWindowMinutes * 60_000;
 	let trigger;
-	if (CONFIG.labelsMode && topic === "jira.comment.created") {
-		return drop("in labels mode comments do not matter: the ticket is looked at once");
-	} else if (CONFIG.labelsMode && topic === "jira.issue.updated") {
-		if (CONFIG.botUser !== "" && data.actor === CONFIG.botUser) return drop("an edit made by the account the agent itself writes with");
-		if (!quietWindow) return drop("the quiet window of this ticket is over (or this agent did not see it created): later edits are left alone");
-		if (key && state.seen.includes(key)) return drop("this delivery was already handled");
-		if (key) {
-			state.seen = [...state.seen, key].slice(-MAX_SEEN);
-			save(state);
-		}
-		return {
-			action: "submit",
-			reason: `edit during the quiet time of ${ticket}`,
-			task: { capability: { id: "jira.triage", version: "1" }, input: { ticket, trigger: { kind: "updated", ...(key ? { eventKey: key.slice(0, 120) } : {}) } } },
-		};
+	if (CONFIG.labelsMode && topic !== "jira.issue.created") {
+		return drop("in labels mode only a new ticket matters: it is looked at once, a fixed quiet time after its creation");
 	} else if (topic === "jira.issue.created") {
 		if (watched) return drop("a triage of this ticket was already started");
 		trigger = { kind: "created" };

@@ -191,6 +191,8 @@ export interface AreaRequestContext {
 	areas: readonly string[];
 	/** The area labels the ticket carries now, as Jira spells them. */
 	current: readonly string[];
+	/** The project's components, offered only when the ticket has none: the developer agent picks from these. */
+	components?: readonly { name: string; description?: string }[];
 	boundary?: string;
 }
 
@@ -218,6 +220,14 @@ export function areaRequest(context: AreaRequestContext): string {
 		"Start your answer with exactly one line of this form, using only the names above, separated by commas (or the single word none):",
 		`AREAS: ${context.areas.slice(0, 2).join(", ")}`,
 		"Then, on a second line starting with WHY:, give your reason in one or two sentences. If you cannot tell, say so after WHY: and still give your best AREAS line.",
+		...(context.components && context.components.length > 0
+			? [
+					"The ticket has no component yet. Pick the one to three components of the project that fit it best, the most specific ones, from this list only (the exact names):",
+					...context.components.map((component) => `- ${component.name}${component.description ? `: ${oneLine(component.description, 80)}` : ""}`),
+					"Give them on a third line of this form, separated by semicolons, or leave the line out when none fits well:",
+					`COMPONENTS: ${context.components.slice(0, 2).map((component) => component.name).join("; ")}`,
+				]
+			: []),
 	].join("\n");
 }
 
@@ -250,15 +260,37 @@ export function parseAreas(answer: string | undefined, allowed: readonly string[
 	return { areas: allowed.filter((area) => found.has(area)), why: why ? oneLine(why, 500) : "" };
 }
 
+const COMPONENTS_LINE = /^[ \t]*COMPONENTS[ \t]*:[ \t]*(.{0,400})$/im;
+export const MAX_COMPONENTS = 3;
+
+/**
+ * The components in a developer answer, as the project spells them. Names that are not the project's are dropped (a component is a bonus, never a reason to
+ * throw the labels away), at most `MAX_COMPONENTS` are kept, in the order given.
+ */
+export function parseComponents(answer: string | undefined, known: readonly string[]): string[] {
+	const line = COMPONENTS_LINE.exec((answer ?? "").replace(CONTROL, " "))?.[1]?.trim();
+	if (!line) return [];
+	const byName = new Map(known.map((name) => [name.toLowerCase(), name]));
+	const whole = byName.get(line.replace(/[.`'"*_]+$/g, "").toLowerCase());
+	const tokens = whole ? [line] : line.split(";").length > 1 ? line.split(";") : line.split(",");
+	const found: string[] = [];
+	for (const token of tokens) {
+		const name = byName.get(token.trim().replace(/^[-*`'"_\s]+|[`'"*_.\s]+$/g, "").toLowerCase());
+		if (name && !found.includes(name)) found.push(name);
+	}
+	return found.slice(0, MAX_COMPONENTS);
+}
+
 /** The comment that says what the bot did to the labels and why, so that a person can see it and undo it. */
-export function areasComment(language: Language, change: { added: readonly string[]; removed: readonly string[]; why: string }): string {
+export function areasComment(language: Language, change: { added: readonly string[]; removed: readonly string[]; why: string; components?: readonly string[] }): string {
 	const sv = language === "sv";
 	const parts = [
-		sv ? "Jag har kontrollerat områdesetiketterna på det här ärendet tillsammans med utvecklaragenten." : "I checked this ticket's area labels together with the developer agent.",
+		sv ? "Jag har kontrollerat områdesetiketterna (och komponenten) på det här ärendet tillsammans med utvecklaragenten." : "I checked this ticket's area labels (and component) together with the developer agent.",
 		...(change.added.length > 0 ? [`${sv ? "Lade till" : "Added"}: ${change.added.join(", ")}.`] : []),
 		...(change.removed.length > 0 ? [`${sv ? "Tog bort" : "Removed"}: ${change.removed.join(", ")}.`] : []),
+		...(change.components && change.components.length > 0 ? [`${sv ? "Satte komponent" : "Set component"}: ${change.components.join(", ")}.`] : []),
 		...(change.why ? [`${sv ? "Skäl" : "Reason"}: ${wikiEscape(change.why)}`] : []),
-		sv ? "Ändra etiketterna fritt, jag tittar bara på ett ärende en gång." : "Change the labels freely: I look at a ticket only once.",
+		sv ? "Ändra gärna fritt, jag tittar bara på ett ärende en gång." : "Change them freely: I look at a ticket only once.",
 	];
 	return parts.join("\n");
 }

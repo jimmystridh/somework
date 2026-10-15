@@ -49,6 +49,14 @@ describe("the ticket system client", () => {
 		c.close();
 	});
 
+	it("lists the components of a project, with their descriptions, and skips what has no name", async () => {
+		jira.memory.projectComponentList = [{ name: "Försäljning - Kundfakturor", description: " Customer invoices " }, { name: "Infrastruktur" }];
+		const c = client();
+		assert.deepEqual(await c.projectComponents("SAD"), [{ name: "Försäljning - Kundfakturor", description: "Customer invoices" }, { name: "Infrastruktur" }]);
+		assert.equal(jira.requests.at(-1)!.path, "/rest/api/2/project/SAD/components");
+		c.close();
+	});
+
 	it("says 404 for a ticket that is not there", async () => {
 		const c = client();
 		await assert.rejects(c.getIssue("SAD-404"), (error: Error) => (error as JiraError).status === 404);

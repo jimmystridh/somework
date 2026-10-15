@@ -63,8 +63,8 @@ services:
       JIRA_RESEED_HANDLER: ${JIRA_RESEED_HANDLER:-0}           # 1 = write the shipped handler again, with these settings, as a new version
       TRIAGE_DRY_RUN: ${TRIAGE_DRY_RUN:-0}                     # 1 = judge and record only: nothing is written to Jira, nobody is messaged or asked
       TRIAGE_MODE: ${TRIAGE_MODE:-labels}                      # labels = the one thing it does is check the area labels with the developer agent; checklist = the older triage that asks the reporter
-      TRIAGE_QUIET_MINUTES: ${TRIAGE_QUIET_MINUTES:-10}         # a new ticket is left alone this long after its last edit (0 = at once)
-      TRIAGE_QUIET_MAX_MINUTES: ${TRIAGE_QUIET_MAX_MINUTES:-60} # edits postpone the first look at most this long after the creation
+      TRIAGE_QUIET_MINUTES: ${TRIAGE_QUIET_MINUTES:-10}         # a new ticket is left alone this long after its creation (0 = at once); edits do not restart it
+      TRIAGE_COMPONENTS: ${TRIAGE_COMPONENTS:-1}               # 1 = a ticket without a component gets the one(s) the developer agent picks from the project's
       TRIAGE_AREA_LABELS: ${TRIAGE_AREA_LABELS:-Backend,Frontend,Infrastructure,Security}   # the labels a ticket may carry, in any combination
       TRIAGE_LANGUAGE: ${TRIAGE_LANGUAGE:-en}                  # en | sv: the language of the questions to reporters
       TRIAGE_ENRICH: ${TRIAGE_ENRICH:-1}                       # 0 = never ask the developer agent for a read-only look first

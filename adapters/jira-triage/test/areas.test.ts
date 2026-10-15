@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { areaRequest, areasComment, parseAreas } from "../src/questions.ts";
+import { areaRequest, areasComment, parseAreas, parseComponents } from "../src/questions.ts";
 import { isBotComment } from "../src/wiki.ts";
 import { issueOf } from "./memory-jira.ts";
 import { MINUTE, rig } from "./rig.ts";
@@ -63,26 +63,22 @@ describe("the quiet time", () => {
 		assert.deepEqual(await world.engine.tick(), [], "not yet");
 		world.advance(2 * MINUTE);
 		assert.equal((await world.engine.tick())[0]?.status, "asked_developer");
-		assert.equal(world.record().quiet, undefined);
 	});
 
-	it("starts over at every edit, but never waits more than the longest time from the creation", async () => {
+	it("is not started over by an edit: the ticket is looked at ten minutes after its creation whatever happens in between", async () => {
 		const world = rig({ issues: [ticket()], settings: labelsMode });
 		await world.engine.handle("SAD-1", { kind: "created" });
+		const due = world.record().nextAttemptAt;
 		for (let i = 0; i < 4; i++) {
-			world.advance(8 * MINUTE);
-			assert.equal((await world.engine.handle("SAD-1", { kind: "updated", eventKey: `jira:${i}:updated` })).status, "waiting");
-			assert.deepEqual(await world.engine.tick(), [], `edit ${i}: still quiet`);
+			world.advance(2 * MINUTE);
+			assert.equal((await world.engine.handle("SAD-1", { kind: "updated", eventKey: `jira:${i}:updated` })).status, "ignored");
+			assert.equal(world.record().nextAttemptAt, due, `edit ${i}: the time is the same`);
 		}
-		world.advance(8 * MINUTE);
-		const late = await world.engine.handle("SAD-1", { kind: "updated", eventKey: "jira:late:updated" });
-		assert.match(late.summary, /looked at in/);
-		assert.equal(world.record().nextAttemptAt! - world.record().createdAt <= 60 * MINUTE, true, "the hour from the creation is the limit");
-		world.advance(29 * MINUTE);
+		world.advance(2 * MINUTE);
 		assert.equal((await world.engine.tick())[0]?.status, "asked_developer");
 	});
 
-	it("ignores edits once the ticket was looked at, and a ticket asked for by hand is not made to wait", async () => {
+	it("ignores edits after the ticket was looked at, and a ticket asked for by hand is not made to wait", async () => {
 		const world = rig({ issues: [ticket(), issueOf("SAD-2", { summary: "Other", description: "Other text" })], settings: labelsMode });
 		await world.engine.handle("SAD-1", { kind: "created" });
 		world.advance(10 * MINUTE);
@@ -94,6 +90,95 @@ describe("the quiet time", () => {
 	it("is off with TRIAGE_QUIET_MINUTES=0: the ticket is looked at at once", async () => {
 		const world = rig({ issues: [ticket()], settings: { mode: "labels", quietMs: 0 } });
 		assert.equal((await world.engine.handle("SAD-1", { kind: "created" })).status, "asked_developer");
+	});
+});
+
+const COMPONENTS = [{ name: "Försäljning - Kundfakturor", description: "Customer invoices" }, { name: "Infrastruktur" }, { name: "Security" }, { name: "Utskrifter - Bokföring" }];
+
+describe("the components", () => {
+	it("are read from the answer by their exact names, three at most, and what is not the project's is dropped", () => {
+		const known = COMPONENTS.map((component) => component.name);
+		assert.deepEqual(parseComponents("AREAS: Backend\nCOMPONENTS: Försäljning - Kundfakturor; utskrifter - bokföring", known), ["Försäljning - Kundfakturor", "Utskrifter - Bokföring"]);
+		assert.deepEqual(parseComponents("COMPONENTS: Infrastruktur", known), ["Infrastruktur"]);
+		assert.deepEqual(parseComponents("COMPONENTS: Infrastruktur, Security", known), ["Infrastruktur", "Security"], "commas are understood when no name has one");
+		assert.deepEqual(parseComponents("COMPONENTS: Made up; Security", known), ["Security"]);
+		assert.deepEqual(parseComponents("COMPONENTS: a; b; c", ["a", "b", "c"].concat(["d"])), ["a", "b", "c"]);
+		assert.deepEqual(parseComponents("COMPONENTS: a; b; c; d", ["a", "b", "c", "d"]), ["a", "b", "c"], "three at most");
+		assert.deepEqual(parseComponents("no line here", known), []);
+		assert.deepEqual(parseComponents("COMPONENTS: none", known), []);
+	});
+
+	it("are offered to the developer agent only for a ticket that has none", () => {
+		const request = areaRequest({ ticket: "SAD-1", url: "u", type: "Bug", summary: "x", description: "y", environment: "", areas: AREAS, current: [], components: COMPONENTS, boundary: "abc" });
+		assert.match(request, /The ticket has no component yet/);
+		assert.match(request, /- Försäljning - Kundfakturor: Customer invoices\n- Infrastruktur\n/);
+		assert.match(request, /COMPONENTS: Försäljning - Kundfakturor; Infrastruktur/);
+		assert.doesNotMatch(areaRequest({ ticket: "SAD-1", url: "u", type: "Bug", summary: "x", description: "y", environment: "", areas: AREAS, current: [], boundary: "abc" }), /COMPONENTS/);
+	});
+
+	it("are given to a ticket that has none, together with its labels, and named in the comment", async () => {
+		const world = rig({ issues: [ticket()], settings: labelsMode });
+		world.jira.projectComponentList = COMPONENTS;
+		await world.engine.handle("SAD-1", { kind: "created" });
+		world.advance(10 * MINUTE);
+		await world.engine.tick();
+		assert.match(world.developer!.asked[0]!.text, /COMPONENTS: Försäljning/);
+		world.developer!.reply = "AREAS: Backend\nWHY: the invoice total is computed server side\nCOMPONENTS: Försäljning - Kundfakturor";
+		world.advance(20_000);
+		const [outcome] = await world.engine.tick();
+		assert.equal(outcome!.status, "relabelled");
+		assert.deepEqual(world.ticket().components, ["Försäljning - Kundfakturor"]);
+		assert.deepEqual(world.ticket().labels, ["Backend", MARKER]);
+		assert.match(world.ticket().comments[0]!.body, /Set component: Försäljning - Kundfakturor\./);
+		const entry = world.journal.all().find((record) => record.field === "components" && record.state === "applied")!;
+		assert.deepEqual([entry.before, entry.after], [[], ["Försäljning - Kundfakturor"]]);
+	});
+
+	it("are left alone when the ticket has one already, and then are not even asked about", async () => {
+		const world = rig({ issues: [issueOf("SAD-1", { summary: "Login", description: "Login fails", components: ["Generellt"] })], settings: labelsMode });
+		world.jira.projectComponentList = COMPONENTS;
+		await world.engine.handle("SAD-1", { kind: "created" });
+		world.advance(10 * MINUTE);
+		await world.engine.tick();
+		assert.doesNotMatch(world.developer!.asked[0]!.text, /COMPONENTS/);
+		world.developer!.reply = "AREAS: Backend\nCOMPONENTS: Infrastruktur";
+		world.advance(20_000);
+		await world.engine.tick();
+		assert.deepEqual(world.ticket().components, ["Generellt"]);
+	});
+
+	it("do not hold back the labels when the answer names none, only unknown ones, or Jira cannot list them", async () => {
+		const none = rig({ issues: [ticket()], settings: labelsMode });
+		none.jira.projectComponentList = COMPONENTS;
+		await none.engine.handle("SAD-1", { kind: "created" });
+		none.advance(10 * MINUTE);
+		await none.engine.tick();
+		none.developer!.reply = "AREAS: Frontend\nCOMPONENTS: Something else entirely";
+		none.advance(20_000);
+		assert.equal((await none.engine.tick())[0]?.status, "relabelled");
+		assert.deepEqual([none.ticket().components, none.ticket().labels], [[], ["Frontend", MARKER]]);
+		const down = rig({ issues: [ticket()], settings: labelsMode });
+		down.jira.componentsError = new Error("components lookup failed");
+		await down.engine.handle("SAD-1", { kind: "created" });
+		down.advance(10 * MINUTE);
+		await down.engine.tick();
+		assert.doesNotMatch(down.developer!.asked[0]!.text, /COMPONENTS/);
+		assert.ok(down.logs.some((log) => log.event === "jira_triage_components_unavailable"));
+	});
+
+	it("are not asked about with TRIAGE_COMPONENTS=0", async () => {
+		const world = rig({ issues: [ticket()], settings: { ...labelsMode, assignComponents: false } });
+		world.jira.projectComponentList = COMPONENTS;
+		await world.engine.handle("SAD-1", { kind: "created" });
+		world.advance(10 * MINUTE);
+		await world.engine.tick();
+		assert.doesNotMatch(world.developer!.asked[0]!.text, /COMPONENTS/);
+	});
+
+	it("a dry run says what it would set and sets nothing", async () => {
+		const { world, outcome } = await inspected("AREAS: Backend\nCOMPONENTS: Infrastruktur", [], { settings: { ...labelsMode, dryRun: true } });
+		assert.equal(outcome.status, "dry_run");
+		assert.deepEqual(world.jira.writes, []);
 	});
 });
 
@@ -139,7 +224,7 @@ describe("checking the area labels with the developer agent", () => {
 	it("in a dry run still asks, and writes nothing", async () => {
 		const { world, outcome } = await inspected("AREAS: Backend", [], { settings: { ...labelsMode, dryRun: true } });
 		assert.equal(outcome.status, "dry_run");
-		assert.match(outcome.summary, /would add Backend and remove nothing/);
+		assert.match(outcome.summary, /would add Backend, remove no label/);
 		assert.deepEqual(world.jira.writes, []);
 		assert.equal(world.developer!.asked.length, 1);
 	});

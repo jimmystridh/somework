@@ -77,7 +77,7 @@ export const defaults: EngineSettings = {
 	language: "en",
 	mode: "checklist",
 	quietMs: 0,
-	quietMaxMs: 60 * MINUTE,
+	assignComponents: true,
 	areaLabels: ["Backend", "Frontend", "Infrastructure", "Security"],
 	enrichment: true,
 	developerWaitMs: 10 * MINUTE,

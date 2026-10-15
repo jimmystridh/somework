@@ -201,6 +201,12 @@ export class JiraClient {
 		return this.#json("GET", `/rest/api/2/issue/${encodeURIComponent(key)}?fields=${ISSUE_FIELDS}`);
 	}
 
+	/** The components of a project, with their descriptions: what a ticket without one may be given. */
+	async projectComponents(project: string): Promise<{ name: string; description?: string }[]> {
+		const body = await this.#json<{ name?: string; description?: string }[]>("GET", `/rest/api/2/project/${encodeURIComponent(project)}/components`);
+		return (Array.isArray(body) ? body : []).filter((component) => typeof component?.name === "string" && component.name !== "").map((component) => ({ name: component.name!, ...(typeof component.description === "string" && component.description.trim() ? { description: component.description.trim() } : {}) }));
+	}
+
 	async search(jql: string, maxResults = 10): Promise<{ total: number; issues: SearchHit[] }> {
 		return this.#json("GET", `/rest/api/2/search?jql=${encodeURIComponent(jql)}&maxResults=${Math.min(maxResults, 50)}&fields=${SEARCH_FIELDS}`);
 	}

@@ -70,6 +70,7 @@ export class FakeJira {
 			const user = await this.memory.user(url.searchParams.get("username") ?? "");
 			return user ? reply(200, user) : reply(404, { errorMessages: ["no such user"] });
 		}
+		if (/^\/rest\/api\/2\/project\/[A-Z]+\/components$/.test(url.pathname)) return reply(200, [...this.memory.projectComponentList.map((component, index) => ({ id: String(index), ...component })), { id: "x" }]);
 		if (url.pathname === "/rest/api/2/search") return reply(200, await this.memory.search(url.searchParams.get("jql") ?? "", Number(url.searchParams.get("maxResults") ?? 10)));
 		if (url.pathname === "/rest/api/2/issue" && req.method === "POST") {
 			const fields = json().fields;
