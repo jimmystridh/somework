@@ -7,7 +7,9 @@ import { createModels, fauxAssistantMessage, fauxProvider, type Context, type Pr
 import type { Job, JobControl } from "../src/job-types.ts";
 import { loadConfig } from "../src/config.ts";
 import { FileCredentialStore } from "../src/credentials.ts";
+import { createServer } from "node:http";
 import { allowlist, isAllowed, parseModelList } from "../src/providers/allowlist.ts";
+import { codexProxyFrom } from "../src/providers/codex-proxy.ts";
 import { antigravityProvider, loadAntigravity, type AntigravityImplementation } from "../src/providers/antigravity.ts";
 import { loadProvider, registerProviders } from "../src/providers/index.ts";
 import { emptyUsage, type AgentRequest, type AgentRuntime } from "../src/runtime.ts";
@@ -210,3 +212,62 @@ describe("per-job model choice", () => {
 	});
 });
 
+
+describe("the codex proxy", () => {
+	it("reads CODEX_PROXY_URL and CODEX_PROXY_API, and refuses what cannot work", () => {
+		assert.equal(codexProxyFrom({}), undefined);
+		assert.deepEqual(codexProxyFrom({ CODEX_PROXY_URL: "http://10.10.10.11:8095/" }), { url: "http://10.10.10.11:8095", api: "openai-responses" });
+		assert.deepEqual(codexProxyFrom({ CODEX_PROXY_URL: "https://proxy.test/base/", CODEX_PROXY_API: "openai-completions" }), { url: "https://proxy.test/base", api: "openai-completions" });
+		assert.throws(() => codexProxyFrom({ CODEX_PROXY_URL: "not a url" }), /CODEX_PROXY_URL must be a URL/);
+		assert.throws(() => codexProxyFrom({ CODEX_PROXY_URL: "ftp://x" }), /http or https/);
+		assert.throws(() => codexProxyFrom({ CODEX_PROXY_URL: "http://x", CODEX_PROXY_API: "anthropic" }), /CODEX_PROXY_API must be one of/);
+	});
+
+	it("serves the openai-codex provider and its model ids from the proxy, with the agent's own key", async () => {
+		const models = createModels({ credentials: new FileCredentialStore(authFile({ "openai-codex": { type: "api_key", key: "cp-agent-key" } })) });
+		await registerProviders(models, [{ provider: "openai-codex", modelId: "gpt-6.1-sol" }], { stateDir: tmp(), codexProxy: { url: "http://10.10.10.11:8095" } });
+		const model = models.getModel("openai-codex", "gpt-6.1-sol")!;
+		assert.ok(model);
+		assert.equal(model.baseUrl, "http://10.10.10.11:8095/v1");
+		assert.equal(model.api, "openai-responses");
+		const auth = await models.getAuth(model);
+		assert.equal(auth?.auth?.apiKey ?? (auth as any)?.apiKey, "cp-agent-key");
+	});
+
+	it("takes the key from CODEX_PROXY_API_KEY when auth.json holds none, and is unconfigured without either", async () => {
+		const models = createModels({ credentials: new FileCredentialStore(authFile({})), authContext: { env: async (name: string) => (name === "CODEX_PROXY_API_KEY" ? "cp-env-key" : undefined), fileExists: async () => false } });
+		await registerProviders(models, [{ provider: "openai-codex", modelId: "gpt-6.1-sol" }], { stateDir: tmp(), codexProxy: { url: "http://p.test" } });
+		const auth = await models.getAuth(models.getModel("openai-codex", "gpt-6.1-sol")!);
+		assert.equal(auth?.auth?.apiKey ?? (auth as any)?.apiKey, "cp-env-key");
+		const bare = createModels({ credentials: new FileCredentialStore(authFile({})), authContext: { env: async () => undefined, fileExists: async () => false } });
+		await registerProviders(bare, [{ provider: "openai-codex", modelId: "gpt-6.1-sol" }], { stateDir: tmp(), codexProxy: { url: "http://p.test" } });
+		assert.equal(await bare.getAuth(bare.getModel("openai-codex", "gpt-6.1-sol")!), undefined);
+	});
+
+	it("sends a request to the proxy's /v1/responses with the key as a bearer token, and /v1/chat/completions on request", async () => {
+		const seen: { path: string; authorization?: string }[] = [];
+		const server = createServer((request, response) => {
+			seen.push({ path: request.url ?? "", authorization: request.headers.authorization });
+			response.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: { message: "test stop", type: "invalid_request_error" } }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+		try {
+			for (const [api, path] of [["openai-responses", "/v1/responses"], ["openai-completions", "/v1/chat/completions"]] as const) {
+				const models = createModels({ credentials: new FileCredentialStore(authFile({ "openai-codex": { type: "api_key", key: "cp-agent-key" } })) });
+				await registerProviders(models, [{ provider: "openai-codex", modelId: "gpt-6.1-sol" }], { stateDir: tmp(), codexProxy: { url, api } });
+				const message = await models.complete(models.getModel("openai-codex", "gpt-6.1-sol")!, { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] } as Context);
+				assert.equal(message.stopReason, "error", api);
+				assert.equal(seen.at(-1)?.path, path, api);
+				assert.equal(seen.at(-1)?.authorization, "Bearer cp-agent-key", api);
+			}
+		} finally {
+			server.close();
+		}
+	});
+
+	it("leaves the stock provider alone without a proxy", async () => {
+		const provider = await loadProvider("openai-codex", { stateDir: tmp() });
+		assert.equal(provider.baseUrl, "https://chatgpt.com/backend-api");
+	});
+});

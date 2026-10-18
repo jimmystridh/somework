@@ -50,6 +50,7 @@ import { validateProfile, type AgentProfile, type RoleHooks, type ServiceContext
 import { scriptedModels } from "./providers/faux.ts";
 import { allowlist, type ModelRef } from "./providers/allowlist.ts";
 import { modelCheck } from "./providers/effective-model.ts";
+import { codexProxyFrom } from "./providers/codex-proxy.ts";
 import { registerProviders } from "./providers/index.ts";
 import { RemoteExecutionEnv } from "./sandbox/remote-env.ts";
 import { keepRuntimeAlive } from "./runtime-lifecycle.ts";
@@ -88,7 +89,8 @@ async function buildModels(config: Config, env: NodeJS.ProcessEnv): Promise<{ mo
 		return { models: fake.models, model: { ...fake.model, ...(config.model.effort ? { effort: config.model.effort } : {}) } };
 	}
 	const models = createModels({ credentials: new FileCredentialStore(config.state.authFile) });
-	await registerProviders(models, config.allowedModels, { stateDir: join(config.state.dir, "antigravity") });
+	const codexProxy = codexProxyFrom(env);
+	await registerProviders(models, config.allowedModels, { stateDir: join(config.state.dir, "antigravity"), ...(codexProxy ? { codexProxy } : {}) });
 	return { models, model: config.model };
 }
 
@@ -139,6 +141,8 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
+			const proxy = codexProxyFrom(env);
+			if (proxy && config.model.provider !== "faux") log("info", "codex_proxy_enabled", { url: proxy.url, api: proxy.api, provider: "openai-codex" });
 			const skillAllow = config.skills.allow ?? profile.skills.allow;
 			const setupModels = allowlist(model, config.allowedModels);
 			const modelRefusal = modelCheck({ allowed: setupModels, find: (provider, modelId) => models.getModel(provider, modelId) });
