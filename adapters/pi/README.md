@@ -37,7 +37,7 @@ human). The agent and the requester must both be enrolled with `--side-effects w
 ## Model providers
 | `PI_PROVIDER` | Credential in `auth.json` | Notes |
 |---|---|---|
-| `openai-codex` (default, `PI_MODEL=gpt-5.5`) | `{"type":"oauth", ...}` | the service needs its own login: a refresh token shared with another Pi installation can be invalidated by whichever refreshes first |
+| `openai-codex` (default, `PI_MODEL=gpt-6.1-sol`) | `{"type":"oauth", ...}` | the service needs its own login: a refresh token shared with another Pi installation can be invalidated by whichever refreshes first |
 | `openai` | `{"type":"api_key","key":...}` or `OPENAI_API_KEY` | |
 | `opencode-go` | `{"type":"api_key","key":...}` or `OPENCODE_API_KEY` | built into pi-ai; models such as `deepseek-v4-flash`, `kimi-k3`, `glm-5.3` (full list: `opencodeGoProvider().getModels()`) |
 | `antigravity` | `{"type":"oauth","access","refresh","expires","projectId","email"}` | Google account login done with Pi on a workstation; the service never logs in. Uses the `pi-antigravity` package (pinned), loaded through `jiti` because it ships TypeScript sources; its account file lives under `$PI_STATE_DIR/antigravity`, never `~/.pi`. It only talks to `*.googleapis.com` (the package refuses other base URLs) |

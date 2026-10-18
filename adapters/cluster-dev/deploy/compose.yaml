@@ -45,7 +45,7 @@ services:
       AGENT_VERSION: ${CLUSTER_DEV_VERSION}                  # shown on /profile (the image tag this container runs)
       PI_PROVIDER: ${PI_PROVIDER:-openai-codex}
       CODEX_PROXY_URL: ${CODEX_PROXY_URL:-}                        # set: the openai-codex provider is served by this codex-proxy (this agent's own key goes in secrets/pi/auth.json as {"openai-codex":{"type":"api_key","key":...}})
-      PI_MODEL: ${PI_MODEL:-gpt-5.5}
+      PI_MODEL: ${PI_MODEL:-gpt-6.1-sol}
       PI_ALLOWED_MODELS: ${PI_ALLOWED_MODELS:-}
       PI_EFFORT: ${PI_EFFORT:-}
       PI_FAUX_PLAN: ${PI_FAUX_PLAN:-}

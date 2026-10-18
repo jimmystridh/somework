@@ -91,7 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 	if (shards) validateTable(shards);
 	const effort = env.PI_EFFORT || undefined;
 	if (effort !== undefined && !isEffort(effort)) throw new Error(`PI_EFFORT must be one of ${EFFORTS.join(", ")}`);
-	const model: ModelRef = { provider: env.PI_PROVIDER ?? "openai-codex", modelId: env.PI_MODEL ?? "gpt-5.5", ...(effort ? { effort } : {}) };
+	const model: ModelRef = { provider: env.PI_PROVIDER ?? "openai-codex", modelId: env.PI_MODEL ?? "gpt-6.1-sol", ...(effort ? { effort } : {}) };
 	return {
 		somework: { url: required(env, "SOMEWORK_URL"), keyFile: required(env, "SOMEWORK_KEY_FILE"), caFile: env.SOMEWORK_CA_FILE, requireTls: env.SOMEWORK_REQUIRE_TLS === "1" },
 		state: { dir: env.PI_STATE_DIR ?? "/state", authFile: env.PI_AUTH_FILE ?? "/run/secrets/pi/auth.json" },

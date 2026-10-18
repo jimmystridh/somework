@@ -359,7 +359,7 @@ The model of an agent is three settings that are chosen one by one, not a pair. 
 
 | Layer (lowest first) | Where it comes from | Fields |
 |---|---|---|
-| environment | `PI_PROVIDER` (default `openai-codex`), `PI_MODEL` (default `gpt-5.5`), `PI_EFFORT` (optional, no default) | provider and model always; effort only when set |
+| environment | `PI_PROVIDER` (default `openai-codex`), `PI_MODEL` (default `gpt-6.1-sol`), `PI_EFFORT` (optional, no default) | provider and model always; effort only when set |
 | fleet | `model` in the limits document | any of the three |
 | override | `model` in the agent's override | any of the three |
 | job | `input.model` of one job: `{provider, id}` and/or `{effort}` (provider and id go together) | the same, for that job only |

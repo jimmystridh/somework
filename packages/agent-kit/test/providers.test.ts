@@ -38,12 +38,12 @@ describe("model allowlist", () => {
 	});
 
 	it("always allows the configured default first, without duplicating it", () => {
-		const config = loadConfig({ ...baseEnv, PI_ALLOWED_MODELS: "openai-codex/gpt-5.5,opencode-go/kimi-k3" });
+		const config = loadConfig({ ...baseEnv, PI_ALLOWED_MODELS: "openai-codex/gpt-6.1-sol,opencode-go/kimi-k3" });
 		assert.deepEqual(config.allowedModels, [
-			{ provider: "openai-codex", modelId: "gpt-5.5" },
+			{ provider: "openai-codex", modelId: "gpt-6.1-sol" },
 			{ provider: "opencode-go", modelId: "kimi-k3" },
 		]);
-		assert.deepEqual(loadConfig(baseEnv).allowedModels, [{ provider: "openai-codex", modelId: "gpt-5.5" }]);
+		assert.deepEqual(loadConfig(baseEnv).allowedModels, [{ provider: "openai-codex", modelId: "gpt-6.1-sol" }]);
 		assert.ok(isAllowed(allowlist({ provider: "a", modelId: "b" }, []), { provider: "a", modelId: "b" }));
 		assert.ok(!isAllowed(allowlist({ provider: "a", modelId: "b" }, []), { provider: "a", modelId: "c" }));
 	});
