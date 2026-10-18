@@ -41,6 +41,19 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 		pulls: new GitHubPullFinder({ token: (owner) => context.ownerTokens?.[owner.toLowerCase()] ?? context.gitToken }),
 		...(jiraClient ? { ticketText: async (ticket: string) => [(await jiraClient.getIssue(ticket)).fields.description ?? "", ...(await jiraClient.comments(ticket)).map((comment) => comment.body)].join("\n\n") } : {}),
 		verifiedLabel: settings.jira?.verifiedLabel ?? "AgentTested",
+		...(jiraClient && settings.jira
+			? {
+					ticketLabels: async (ticket: string) => (await jiraClient.getIssue(ticket)).fields.labels ?? [],
+					skipLabel: settings.jira.skipLabel,
+					clearRequest: async (ticket: string) => {
+						const request = settings.jira!.requestLabel.toLowerCase();
+						const present = ((await jiraClient.getIssue(ticket)).fields.labels ?? []).find((label) => label.toLowerCase() === request);
+						if (present === undefined) return;
+						await jiraClient.removeLabel(ticket, present);
+						context.log("info", "jira_write", { ticket, action: "clear_request", label: present });
+					},
+				}
+			: {}),
 		client: context.client,
 		log: context.log,
 		secrets: [context.gitToken, ...Object.values(context.ownerTokens ?? {}), jiraSecrets?.token, jiraSecrets?.passphrase].filter((value): value is string => Boolean(value)),

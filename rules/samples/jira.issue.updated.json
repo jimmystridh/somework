@@ -11,6 +11,7 @@
       "project": "SAD"
     },
     "changed": ["description", "labels"],
+    "labels": { "from": "vat", "to": "vat qa-verify" },
     "actor": "j.doe",
     "repository": {
       "cloneUrl": "https://github.com/example-org/example-repo.git",

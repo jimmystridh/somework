@@ -1,7 +1,9 @@
-// @topics jira.issue.transitioned
+// @topics jira.issue.transitioned jira.issue.updated
 // The event handler of the qa role, installed by the service on its first start (and versioned like any handler).
 // It decides what a ticket transition is worth: nothing (drop), a note for a person (deliver) or one qa.verify job for this same agent (submit).
-// Only a move into the test status starts a verification; every delivery is handled once. Verifications share one application stack, so jobs
+// Two things start a verification: a move into the test status, and the request label being added to a ticket (the update event carries the label lists
+// before and after). A ticket whose labels now include the skip label is never started from here; the service checks the skip label again with the ticket's own
+// labels before it verifies, because a move into the test status carries none. Every delivery is handled once. Verifications share one application stack, so jobs
 // started here wait for each other in the service (the job manager), they do not need to be spaced out by this file.
 // The settings below are written into the file when it is installed; change them with QA_EVENT_*, JIRA_TEST_STATUS, QA_TICKET_PATTERN and
 // QA_RESEED_HANDLER=1, or edit the live copy. It runs in the sandbox with no credentials. Its state is a small file next to the workspaces; the
@@ -21,6 +23,7 @@ const drop = (reason) => ({ action: "drop", reason: reason.slice(0, 500) });
 const deliver = (reason) => ({ action: "deliver", reason: reason.slice(0, 500) });
 
 const plain = (value) => (value !== null && typeof value === "object" && !Array.isArray(value) ? value : {});
+const labelsOf = (value) => new Set(typeof value === "string" ? value.split(/\s+/).filter(Boolean).map((label) => label.toLowerCase()) : []);
 const integer = (value) => (Number.isInteger(value) && value >= 0 ? value : 0);
 
 function load() {
@@ -40,7 +43,19 @@ function save(state) {
 
 export default async function handle({ event, now }) {
 	const data = event && typeof event.data === "object" && event.data !== null && !Array.isArray(event.data) ? event.data : {};
-	if (data.to !== CONFIG.testStatus) return drop(`the ticket did not move into ${CONFIG.testStatus}`);
+	const topic = String(event?.topic ?? "");
+	let why;
+	if (topic === "jira.issue.updated") {
+		const labels = plain(data.labels);
+		const before = labelsOf(labels.from);
+		const after = labelsOf(labels.to);
+		if (!after.has(CONFIG.requestLabel.toLowerCase()) || before.has(CONFIG.requestLabel.toLowerCase())) return drop(`${CONFIG.requestLabel} was not added to the ticket`);
+		if (after.has(CONFIG.skipLabel.toLowerCase())) return drop(`the ticket carries ${CONFIG.skipLabel}`);
+		why = `${CONFIG.requestLabel} was added`;
+	} else {
+		if (data.to !== CONFIG.testStatus) return drop(`the ticket did not move into ${CONFIG.testStatus}`);
+		why = `the ticket moved into ${CONFIG.testStatus}`;
+	}
 
 	const ticket = typeof plain(data.issue).key === "string" ? data.issue.key.trim() : "";
 	if (!TICKET.test(ticket)) return deliver("the event carries no ticket key this agent handles, so no verification was started");
@@ -63,7 +78,7 @@ export default async function handle({ event, now }) {
 
 	return {
 		action: "submit",
-		reason: `verification of ${ticket}`,
+		reason: `verification of ${ticket}: ${why}`,
 		task: {
 			capability: { id: "qa.verify", version: "1" },
 			input: { ticket, app: CONFIG.app, repository: { url: cloneUrl, ref } },

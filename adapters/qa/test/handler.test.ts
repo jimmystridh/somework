@@ -96,6 +96,57 @@ describe("the shipped ticket handler", () => {
 	});
 });
 
+describe("the shipped ticket handler and the labels", () => {
+	/** The same handler fed a label change: the hub carries the label lists before and after a change. */
+	async function labelled(env: Record<string, string> = {}) {
+		const settings = loadQaEventSettings(env);
+		const root = mkdtempSync(join(tmpdir(), "qa-handler-labels-"));
+		mkdirSync(join(root, ".somework-events"));
+		const file = join(root, ".somework-events", `h-${Math.random().toString(36).slice(2)}.mjs`);
+		writeFileSync(file, renderHandler(settings));
+		const module = await import(pathToFileURL(file).href);
+		let n = 0;
+		return (labels: { from: string; to: string } | undefined, options: { key?: string } = {}) =>
+			module.default({ event: { id: `evt_${++n}`, seq: n, topic: "jira.issue.updated", source: "jira", key: options.key ?? `jira:1:change:${n}`, data: { issue: TRANSITIONED.data.issue, changed: ["labels"], actor: "j.doe", repository: TRANSITIONED.data.repository, ...(labels ? { labels } : {}) }, classification: "internal", verified: true, depth: 0, untrusted: true }, agent: {}, now: T0 }, {});
+	}
+
+	it("starts a verification when the request label is added, with the same job as a move into Test", async () => {
+		const decide = await labelled();
+		const decision = await decide({ from: "vat", to: "vat qa-verify" });
+		assert.equal(decision.action, "submit");
+		assert.deepEqual(decision.task.capability, { id: "qa.verify", version: "1" });
+		assert.equal(decision.task.input.ticket, "PROJ-123");
+		assert.match(decision.reason, /qa-verify was added/);
+	});
+
+	it("takes the label in any case, and ignores a label that was already there, one that was taken away and every other change", async () => {
+		const decide = await labelled();
+		assert.equal((await decide({ from: "", to: "QA-Verify" })).action, "submit");
+		assert.equal((await decide({ from: "qa-verify vat", to: "qa-verify vat extra" })).action, "drop", "it was there before");
+		assert.equal((await decide({ from: "qa-verify vat", to: "vat" })).action, "drop", "the agent's own clean-up, or a person taking it away");
+		assert.equal((await decide({ from: "a", to: "a b" })).action, "drop");
+		assert.equal((await decide(undefined)).action, "drop", "an update that is not a label change");
+	});
+
+	it("does not start one for a ticket that now carries the skip label, and follows the names the deployment chose", async () => {
+		const decide = await labelled();
+		const skipped = await decide({ from: "no-qa", to: "no-qa qa-verify" });
+		assert.equal(skipped.action, "drop");
+		assert.match(skipped.reason, /carries no-qa/);
+		const renamed = await labelled({ JIRA_QA_REQUEST_LABEL: "please-test", JIRA_QA_SKIP_LABEL: "manual-only" });
+		assert.equal((await renamed({ from: "", to: "please-test" })).action, "submit");
+		assert.equal((await renamed({ from: "", to: "qa-verify" })).action, "drop");
+		assert.equal((await renamed({ from: "manual-only", to: "manual-only please-test" })).action, "drop");
+	});
+
+	it("handles a delivery once, and still starts a verification for a move into Test", async () => {
+		const decide = await labelled();
+		assert.equal((await decide({ from: "", to: "qa-verify" }, { key: "jira:9" })).action, "submit");
+		assert.equal((await decide({ from: "", to: "qa-verify" }, { key: "jira:9" })).action, "drop");
+		assert.equal((await (await agent()).decide()).action, "submit");
+	});
+});
+
 describe("seeding the handler", () => {
 	const dir = () => mkdtempSync(join(tmpdir(), "qa-seed-"));
 
@@ -106,6 +157,9 @@ describe("seeding the handler", () => {
 		assert.match(store.current(HANDLER)!.source, /"submitCapPerDay": 7/);
 		assert.match(store.current(HANDLER)!.source, /"testStatus": "In Test"/);
 		assert.deepEqual(store.current(HANDLER)!.topics, TOPICS);
+		assert.deepEqual(TOPICS, ["jira.issue.transitioned", "jira.issue.updated"]);
+		assert.match(store.current(HANDLER)!.source, /"requestLabel": "qa-verify"/);
+		assert.match(store.current(HANDLER)!.source, /"skipLabel": "no-qa"/);
 		assert.deepEqual(seedHandler({ stateDir, settings: loadQaEventSettings({ QA_EVENT_CAP_PER_DAY: "9" }), log: silent }), { seeded: false, version: 1 });
 		assert.match(store.current(HANDLER)!.source, /"submitCapPerDay": 7/);
 	});

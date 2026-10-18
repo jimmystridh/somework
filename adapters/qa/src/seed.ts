@@ -1,14 +1,17 @@
 import { readFileSync } from "node:fs";
 import { HandlerStore, handlersDir, type Log } from "@somework/agent-kit";
-import { DEFAULT_TICKET_PATTERN } from "./settings.ts";
+import { DEFAULT_TICKET_PATTERN, loadQaLabels } from "./settings.ts";
 
 export const HANDLER = "qa-ticket";
-export const TOPICS = ["jira.issue.transitioned"];
+export const TOPICS = ["jira.issue.transitioned", "jira.issue.updated"];
 const TEMPLATE = new URL("./handlers/qa-ticket.mjs", import.meta.url);
 
 export interface QaEventSettings {
 	/** The status a ticket waits in for verification (`JIRA_TEST_STATUS`). */
 	testStatus: string;
+	/** A label added to a ticket starts a verification (`JIRA_QA_REQUEST_LABEL`); a ticket that carries the skip label never does (`JIRA_QA_SKIP_LABEL`). */
+	requestLabel: string;
+	skipLabel: string;
 	/** Source of the ticket key pattern (`QA_TICKET_PATTERN`). */
 	ticketPattern: string;
 	/** The application profile a verification started by an event uses. */
@@ -33,6 +36,7 @@ const positive = (env: NodeJS.ProcessEnv, name: string, fallback: number): numbe
 export function loadQaEventSettings(env: NodeJS.ProcessEnv = process.env): QaEventSettings {
 	return {
 		testStatus: env.JIRA_TEST_STATUS || "Test",
+		...loadQaLabels(env),
 		ticketPattern: env.QA_TICKET_PATTERN || DEFAULT_TICKET_PATTERN,
 		app: env.QA_EVENT_APP || "local",
 		...(env.CHAT_REPOSITORY_URL ? { repositoryUrl: env.CHAT_REPOSITORY_URL } : {}),

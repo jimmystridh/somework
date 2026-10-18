@@ -16,6 +16,9 @@ export interface JiraSettings {
 	inProgressStatus: string;
 	/** The label that marks a ticket as verified; only ever added for a `verified` result. */
 	verifiedLabel: string;
+	/** `no-qa`: a ticket that carries it is never verified. `qa-verify`: adding it to a ticket starts a verification, and it is taken away again afterwards. */
+	skipLabel: string;
+	requestLabel: string;
 	/** The writes that wait for the requester's approval (tool names). Absent: all of them. The hand-back that moves a ticket should always stay on the list. */
 	approve?: string[];
 }
@@ -28,6 +31,18 @@ export interface QaSettings extends WindowsEnvSettings {
 	jira?: JiraSettings;
 }
 
+const LABEL = /^[A-Za-z0-9_.-]{1,50}$/;
+
+/** The two labels people use to steer the QA agent from Jira; the shipped handler and the service read the same names. */
+export function loadQaLabels(env: Record<string, string | undefined>): { skipLabel: string; requestLabel: string } {
+	const skipLabel = (env.JIRA_QA_SKIP_LABEL || "no-qa").trim();
+	const requestLabel = (env.JIRA_QA_REQUEST_LABEL || "qa-verify").trim();
+	for (const [name, value] of [["JIRA_QA_SKIP_LABEL", skipLabel], ["JIRA_QA_REQUEST_LABEL", requestLabel]] as const) if (!LABEL.test(value)) throw new Error(`${name} must be a Jira label: letters, digits, dot, dash and underscore, no spaces`);
+	if (skipLabel.toLowerCase() === requestLabel.toLowerCase()) throw new Error("JIRA_QA_SKIP_LABEL and JIRA_QA_REQUEST_LABEL must differ");
+	if (skipLabel.toLowerCase() === (env.JIRA_VERIFIED_LABEL || "AgentTested").toLowerCase() || requestLabel.toLowerCase() === (env.JIRA_VERIFIED_LABEL || "AgentTested").toLowerCase()) throw new Error("the QA skip and request labels must differ from JIRA_VERIFIED_LABEL");
+	return { skipLabel, requestLabel };
+}
+
 const list = (value: string | undefined): string[] => (value ?? "").split(/[,\s]+/).map((item) => item.trim()).filter(Boolean);
 
 /**
@@ -38,6 +53,7 @@ const list = (value: string | undefined): string[] => (value ?? "").split(/[,\s]
  *   QA_BROWSER_ALLOW_HOSTS   hosts the browser may reach, comma separated (default `127.0.0.1,localhost`)
  *   JIRA_URL, JIRA_TOKEN_FILE, JIRA_PFX_FILE, JIRA_PFX_PASSWORD_FILE, JIRA_CA_FILE   the ticket system; without JIRA_URL there is none
  *   JIRA_TEST_STATUS, JIRA_IN_PROGRESS_STATUS, JIRA_VERIFIED_LABEL                      names in that system (defaults Test, In Progress, AgentTested)
+ *   JIRA_QA_SKIP_LABEL, JIRA_QA_REQUEST_LABEL                                            labels people set to steer the agent (defaults no-qa, qa-verify)
  *   QA_JIRA_APPROVE                                                                      the write tools that wait for the requester (default all; a comma list narrows it)
  * Exactly one job runs at a time (`PI_CONCURRENCY=1`): the application under test, the browser and the ticket state are per machine.
  */
@@ -67,6 +83,7 @@ export function loadQaSettings(env: Record<string, string | undefined>, exists: 
 			testStatus: env.JIRA_TEST_STATUS || "Test",
 			inProgressStatus: env.JIRA_IN_PROGRESS_STATUS || "In Progress",
 			verifiedLabel: env.JIRA_VERIFIED_LABEL || "AgentTested",
+			...loadQaLabels(env),
 			...(env.QA_JIRA_APPROVE !== undefined ? { approve: list(env.QA_JIRA_APPROVE) } : {}),
 		};
 	}

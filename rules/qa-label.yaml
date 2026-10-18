@@ -1,0 +1,5 @@
+name: qa-label
+description: A ticket update wakes the QA agent, whose own handler starts a qa.verify job only when the request label (qa-verify) was added to the ticket and the ticket does not carry the skip label (no-qa); every other update is dropped. The agent takes the request label off again when the verification is over.
+owner: agent/qa
+selector: jira.issue.updated
+wake: true

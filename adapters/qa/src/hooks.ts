@@ -37,6 +37,11 @@ export interface QaHooksOptions {
 	/** The repository's pull requests, to tell which ones belong to the ticket (without it the last pull request the ticket's text names is taken). */
 	pulls?: PullFinder;
 	verifiedLabel: string;
+	/** The labels a ticket carries now. With `skipLabel` a ticket that carries it is `skipped`; without it nobody is skipped. */
+	ticketLabels?: (ticket: string) => Promise<string[]>;
+	skipLabel?: string;
+	/** Takes the request label off a ticket once its verification is over, whatever the verdict; failures are logged, never raised. */
+	clearRequest?: (ticket: string) => Promise<void>;
 	client: Pick<SomeWorkClient, "uploadArtifact">;
 	log?: Log;
 	/** Literal secrets to scrub from anything that is reported. */
@@ -170,12 +175,30 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 		return input;
 	}
 
-	return {
+	/** The skip label on the ticket itself, read from the ticket system: an event that moved the ticket into the test status carries no labels. */
+	async function optedOutOf(input: any): Promise<string | undefined> {
+		if (!options.ticketLabels || !options.skipLabel || typeof input?.ticket !== "string") return undefined;
+		const ticket = input.ticket.trim();
+		try {
+			const skip = options.skipLabel.toLowerCase();
+			if ((await options.ticketLabels(ticket)).some((label) => label.toLowerCase() === skip)) {
+				log("info", "ticket_opted_out", { ticket, label: options.skipLabel });
+				return `the ticket carries the label ${options.skipLabel}, so it is not verified (take the label off to verify it)`;
+			}
+		} catch (error) {
+			log("warn", "ticket_labels_failed", { ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
+		}
+		return undefined;
+	}
+
+	const hooks: RoleHooks = {
 		extensions: options.extensions,
 
 		async prepareInput(input) {
 			// a ticket this agent is not configured for is `skipped`: the job completes without the model and without a call to the ticket system
 			if (typeof input?.ticket === "string" && !options.ticketPattern.test(input.ticket.trim())) return { ...input, [GATE_KEY]: `the ticket key ${input.ticket.trim().slice(0, 40)} does not match the keys this agent handles` };
+			const optedOut = await optedOutOf(input);
+			if (optedOut) return { ...input, [GATE_KEY]: optedOut };
 			return await pickRevision(input);
 		},
 
@@ -282,6 +305,17 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 			guarded?.take(`somework:${taskId}`);
 		},
 	};
+
+	const produce = hooks.result!.bind(hooks);
+	hooks.result = async (base, context) => {
+		try {
+			return await produce(base, context);
+		} finally {
+			const ticket = String(context.input?.ticket ?? "").trim();
+			if (options.clearRequest && ticket !== "" && options.ticketPattern.test(ticket)) await options.clearRequest(ticket).catch((error: unknown) => log("warn", "request_label_not_cleared", { ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) }));
+		}
+	};
+	return hooks;
 }
 
 interface CollectedEvidence extends Evidence {

@@ -136,6 +136,7 @@ machine. Role-specific:
 | `JIRA_TOKEN_FILE` | personal access token (bearer) |
 | `JIRA_PFX_FILE`, `JIRA_PFX_PASSWORD_FILE` | client certificate for hosts that demand mutual TLS, and its password (an empty file for none) |
 | `JIRA_CA_FILE` | a private CA that signed the host's certificate |
+| `JIRA_QA_REQUEST_LABEL`, `JIRA_QA_SKIP_LABEL` | labels people set (defaults `qa-verify`, `no-qa`): the first starts a verification and is taken off afterwards, the second prevents one |
 | `JIRA_TEST_STATUS`, `JIRA_IN_PROGRESS_STATUS`, `JIRA_VERIFIED_LABEL` | names in that system (defaults `Test`, `In Progress`, `AgentTested`) |
 | `QA_EVENT_APP`, `QA_EVENT_CAP_PER_DAY`, `QA_EVENT_BUDGET_TOKENS`, `QA_EVENT_BUDGET_MINUTES`, `QA_RESEED_HANDLER` | the ticket event handler (see Events) |
 
@@ -146,7 +147,12 @@ Every message sent to QA is read by its model in a run of its own; it answers, o
 ## Events
 
 A ticket that moves into the test status starts a verification without anyone asking. The rule `rules/qa-ticket.yaml` (owner `agent/qa`, selector `jira.issue.transitioned`, `wake: true`) wakes the agent; its shipped handler `src/handlers/qa-ticket.mjs` (installed into the agent's handler directory on the first start and versioned like any handler) drops every move into another status and decides for the rest: one `qa.verify` v1 job for the agent itself (`submit`) with the ticket key (checked against `QA_TICKET_PATTERN`), the application profile `QA_EVENT_APP` (default `local`), the repository and ref of the event (`CHAT_REPOSITORY_URL` and `HEAD` when it names none) and a budget of 4 000 000 tokens / 60 minutes. A delivery is handled once; past `QA_EVENT_CAP_PER_DAY` (default 40) the event goes to a person (`deliver`). The job holds `app-stack` like any other verification, so tickets that arrive together wait for each other. Its ticket writes run without asking (the standing approval of the profile), and its result is posted to the manager as a message.
-Settings (written into the handler when it is installed; `QA_RESEED_HANDLER=1` saves the current ones as a new version): `JIRA_TEST_STATUS` (default `Test`), `QA_TICKET_PATTERN`, `QA_EVENT_APP`, `QA_EVENT_CAP_PER_DAY`, `QA_EVENT_BUDGET_TOKENS`, `QA_EVENT_BUDGET_MINUTES`.
+**Steering a ticket with labels.** Two labels, spelled by `JIRA_QA_REQUEST_LABEL` (`qa-verify`) and `JIRA_QA_SKIP_LABEL` (`no-qa`):
+
+* `qa-verify` **starts** a verification of a ticket in any status. Adding it to a ticket is a `jira.issue.updated` event that carries the label lists before and after (`data.labels.from` / `.to`, from the hub's Jira mapping); the rule `rules/qa-label.yaml` wakes the agent and the same handler starts the same `qa.verify` job as a move into the test status does. A label that was already there, one that was taken away and every other edit are dropped. When the verification is over, **whatever the verdict** (also a skipped or blocked one), the service takes the label off again with a narrow write of its own, `clear_request` (only that label, only when present, failures are logged and never change the result), so it is a one-shot request and adding it again asks again.
+* `no-qa` **prevents** a verification, from every start (a move into the test status, `qa-verify`, a message to the agent). The handler cannot see a ticket's labels in a transition event, so the service reads the ticket's labels in `prepareInput`, before the model runs: a ticket that carries the label is `skipped` with a reason that names it (nothing else is read or written, apart from the request label being taken off). `no-qa` wins over `qa-verify`. If the labels cannot be read the verification goes ahead and reports the outage itself. To verify such a ticket anyway, take the label off.
+
+Settings (written into the handler when it is installed; `QA_RESEED_HANDLER=1` saves the current ones as a new version): `JIRA_TEST_STATUS` (default `Test`), `QA_TICKET_PATTERN`, `QA_EVENT_APP`, `QA_EVENT_CAP_PER_DAY`, `QA_EVENT_BUDGET_TOKENS`, `QA_EVENT_BUDGET_MINUTES`, `JIRA_QA_REQUEST_LABEL`, `JIRA_QA_SKIP_LABEL`. The handler now listens to `jira.issue.updated` as well: after an update of the code **reseed it once** (`QA_RESEED_HANDLER=1`) so the live copy has the new topic.
 
 ## Skills
 
