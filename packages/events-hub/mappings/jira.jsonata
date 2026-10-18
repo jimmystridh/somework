@@ -1,7 +1,7 @@
 /* Jira Data Center webhook -> events (webhookEvent, issue, changelog, comment, user, timestamp). Shapes: rules/samples/ and docs/RULES.md.
    The webhook carries neither a repository nor a revision, so `repository` comes from the source's static `defaults` block of the hub
    configuration: defaults.repository for everything, defaults.projects.<PROJECT KEY>.repository to override it for one project. Jira sends
-   no delivery id, so keys are built from ids that repeat when Jira resends the same change (issue id, changelog id, comment id). Free text
+   no delivery id, so keys are built from ids that repeat when Jira resends the same change (issue id, changelog id, comment id). A label change carries the label lists before and after (space separated, 500 characters each), because label names are what a rule can act on. Free text
    leaves only as a 500-character excerpt marked excerpt:true. No e-mail addresses and no display names are carried, only user names. */
 (
   $b := body;
@@ -32,6 +32,7 @@
     }
     : $we = "jira:issue_updated" and $count($b.changelog.items) > 0 ? (
       $status := $b.changelog.items[field = "status"][0];
+      $labelItem := $b.changelog.items[field = "labels"][0];
       $change := $b.changelog.id ? $string($b.changelog.id) : $string($b.timestamp);
       $status ? {
         "topic": "jira.issue.transitioned",
@@ -46,7 +47,10 @@
       } : {
         "topic": "jira.issue.updated",
         "key": "jira:" & $id & ":change:" & $change,
-        "data": { "issue": $issueData, "changed": [$b.changelog.items.field][[0..29]], "actor": $actor, "repository": $repository }
+        "data": $merge([
+          { "issue": $issueData, "changed": $b.changelog.items.field[[0..29]][], "actor": $actor, "repository": $repository },
+          $labelItem ? { "labels": { "from": $clip($labelItem.fromString, 500) ? $clip($labelItem.fromString, 500) : "", "to": $clip($labelItem.toString, 500) ? $clip($labelItem.toString, 500) : "" } }
+        ])
       }
     )
     : $we = "comment_created" and $b.comment.id ? {

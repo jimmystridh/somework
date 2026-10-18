@@ -1,0 +1,153 @@
+{
+  "description": "a label change carries the labels before and after, which is what a rule can act on",
+  "input": {
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "Atlassian HttpClient 4.2.1 / JIRA-9.12.4 / 912004"
+    },
+    "body": {
+      "timestamp": 1759651200000,
+      "user": {
+        "self": "https://jira.example.com/rest/api/2/user?username=anna",
+        "name": "anna",
+        "key": "JIRAUSER71214",
+        "emailAddress": "canary-anna@visma.example",
+        "displayName": "Anna Svensson",
+        "active": true,
+        "timeZone": "Europe/Stockholm",
+        "avatarUrls": {
+          "48x48": "https://jira.example.com/avatar"
+        }
+      },
+      "webhookEvent": "jira:issue_updated",
+      "issue": {
+        "id": "123456",
+        "key": "ADM-1234",
+        "fields": {
+          "summary": "VAT report rounds .5 down for SEK",
+          "issuetype": {
+            "id": "1",
+            "name": "Bug"
+          },
+          "project": {
+            "id": "10000",
+            "key": "ADM",
+            "name": "Administration"
+          },
+          "priority": {
+            "id": "2",
+            "name": "High"
+          },
+          "status": {
+            "id": "10001",
+            "name": "Testing"
+          },
+          "labels": [
+            "vat",
+            "regression"
+          ],
+          "assignee": {
+            "self": "https://jira.example.com/rest/api/2/user?username=bob",
+            "name": "bob",
+            "key": "JIRAUSER54595",
+            "emailAddress": "canary-bob@visma.example",
+            "displayName": "Bob Karlsson",
+            "active": true,
+            "timeZone": "Europe/Stockholm",
+            "avatarUrls": {
+              "48x48": "https://jira.example.com/avatar"
+            }
+          },
+          "reporter": {
+            "self": "https://jira.example.com/rest/api/2/user?username=anna",
+            "name": "anna",
+            "key": "JIRAUSER71214",
+            "emailAddress": "canary-anna@visma.example",
+            "displayName": "Anna Svensson",
+            "active": true,
+            "timeZone": "Europe/Stockholm",
+            "avatarUrls": {
+              "48x48": "https://jira.example.com/avatar"
+            }
+          },
+          "description": "CANARY-DESCRIPTION-START The VAT report shows the wrong total.",
+          "created": "2026-10-01T09:00:00.000+0200",
+          "updated": "2026-10-05T10:00:00.000+0200",
+          "customfield_10042": "CANARY-CUSTOMFIELD",
+          "comment": {
+            "comments": [
+              {
+                "body": "CANARY-EMBEDDED-COMMENT"
+              }
+            ]
+          }
+        },
+        "self": "https://jira.example.com/rest/api/2/issue/123456"
+      },
+      "changelog": {
+        "id": "98770",
+        "items": [
+          {
+            "field": "labels",
+            "from": null,
+            "fromString": "vat regression",
+            "to": null,
+            "toString": "vat regression qa-verify"
+          }
+        ]
+      }
+    },
+    "receivedAt": "2026-10-05T10:00:02.000Z",
+    "source": "jira",
+    "defaults": {
+      "repository": {
+        "cloneUrl": "https://github.com/example-org/example-repo.git",
+        "ref": "refs/heads/main"
+      },
+      "projects": {
+        "OPS": {
+          "repository": {
+            "cloneUrl": "https://github.com/example-org/ops-repo.git",
+            "ref": "refs/heads/release"
+          }
+        }
+      }
+    }
+  },
+  "expected": [
+    {
+      "topic": "jira.issue.updated",
+      "key": "jira:123456:change:98770",
+      "data": {
+        "issue": {
+          "key": "ADM-1234",
+          "summary": "VAT report rounds .5 down for SEK",
+          "url": "https://jira.example.com/browse/ADM-1234",
+          "type": "Bug",
+          "project": "ADM"
+        },
+        "changed": [
+          "labels"
+        ],
+        "actor": "anna",
+        "repository": {
+          "cloneUrl": "https://github.com/example-org/example-repo.git",
+          "ref": "refs/heads/main"
+        },
+        "labels": {
+          "from": "vat regression",
+          "to": "vat regression qa-verify"
+        }
+      },
+      "classification": "internal"
+    }
+  ],
+  "canaries": [
+    "canary-anna@visma.example",
+    "canary-bob@visma.example",
+    "CANARY-CUSTOMFIELD",
+    "CANARY-EMBEDDED-COMMENT",
+    "Anna Svensson",
+    "Bob Karlsson"
+  ]
+}
