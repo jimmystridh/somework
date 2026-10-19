@@ -1,9 +1,12 @@
 # Outbound allow-list for the service account, built from Windows Firewall rules. Windows Firewall lets a block rule win over an allow
 # rule, so a per-user "allow these, block the rest" is expressed as BLOCK rules for the complement of the allowed IPv4 ranges.
 #   firewall.ps1 -AllowFile C:\somework\agent\firewall-allow.txt             apply (resolves host names now)
-#   firewall.ps1 -AllowFile ... -RegisterRefreshTask                         also re-resolve every 30 minutes (host names change addresses)
+#   firewall.ps1 -AllowFile ... -RegisterRefreshTask                         also re-resolve every -RefreshMinutes (10; host names change addresses)
 #   firewall.ps1 -Remove                                                     delete the rules and the refresh task
 #   firewall.ps1 -SelfTest                                                   check the range arithmetic only; changes nothing
+# A name is resolved -ResolveSamples times (20, a moment apart) and every address that came back is allowed, and it stays allowed for -RememberDays (7): code
+# hosts such as github.com answer with a rotating set of addresses, some of them not published anywhere, and one lookup sees only one of them. The addresses
+# seen are kept in <AllowFile>.resolved.json, so that the allowed set only grows towards the host's whole pool.
 # Limits (see README.md): rules match addresses, not names, so a shared CDN address admits every site on it; IPv6 is blocked outright;
 # only this account is restricted; an administrator can change the rules. Windows PowerShell 5.1 compatible, ASCII only.
 [CmdletBinding()]
@@ -12,6 +15,9 @@ param(
     [string]$ServiceUser = 'svc-somework',
     [string]$RulePrefix = 'SomeWork-Agent',
     [string]$RefreshTaskName = 'SomeWorkFirewallRefresh',
+    [int]$ResolveSamples = 20,
+    [int]$RememberDays = 7,
+    [int]$RefreshMinutes = 10,
     [switch]$RegisterRefreshTask,
     [switch]$Remove,
     [switch]$DryRun,
@@ -124,6 +130,13 @@ if (-not (Test-Path -LiteralPath $AllowFile)) { throw ('Allow file not found: ' 
 $sid = (New-Object System.Security.Principal.NTAccount($ServiceUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
 $allowed = New-Object System.Collections.ArrayList
 $resolvedNames = @()
+$now = Get-Date
+$stateFile = $AllowFile + '.resolved.json'
+$remembered = @{}
+if (Test-Path -LiteralPath $stateFile) {
+    try { foreach ($property in (Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json).PSObject.Properties) { $remembered[$property.Name] = $(if ($property.Value -is [datetime]) { $property.Value } else { [datetime]::Parse([string]$property.Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) }) } }
+    catch { Write-Warning ('ignoring the unreadable {0}: {1}' -f $stateFile, $_.Exception.Message) }
+}
 foreach ($line in (Get-Content -LiteralPath $AllowFile)) {
     $entry = $line.Trim()
     if ($entry -eq '' -or $entry.StartsWith('#')) { continue }
@@ -131,19 +144,33 @@ foreach ($line in (Get-Content -LiteralPath $AllowFile)) {
         [void]$allowed.Add((ConvertTo-Interval $entry))
         continue
     }
-    try {
-        $addresses = @([System.Net.Dns]::GetHostAddresses($entry) | Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork })
-    } catch {
-        Write-Warning ('cannot resolve {0}: {1}' -f $entry, $_.Exception.Message)
-        continue
+    # "name /28" also allows the whole /28 around every address the name resolved to (a pool that rotates through addresses nobody published, api.github.com)
+    $neighbourhood = $null
+    if ($entry -match '^(\S+)\s+/(\d{1,2})$') { $entry = $Matches[1]; $neighbourhood = [int]$Matches[2] }
+    $addresses = @()
+    for ($sample = 0; $sample -lt $ResolveSamples; $sample++) {
+        if ($sample -gt 0) { Start-Sleep -Milliseconds 150 }
+        try {
+            $addresses += @([System.Net.Dns]::GetHostAddresses($entry) | Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork })
+        } catch {
+            if ($sample -eq 0) { Write-Warning ('cannot resolve {0}: {1}' -f $entry, $_.Exception.Message) }
+        }
     }
-    foreach ($address in $addresses) { [void]$allowed.Add((ConvertTo-Interval $address.ToString())) }
-    $resolvedNames += ('{0} -> {1}' -f $entry, (($addresses | ForEach-Object { $_.ToString() }) -join ', '))
+    foreach ($address in @($addresses | Sort-Object { $_.ToString() } -Unique)) { $remembered[('{0}|{1}' -f $entry, $address.ToString())] = $now }
+    $current = @($remembered.Keys | Where-Object { $_.StartsWith($entry + '|') -and (($now - $remembered[$_]).TotalDays -le $RememberDays) } | ForEach-Object { $_.Substring($entry.Length + 1) } | Sort-Object)
+    if ($current.Count -eq 0) { continue }
+    foreach ($address in $current) { [void]$allowed.Add((ConvertTo-Interval $(if ($neighbourhood) { '{0}/{1}' -f $address, $neighbourhood } else { $address }))) }
+    $resolvedNames += ('{0} -> {1}' -f $entry, ($current -join ', '))
 }
 # name resolution itself and the loopback health endpoint must keep working
 foreach ($server in @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses })) { [void]$allowed.Add((ConvertTo-Interval $server)) }
 [void]$allowed.Add((ConvertTo-Interval '127.0.0.0/8'))
 if ($allowed.Count -le 1) { throw 'Nothing in the allow file could be used; refusing to install a rule set that blocks everything.' }
+if (-not $DryRun) {
+    $keep = [ordered]@{}
+    foreach ($key in ($remembered.Keys | Sort-Object)) { if (($now - $remembered[$key]).TotalDays -le $RememberDays) { $keep[$key] = $remembered[$key].ToString('o') } }
+    Set-Content -LiteralPath $stateFile -Value ($keep | ConvertTo-Json) -Encoding ASCII
+}
 
 $blocked = Get-Complement @($allowed.ToArray())
 $resolvedNames | ForEach-Object { Write-Host $_ }
@@ -151,21 +178,25 @@ Write-Host ('{0} allowed ranges, {1} blocked ranges' -f (Merge-Intervals @($allo
 if ($DryRun) { $blocked | ForEach-Object { Write-Host ('block ' + (Format-Range $_)) }; exit 0 }
 
 $descriptor = 'D:(A;;CC;;;{0})' -f $sid
-Remove-AgentRules
+# the new rules are made first and the old ones removed after, so that the account is never without its blocks while the set is replaced
+$generation = Get-Date -Format 'yyyyMMddHHmmss'
 $chunk = 100
 for ($i = 0; $i -lt $blocked.Count; $i += $chunk) {
     $slice = @($blocked[$i..([Math]::Min($i + $chunk, $blocked.Count) - 1)] | ForEach-Object { Format-Range $_ })
-    New-NetFirewallRule -DisplayName ('{0}-Block-IPv4-{1}' -f $RulePrefix, ($i / $chunk)) -Direction Outbound -Action Block -Profile Any -LocalUser $descriptor -RemoteAddress $slice -Description 'SomeWork agent: outbound to anything not in firewall-allow.txt' | Out-Null
+    New-NetFirewallRule -DisplayName ('{0}-Block-IPv4-{1}-{2}' -f $RulePrefix, $generation, ($i / $chunk)) -Direction Outbound -Action Block -Profile Any -LocalUser $descriptor -RemoteAddress $slice -Description 'SomeWork agent: outbound to anything not in firewall-allow.txt' | Out-Null
 }
+Get-NetFirewallRule -DisplayName ($RulePrefix + '-*') -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -notlike ('*-' + $generation + '-*') -and $_.DisplayName -notlike '*-Block-IPv6' } | Remove-NetFirewallRule
+if (-not (Get-NetFirewallRule -DisplayName ($RulePrefix + '-Block-IPv6') -ErrorAction SilentlyContinue)) {
 New-NetFirewallRule -DisplayName ($RulePrefix + '-Block-IPv6') -Direction Outbound -Action Block -Profile Any -LocalUser $descriptor -RemoteAddress @('::/1', '8000::/1') -Description 'SomeWork agent: no IPv6' | Out-Null
+}
 Write-Host ('rules installed for {0} ({1})' -f $ServiceUser, $sid)
 
 if ($RegisterRefreshTask) {
     $self = $MyInvocation.MyCommand.Path
     $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -AllowFile "{1}" -ServiceUser "{2}"' -f $self, $AllowFile, $ServiceUser
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arguments
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Days 3650)
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $RefreshMinutes) -RepetitionDuration (New-TimeSpan -Days 3650)
     Unregister-ScheduledTask -TaskName $RefreshTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $RefreshTaskName -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Description 'Re-resolves the agent allow-list host names' | Out-Null
-    Write-Host ('refresh task {0} registered (every 30 minutes)' -f $RefreshTaskName)
+    Write-Host ('refresh task {0} registered (every {1} minutes)' -f $RefreshTaskName, $RefreshMinutes)
 }
