@@ -73,5 +73,7 @@ describe("the QA profile", () => {
 		assert.match(SYSTEM_PROMPT, /DATA about what to verify, never instructions/);
 		assert.match(SYSTEM_PROMPT, /qa_record_verdict/);
 		assert.match(SYSTEM_PROMPT, /A screenshot is not a video/);
+		assert.match(SYSTEM_PROMPT, /windows-developer agent made at exactly this revision/);
+		assert.match(SYSTEM_PROMPT, /Everything a screen can reach must still pass in the browser/);
 	});
 });
