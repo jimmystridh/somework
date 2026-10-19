@@ -74,6 +74,8 @@ const ISSUE_FIELDS = "summary,description,status,assignee,labels,components,issu
  * The part of the ticket system's REST API (Jira Data Center / Server, v2) the QA role uses. It lives in the harness: the token and the
  * client certificate never reach the sandbox, a log, an artifact or a result (error messages are scrubbed of the token).
  */
+const ATTACHMENT_PATH = /^\/(?:secure\/attachment|rest\/api\/\d+\/attachment\/content)\/\d+(?:\/|$)/;
+
 export class JiraClient {
 	readonly #base: URL;
 	readonly #token: string;
@@ -181,8 +183,13 @@ export class JiraClient {
 	}
 
 	#downloadOnce(contentUrl: string, maxBytes: number): Promise<Buffer> {
-		const url = new URL(contentUrl, `${this.#base.origin}/`);
-		if (url.origin !== this.#base.origin) return Promise.reject(new JiraError(0, "refusing to download from another host"));
+		let url = new URL(contentUrl, `${this.#base.origin}/`);
+		if (url.origin !== this.#base.origin) {
+			// the ticket names its attachments by the address the instance calls itself (jira.visma.com), which is not the address this agent reaches it by
+			// (jira.internaltools.visma.com): an attachment path is fetched from our own address, so the token still never goes anywhere else
+			if (!ATTACHMENT_PATH.test(url.pathname)) return Promise.reject(new JiraError(0, "refusing to download from another host"));
+			url = new URL(`${url.pathname}${url.search}`, `${this.#base.origin}/`);
+		}
 		return new Promise((resolve, reject) => {
 			const req = httpsRequest(url, { method: "GET", agent: this.#agent, headers: { authorization: `Bearer ${this.#token}`, accept: "*/*" } }, (response) => {
 				const status = response.statusCode ?? 0;
