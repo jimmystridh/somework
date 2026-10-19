@@ -18,6 +18,13 @@
       "timeoutMinutes": 240,
       "blockPushOnFailure": true,
       "persistentWorkspace": true
+    },
+    "web-install": {
+      "command": "bun install --frozen-lockfile",
+      "cwd": "Source/admin.web",
+      "timeoutMinutes": 30,
+      "blockPushOnFailure": true,
+      "persistentWorkspace": true
     }
   },
   "test": {
@@ -25,6 +32,12 @@
       "command": "node --test --test-concurrency=1 $(ls test/*.test.ts | grep -vE 'tls|wake|worker')",
       "cwd": "sdk/typescript",
       "timeoutMinutes": 20,
+      "blockPushOnFailure": true
+    },
+    "web-unit": {
+      "command": "node node_modules/vitest/vitest.mjs run",
+      "cwd": "Source/admin.web",
+      "timeoutMinutes": 60,
       "blockPushOnFailure": true
     }
   },
