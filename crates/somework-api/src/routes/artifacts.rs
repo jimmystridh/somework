@@ -1,7 +1,7 @@
 use axum::{
     Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{StatusCode, header},
     response::IntoResponse,
     routing::{get, post, put},
@@ -10,13 +10,16 @@ use somework_domain::artifacts::{BeginUpload, CompleteUpload};
 
 use crate::{http::*, state::AppState};
 
+/// The body of a presigned upload: axum would stop it at 2 MiB, but recordings are bigger. The domain's own `max_artifact_bytes` (1 GiB by default) is checked when the upload begins and its size when it completes.
+const OBJECT_BODY_LIMIT: usize = 1024 * 1024 * 1024;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/artifacts/uploads", post(begin))
         .route("/v1/artifacts/{id}/complete", post(complete))
         .route("/v1/artifacts/{id}/{version}", get(metadata))
         .route("/v1/artifacts/{id}/{version}/download-grants", post(download_grant))
-        .route("/v1/objects/{grant}", put(object_put).get(object_get))
+        .route("/v1/objects/{grant}", put(object_put).get(object_get).layer(DefaultBodyLimit::max(OBJECT_BODY_LIMIT)))
 }
 
 async fn begin(State(s): State<AppState>, Auth(ctx): Auth, Body(req): Body<BeginUpload>) -> ApiResult {

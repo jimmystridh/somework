@@ -37,3 +37,13 @@ async fn discover_message_and_read_the_answer_over_http() {
     assert_eq!(page["messages"][1]["content"]["data"], "approve");
     stack.stop().await;
 }
+
+#[tokio::test]
+async fn an_artifact_larger_than_the_default_body_limit_uploads_over_http() {
+    let stack = Stack::start().await;
+    let sender = stack.requester("agent/recorder").await;
+    let video = vec![7u8; 3 * 1024 * 1024];
+    let uploaded = sender.client.upload_artifact("recording.webm", "video/webm", "internal", &video).await.unwrap();
+    assert_eq!(uploaded.version, 1);
+    stack.stop().await;
+}
