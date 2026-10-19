@@ -11,6 +11,7 @@ export const CHAT_INSTRUCTIONS = `You are the QA agent of this platform, on a Wi
 You can read the ticket system (jira_get_issue, jira_search, jira_changelog, jira_get_comments, and the ticket's attachments with jira_get_attachments: look at them when a ticket has any). Do the reading first and answer from what you found; do not tell the requester to rephrase when you can look it up.
 You hold no credential to push to the code host or to write to the ticket system from a conversation (the verification job has its own approved tools for the ticket system). Deliver changes as a clear patch or description and say that someone with push access must apply it; do not pretend to have pushed anything.
 When you are asked to verify tickets ("the tickets in Test", "verify SAD-123", "check again what failed yesterday"), find them with jira_search or jira_get_issue and call verify_ticket once for each. That is the real verification, and it runs as a job in the background: the application stack is used by one verification at a time, so several tickets run one after another and each result is posted to the conversation when it is done. Do not verify a ticket by hand with your own commands, and do not start a ticket that already carries the verified label unless you were asked to run it again. Do not start more than about five at once: say which you started and which you left out, and why. While a verification runs the application stack is its own: look at the resources tool before you start the application by hand.
+When a verification ends blocked because something has to be built or run that you do not run yourself (a unit or regression spec, lint, a build), do not ask a person to do it: ask the windows-developer agent with message_send (find it with agent_search if you need to). Give it the repository, the exact revision (a SHA or refs/pull/N/head), the exact spec or command, that it must change and push nothing, and that you need pass or fail with the failing output. It has bun and the front end's install and unit-test profiles (web-install, web-unit). When its answer arrives, start verify_ticket again with its result in the scenario; a spec that passed there counts as evidence, a spec that failed is a failed check.
 If you have the watch_pull_request tool, use it on a pull request you were asked to follow, or whose CI or build result or review comments you are waiting for (the pull request of a fix under verification, for example), instead of polling it. ${PR_WATCH_INSTRUCTIONS}`;
 
 const VERDICT_WORDS: Record<string, string> = {
@@ -55,10 +56,12 @@ export function describeQaResult(result: unknown): string | undefined {
 }
 
 /** The verification as a tool: what the model may call when the manager asks for a ticket in plain words. */
-export function verifyTicketTool(ticketPattern: RegExp, defaults: { url?: string; ref?: string }): JobTool {
+export function verifyTicketTool(ticketPattern: RegExp, defaults: { url?: string; ref?: string }, profiles: readonly string[] = []): JobTool {
 	return {
 		name: "verify_ticket",
-		description: "Verify one ticket in the browser against its fix: the revision from the ticket's pull request, the application started from its profile, evidence, a verdict (verified, not_fixed or blocked) and the update of the ticket. Give the ticket key; the rest is optional: `scenario` (what to check, in words), `app` (the application profile) and `repo`/`ref` (another repository or revision than the default).",
+		description:
+			"Verify one ticket in the browser against its fix: the revision from the ticket's pull request, the application started from its profile, evidence, a verdict (verified, not_fixed or blocked) and the update of the ticket. Give the ticket key; the rest is optional: `scenario` (what to check, in words), `app` (the application profile) and `repo`/`ref` (another repository or revision than the default). Leave an option out when you have no reason to set it; an empty value is the same as leaving it out." +
+			(profiles.length > 0 ? ` The only application profiles of this machine are: ${profiles.join(", ")}. Leave app out unless the requester names one of them; never make up a name such as web.` : ""),
 		parameters: Type.Object({
 			ticket: Type.String({ description: "the ticket key, for example SAD-123" }),
 			scenario: Type.Optional(Type.String({ maxLength: 1000 })),
@@ -69,12 +72,14 @@ export function verifyTicketTool(ticketPattern: RegExp, defaults: { url?: string
 		plan(args: { ticket?: string; scenario?: string; app?: string; repo?: string; ref?: string }): JobPlan | { refuse: string } {
 			const ticket = String(args.ticket ?? "").trim();
 			if (!ticketPattern.test(ticket)) return { refuse: `${ticket.slice(0, 40) || "(no key)"} is not a ticket key this agent handles` };
-			if (args.app !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/.test(args.app)) return { refuse: "app must be the name of an application profile of this machine" };
-			const target = repositoryTarget({ ...(args.repo ? { repo: args.repo } : {}), ...(args.ref ? { ref: args.ref } : {}) }, defaults);
+			const app = args.app?.trim() || undefined;
+			if (app !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/.test(app)) return { refuse: "app must be the name of an application profile of this machine" };
+			if (app !== undefined && profiles.length > 0 && !profiles.includes(app)) return { refuse: `there is no application profile "${app.slice(0, 40)}" on this machine; the profiles are: ${profiles.join(", ")}. Leave app out to use the default` };
+			const target = repositoryTarget({ ...(args.repo?.trim() ? { repo: args.repo.trim() } : {}), ...(args.ref?.trim() ? { ref: args.ref.trim() } : {}) }, defaults);
 			if ("refuse" in target) return target;
 			return {
 				capability: { id: "qa.verify", version: "1" },
-				input: { ticket, repository: { url: target.url, ref: target.ref }, ...(args.scenario ? { scenario: args.scenario.slice(0, 1000) } : {}), ...(args.app ? { app: args.app } : {}) },
+				input: { ticket, repository: { url: target.url, ref: target.ref }, ...(args.scenario?.trim() ? { scenario: args.scenario.slice(0, 1000) } : {}), ...(app ? { app } : {}) },
 				label: `verify ${ticket}`,
 			};
 		},
@@ -82,13 +87,13 @@ export function verifyTicketTool(ticketPattern: RegExp, defaults: { url?: string
 }
 
 
-export function qaChat(env: NodeJS.ProcessEnv = process.env, ticketPattern: RegExp = /^[A-Z][A-Z0-9]+-\d+$/, tools?: { extension: ThreadRoleHooks["extension"] }): ThreadRoleHooks {
+export function qaChat(env: NodeJS.ProcessEnv = process.env, ticketPattern: RegExp = /^[A-Z][A-Z0-9]+-\d+$/, tools?: { extension: ThreadRoleHooks["extension"] }, profiles: readonly string[] = []): ThreadRoleHooks {
 	const defaults = { url: env.CHAT_REPOSITORY_URL, ref: env.CHAT_REPOSITORY_REF };
 	return {
 		instructions: CHAT_INSTRUCTIONS,
 		describeResult: describeQaResult,
 		jobResources: (capabilityId) => (capabilityId === "qa.verify" ? [...QA_RESOURCES] : undefined),
-		jobTools: [verifyTicketTool(ticketPattern, defaults)],
+		jobTools: [verifyTicketTool(ticketPattern, defaults, profiles)],
 		...(tools ? { extension: tools.extension, toolNames: CHAT_READ_TOOLS } : {}),
 		...(defaults.url ? { checkout: () => ({ repoUrl: defaults.url!, ...(defaults.ref ? { ref: defaults.ref } : {}) }) } : {}),
 	};

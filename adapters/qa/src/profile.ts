@@ -6,7 +6,7 @@ import { SYSTEM_PROMPT } from "./prompt.ts";
 /** The QA agent verifies and never changes the checkout: anything that would is asked about, on top of the Windows machine rules. */
 export const QA_APPROVAL_PATTERNS: [RegExp, string][] = [
 	...WINDOWS_APPROVAL_PATTERNS,
-	[/\bgit\s+(commit|add|reset|clean|stash|rebase|merge|cherry-pick|apply|restore|am|revert|rm|mv)\b/, "change the checkout (QA only verifies)"],
+	[/\bgit\s+(commit|add|reset|clean|stash|rebase|merge|cherry-pick|apply|restore|am|revert|rm|mv)(?![\w-])/, "change the checkout (QA only verifies)"],
 ];
 
 export interface QaProfileOptions {

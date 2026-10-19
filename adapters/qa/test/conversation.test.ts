@@ -42,6 +42,22 @@ describe("QA in conversations", () => {
 		});
 	});
 
+	describe("the application profiles of the machine", () => {
+		const [tool] = qaChat(env, /^ABC-\d+$/, undefined, ["local", "default"]).jobTools!;
+
+		it("names them to the model and refuses one it made up, with the list, so that it can try again without", async () => {
+			assert.match(tool!.description, /only application profiles of this machine are: local, default/);
+			const refused = ((await tool!.plan({ ticket: "ABC-1", app: "web" })) as any).refuse as string;
+			assert.match(refused, /no application profile "web".*local, default.*Leave app out/);
+			assert.equal(((await tool!.plan({ ticket: "ABC-1", app: "local" })) as any).input.app, "local");
+		});
+
+		it("takes an empty option for none, as models send them", async () => {
+			const planned = (await tool!.plan({ ticket: "ABC-2", app: "", repo: "", ref: " ", scenario: "" })) as any;
+			assert.deepEqual(planned.input, { ticket: "ABC-2", repository: { url: "https://github.com/acme/app", ref: "HEAD" } });
+		});
+	});
+
 	describe("the account of a finished verification", () => {
 		const result = {
 			verdict: "not_fixed",

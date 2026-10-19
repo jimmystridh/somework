@@ -62,7 +62,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 	return {
 		...hooks,
 		...(preflight ? { preflight } : {}),
-		chat: qaChat(context.env, settings.ticketPattern, tools),
+		chat: qaChat(context.env, settings.ticketPattern, tools, Object.keys(profiles)),
 		...execution,
 		readinessChecks: {
 			...execution.readinessChecks,
