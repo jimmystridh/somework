@@ -125,6 +125,12 @@ describe("reads", () => {
 		assert.match((await run("jira_get_comments")).text, /no comments/);
 	});
 
+	it("returns a long comment whole, not cut at 1500 characters", async () => {
+		jira.issues.set("QA-8", testIssue("QA-8", { comments: [{ id: "1", author: { displayName: "Dana Dev" }, body: `${"a".repeat(5000)}END`, created: "2026-10-01T10:00:00.000+0200" }] }));
+		const text = (await run("jira_get_comments", { key: "QA-8" })).text;
+		assert.match(text, /a{5000}END/);
+	});
+
 	it("refuse a key the agent is not configured for, before any request is made", async () => {
 		const result = await run("jira_get_issue", { key: "OTHER-5" });
 		assert.equal(result.isError, true);

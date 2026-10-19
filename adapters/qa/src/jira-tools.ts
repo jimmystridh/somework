@@ -244,13 +244,13 @@ export function createJiraTools(options: JiraToolsOptions): { extension: Extensi
 		}),
 		defineTool({
 			name: "jira_get_comments",
-			description: "All comments of a ticket (up to 100, each cut at 1500 characters). Without a key it reads the ticket under verification.",
+			description: "All comments of a ticket (up to 100, each cut at 8000 characters, 80000 in all). Without a key it reads the ticket under verification.",
 			parameters: Type.Object({ key: Type.Optional(Type.String({ maxLength: 40 })) }),
 			replay: "safe",
 			async execute(args: { key?: string }) {
 				return wrap(async () => {
 					const comments = await options.jira.comments(readableKey(args.key));
-					return text(comments.map((c) => `- ${clip(c.author?.displayName ?? c.author?.name, 60)} (${clip(c.created, 25)}): ${clip(c.body, 1500)}`).join("\n") || "(no comments)");
+					return text(clip(comments.map((c) => `- ${clip(c.author?.displayName ?? c.author?.name, 60)} (${clip(c.created, 25)}): ${clip(c.body, 8000)}`).join("\n"), 80_000) || "(no comments)");
 				});
 			},
 		}),
