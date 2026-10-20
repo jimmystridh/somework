@@ -73,15 +73,16 @@ describe("the attachments of a ticket", () => {
 	it("saves an image in the evidence folder and gives its path to open with the read tool", async () => {
 		attach("702", "dropdown shot.png", Buffer.from("PNGDATA"), { mimeType: "image/png" });
 		const result = await run("jira_get_attachments", { name: "dropdown shot.png" });
-		assert.match(result.text, /saved as .*ticket-files.*702-dropdown_shot\.png\. Open it with the read tool \(it shows the image\)/);
+		assert.match(result.text, /saved as .*ticket-files.*702-dropdown_shot\.png\. Look at it with view_image/);
 		assert.equal(readFileSync(join(evidence, "ticket-files", "702-dropdown_shot.png"), "utf8"), "PNGDATA");
 	});
 
-	it("refuses an unknown name, a kind of file it does not open and a file from another host", async () => {
+	it("refuses an unknown name and a file from another host, and saves a kind of file it cannot show", async () => {
 		attach("703", "tool.exe", Buffer.from("MZ"));
 		attach("704", "far.png", Buffer.from("x"), { content: "https://elsewhere.example/secure/attachment/704/far.png" });
 		assert.match((await run("jira_get_attachments", { name: "missing.png" })).text, /has no attachment named missing\.png/);
-		assert.match((await run("jira_get_attachments", { name: "tool.exe" })).text, /not a kind of file this tool opens/);
+		const opaque = (await run("jira_get_attachments", { name: "tool.exe" })).text;
+		assert.match(opaque, /saved as .*ticket-files.*703-tool\.exe\. It is a file this tool cannot show/);
 		attach("707", "evil.png", Buffer.from("x"), { content: "https://elsewhere.example/steal/707/evil.png" });
 		const far = await run("jira_get_attachments", { name: "evil.png" });
 		assert.match(far.text, /refusing to download from another host/);
@@ -97,6 +98,11 @@ describe("the attachments of a ticket", () => {
 		assert.match((await run("jira_get_attachments", { key: "QA-1 batches" })).text, /QA-1|no attachments|attachment/);
 		assert.match((await run("jira_get_attachments", { key: "QA-1_without_no" })).text, /QA-1|no attachments|attachment/);
 		assert.match((await run("jira_get_attachments", { key: "OTHER-1 QA-1" })).text, /is not a ticket this agent handles/);
+	});
+
+	it("finds the attachment when the model ended its name with a stray word", async () => {
+		attach("710", "padded.txt", Buffer.from("plain text"));
+		assert.match((await run("jira_get_attachments", { name: "padded.txt おっと" })).text, /plain text/);
 	});
 
 	it("saves a video in the evidence folder and points to ffmpeg, which reads it from the shell", async () => {
