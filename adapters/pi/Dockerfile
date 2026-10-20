@@ -43,11 +43,21 @@ FROM oven/bun@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f05
 FROM app AS sandbox
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 RUN ln -s bun /usr/local/bin/bunx
+# python3 and ps: the scripts of the repositories this role works on call them (the httpyac runners, process checks)
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git bash curl ca-certificates ripgrep jq make \
+ && apt-get install -y --no-install-recommends git bash curl ca-certificates ripgrep jq make python3 procps \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 10002 sandbox && useradd --uid 10002 --gid 10002 --no-create-home --home-dir /workspace --shell /bin/bash sandbox \
  && mkdir -p /workspace && chown 10002:10002 /workspace
+# the GitHub CLI, pinned and checked; the wrapper below uses a read-only token when a deployment mounts one (otherwise it is unauthenticated)
+ARG GH_VERSION=2.102.0
+ARG GH_SHA256=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+RUN curl -fsSL -o /tmp/gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+ && echo "${GH_SHA256}  /tmp/gh.tgz" | sha256sum -c - \
+ && mkdir -p /usr/local/lib/gh \
+ && tar -xzf /tmp/gh.tgz -C /usr/local/lib/gh --strip-components=2 "gh_${GH_VERSION}_linux_amd64/bin/gh" \
+ && rm /tmp/gh.tgz
+COPY adapters/pi/sandbox/gh /usr/local/bin/gh
 USER 10002:10002
 ENV HOME=/workspace
 WORKDIR /app/adapters/pi

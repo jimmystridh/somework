@@ -1,0 +1,11 @@
+#!/bin/sh
+# The GitHub CLI of the sandbox. Without a token file it is unauthenticated (public data only). When a deployment mounts a READ-ONLY token at
+# /run/secrets/gh-token (GH_READ_TOKEN_HOST in the role's .env) the model's shell reads it through this wrapper: it is a credential the model can see,
+# so it must never be the one that pushes (the harness keeps that one and hands it to git only while a git command runs).
+file="${GH_TOKEN_FILE:-/run/secrets/gh-token}"
+if [ -z "${GH_TOKEN:-}" ] && [ -s "$file" ] && [ -r "$file" ]; then
+  GH_TOKEN="$(cat "$file")"
+  export GH_TOKEN
+fi
+export GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GH_CONFIG_DIR="${TMPDIR:-/tmp}/gh-config"
+exec /usr/local/lib/gh/gh "$@"

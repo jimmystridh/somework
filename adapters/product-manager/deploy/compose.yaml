@@ -120,6 +120,8 @@ services:
       NO_PROXY: sandbox,localhost,127.0.0.1
     volumes:
       - ./secrets/sandbox-token:/run/secrets/sandbox-token:ro
+      # The GitHub CLI's token: a READ-ONLY fine-grained token (Pull requests, Contents, Actions, Checks, Commit statuses and Metadata: read) of the repositories this role works on. /dev/null keeps `gh` unauthenticated. Never the token that pushes.
+      - ${GH_READ_TOKEN_HOST:-/dev/null}:/run/secrets/gh-token:ro
       - workspace:/workspace
     tmpfs: ["/tmp:size=256m,nosuid"]
     mem_limit: ${SANDBOX_MEMORY:-1g}
