@@ -55,6 +55,12 @@ describe("the QA profile", () => {
 		assert.match(policy.needsApproval("jira_transition_to_in_progress_and_reassign", { comment: "still broken" })!, /hand QA-1 back/);
 	});
 
+	it("asks before a shell command that posts to the backend's /session, which crashes it", () => {
+		const policy = approvalPolicy([], QA_APPROVAL_PATTERNS);
+		for (const command of ["curl -s -X POST http://127.0.0.1:8080/session", "curl -sS http://localhost:8080/session -d '{}'", "Invoke-WebRequest -Method Post http://127.0.0.1:8080/session"]) assert.match(String(policy.needsApproval("bash", { command })), /\/session endpoint/, command);
+		assert.equal(policy.needsApproval("bash", { command: "curl -s http://127.0.0.1:8080/health" }), undefined);
+	});
+
 	it("gives a conversation a roomier budget than the default, and a verification job the budget of a task", () => {
 		assert.deepEqual(qaProfile().chat?.runBudget, { maxTokens: 1_500_000, maxMinutes: 30 });
 		assert.equal(qaProfile().chat?.hardTokenCap, 2_000_000);
