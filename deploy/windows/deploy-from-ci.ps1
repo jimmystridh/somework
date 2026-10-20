@@ -193,7 +193,8 @@ trap {
     try { Start-ScheduledTask -TaskName $task } catch { }
     exit 1
 }
-# a deployment restarts the agent, which kills the job it is running (a verification or a build takes 10 to 60 minutes): wait until it has none
+# a deployment restarts the agent, which kills the job it is running (a verification or a build takes 10 to 60 minutes): wait until it has none (70 minutes, longer
+# than a job may run; exit status 5 when it never was idle, which the CI step does not retry)
 function Wait-AgentIdle([int]$seconds) {
     $deadline = (Get-Date).AddSeconds($seconds)
     $announced = $false
@@ -211,10 +212,10 @@ function Wait-AgentIdle([int]$seconds) {
         } catch { return }
         Start-Sleep -Seconds 15
     }
-    Fail "the $role agent has been busy for $([int]($seconds / 60)) minutes: it is not replaced in the middle of a job; run the deployment again when it is idle"
+    Fail "the $role agent has been busy for $([int]($seconds / 60)) minutes: it is not replaced in the middle of a job; run the deployment again when it is idle" 5
 }
 Start-Drain
-Wait-AgentIdle 1500
+Wait-AgentIdle 4200
 # the owner's kill switch (fleet-control.ps1 suspend) disables the agent's task: deploying would only start it again or fail half way
 if ((Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue).State -eq 'Disabled') { Fail "the $role agent's task is disabled (the fleet is suspended): nothing was deployed; resume the fleet and deploy again" 4 }
 Backup-QaApp
