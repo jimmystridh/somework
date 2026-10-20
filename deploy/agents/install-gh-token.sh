@@ -26,9 +26,10 @@ file="$dir/secrets/gh-read-token"
 printf '%s\n' "$token" > "$file.new"
 chmod 0444 "$file.new"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$repo/pulls?per_page=1" || true)
-write=$(curl -s -H "Authorization: Bearer $token" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$repo" | grep -o '"push": *true' | head -1 || true)
+# a write that cannot do anything: deleting a branch that does not exist is refused as not accessible (403) by a token that may not write, and answered "no such reference" (422) by one that may
+wcode=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $token" -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$repo/git/refs/heads/somework-token-probe-nonexistent" || true)
 if [ "$code" != "200" ]; then rm -f "$file.new"; echo "GitHub answered $code for pull requests of $repo: nothing installed" >&2; exit 1; fi
-if [ -n "$write" ]; then rm -f "$file.new"; echo "this token can push to $repo: use a read-only one; nothing installed" >&2; exit 1; fi
+case "$wcode" in 204|422) rm -f "$file.new"; echo "this token may write to $repo (a write check answered $wcode): use a read-only one; nothing installed" >&2; exit 1 ;; esac
 mv "$file.new" "$file"
 if grep -q '^GH_READ_TOKEN_HOST=' "$dir/.env" 2>/dev/null; then sed -i 's#^GH_READ_TOKEN_HOST=.*#GH_READ_TOKEN_HOST=./secrets/gh-read-token#' "$dir/.env"; else printf 'GH_READ_TOKEN_HOST=./secrets/gh-read-token\n' >> "$dir/.env"; fi
-echo "installed $file (pull requests of $repo: HTTP $code, no push right). Recreate the sandbox to use it: cd $dir && docker compose up -d sandbox"
+echo "installed $file (pull requests of $repo: HTTP $code; a write check was refused with $wcode). Recreate the sandbox to use it: cd $dir && docker compose up -d sandbox"
