@@ -395,6 +395,6 @@ export async function aikidoFixerHooksFor(context: ServiceContext): Promise<Role
 	seedHandler({ stateDir: context.config.state.dir, settings, log: context.log, reseed: context.env.AIKIDO_RESEED_HANDLER === "1", watches: Boolean(context.watches) });
 	const reader = new GitHubPullRequestReader({ apiBase: context.config.git.githubApi, token: async () => (context.gitTokenSource ? await context.gitTokenSource() : context.gitToken!) });
 	const hooks = createFixerHooks({ settings, aikido, reader, ...(context.timers ? { timers: context.timers } : {}), ...(context.watches ? { watches: context.watches } : {}), stateDir: context.config.state.dir, log: context.log });
-	const chat = fixerChat({ settings, aikido, stateDir: context.config.state.dir, mirrorDir: context.config.git.mirror?.dir, log: context.log });
+	const chat = fixerChat({ settings, aikido, reader, stateDir: context.config.state.dir, mirrorDir: context.config.git.mirror?.dir, log: context.log });
 	return { ...hooks, chat, readinessChecks: { aikido_credentials: async () => !!readCredentials(settings.credentialsFile) } };
 }
