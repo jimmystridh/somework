@@ -39,6 +39,8 @@ export interface QaHooksOptions {
 	verifiedLabel: string;
 	/** The labels a ticket carries now. With `skipLabel` a ticket that carries it is `skipped`; without it nobody is skipped. */
 	ticketLabels?: (ticket: string) => Promise<string[]>;
+	/** Why a ticket cannot be verified now (not in the test status, or assigned to somebody), read from the ticket system; undefined when it can. Checked before anything is cloned or started. */
+	ticketBlock?: (ticket: string) => Promise<string | undefined>;
 	skipLabel?: string;
 	/** Takes the request label off a ticket once its verification is over, whatever the verdict; failures are logged, never raised. */
 	clearRequest?: (ticket: string) => Promise<void>;
@@ -191,6 +193,20 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 		return undefined;
 	}
 
+	/** A ticket outside the test status, or with an assignee, is skipped before the checkout and the application start (a skipped run used to cost ten minutes and the model's reading of the ticket). */
+	async function blockedBy(input: any): Promise<string | undefined> {
+		if (!options.ticketBlock || typeof input?.ticket !== "string") return undefined;
+		const ticket = input.ticket.trim();
+		try {
+			const reason = await options.ticketBlock(ticket);
+			if (reason) log("info", "ticket_not_eligible", { ticket, reason: reason.slice(0, 200) });
+			return reason;
+		} catch (error) {
+			log("warn", "ticket_status_failed", { ticket, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
+			return undefined;
+		}
+	}
+
 	const hooks: RoleHooks = {
 		extensions: options.extensions,
 
@@ -199,6 +215,8 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 			if (typeof input?.ticket === "string" && !options.ticketPattern.test(input.ticket.trim())) return { ...input, [GATE_KEY]: `the ticket key ${input.ticket.trim().slice(0, 40)} does not match the keys this agent handles` };
 			const optedOut = await optedOutOf(input);
 			if (optedOut) return { ...input, [GATE_KEY]: optedOut };
+			const notEligible = await blockedBy(input);
+			if (notEligible) return { ...input, [GATE_KEY]: notEligible };
 			return await pickRevision(input);
 		},
 

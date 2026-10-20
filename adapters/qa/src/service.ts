@@ -46,6 +46,13 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 			? {
 					ticketLabels: async (ticket: string) => (await jiraClient.getIssue(ticket)).fields.labels ?? [],
 					skipLabel: settings.jira.skipLabel,
+					ticketBlock: async (ticket: string) => {
+						const fields = (await jiraClient.getIssue(ticket)).fields;
+						const status = fields.status?.name ?? "";
+						if (status.toLowerCase() !== settings.jira!.testStatus.toLowerCase()) return `${ticket} is in ${status || "an unknown status"}, and QA verifies tickets in ${settings.jira!.testStatus}`;
+						const assignee = fields.assignee?.displayName ?? fields.assignee?.name;
+						return assignee ? `${ticket} is assigned to ${assignee}, and QA verifies only unassigned tickets` : undefined;
+					},
 					clearRequest: async (ticket: string) => {
 						const request = settings.jira!.requestLabel.toLowerCase();
 						const present = ((await jiraClient.getIssue(ticket)).fields.labels ?? []).find((label) => label.toLowerCase() === request);

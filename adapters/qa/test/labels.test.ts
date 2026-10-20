@@ -4,7 +4,7 @@ import { createQaHooks } from "../src/hooks.ts";
 import { loadQaLabels, loadQaSettings } from "../src/settings.ts";
 import { QaSession } from "../src/session.ts";
 
-const make = (options: { labels?: string[] | Error; skipLabel?: string | null; cleared?: string[]; clearError?: Error; logs?: string[] } = {}) =>
+const make = (options: { labels?: string[] | Error; skipLabel?: string | null; cleared?: string[]; clearError?: Error; logs?: string[]; block?: string | Error | undefined } = {}) =>
 	createQaHooks({
 		root: "/w",
 		ticketPattern: /^SAD-[0-9]+$/,
@@ -23,6 +23,7 @@ const make = (options: { labels?: string[] | Error; skipLabel?: string | null; c
 			if (options.labels instanceof Error) throw options.labels;
 			return options.labels ?? [];
 		},
+		...(options.block === undefined ? {} : { ticketBlock: async () => { if (options.block instanceof Error) throw options.block; return options.block as string; } }),
 		clearRequest: async (ticket) => {
 			if (options.clearError) throw options.clearError;
 			options.cleared?.push(ticket);
@@ -104,5 +105,25 @@ describe("the label settings", () => {
 		const settings = loadQaSettings({ WINDOWS_WORKSPACE_ROOT: "C:\\w", JIRA_URL: "https://jira.example.test", JIRA_TOKEN_FILE: "C:\\t" }, () => true);
 		assert.equal(settings.jira?.skipLabel, "no-qa");
 		assert.equal(settings.jira?.requestLabel, "qa-verify");
+	});
+});
+
+describe("a ticket that cannot be verified now (not in Test, or assigned)", () => {
+	it("is skipped before anything is cloned or started, with the reason", async () => {
+		const hooks = make({ block: "SAD-1 is assigned to Martin Ohlin, and QA verifies only unassigned tickets" });
+		const prepared = await hooks.prepareInput!(job, context);
+		assert.equal(hooks.instruction!(prepared, { taskId: "t" }), "skipped");
+		const blocked = (await hooks.beforeRun!({ input: prepared, taskId: "t", workspace: "/w" } as never)) as any;
+		assert.match(blocked.blocked.reason, /assigned to Martin Ohlin/);
+		assert.equal(blocked.blocked.details.skipped, true);
+	});
+
+	it("is verified as usual when the ticket system sees nothing in the way, or cannot be asked", async () => {
+		const free = make({ block: undefined });
+		assert.notEqual(free.instruction!(await free.prepareInput!(job, context), { taskId: "t" }), "skipped");
+		const logs: string[] = [];
+		const down = make({ block: new Error("jira down"), logs });
+		assert.notEqual(down.instruction!(await down.prepareInput!(job, context), { taskId: "t" }), "skipped");
+		assert.ok(logs.includes("ticket_status_failed"));
 	});
 });
