@@ -66,6 +66,24 @@ const LOG_TAIL_LINES = 40;
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 3)}...` : text);
 
+const ANSI = /\u001b\[[0-9;]*m/g;
+
+/**
+ * The part of a job's log that shows why it failed. The end of a log is the cleanup of the job (log-outs, git config), so the tail of a failed job usually hides the
+ * failure: GitHub marks the failing step with `##[error]` lines, and the output just before the first of them is what the step printed. Without a marker the tail is all there is.
+ */
+export function failureExcerpt(lines: string[]): string[] {
+	const first = lines.findIndex((line) => line.includes("##[error]"));
+	if (first < 0) return lines.slice(-LOG_TAIL_LINES).map((line) => line.replace(ANSI, ""));
+	let end = first;
+	while (end < lines.length && lines[end]!.includes("##[error]") && end - first < 8) end++;
+	const shown = lines
+		.slice(Math.max(0, first - LOG_TAIL_LINES), end)
+		.filter((line) => !/^##\[(group|endgroup)\]/.test(line))
+		.map((line) => line.replace(ANSI, "").replace(/^##\[error\]/, "ERROR: "));
+	return shown.slice(-LOG_TAIL_LINES);
+}
+
 /** Reads a pull request over GitHub's REST API with the agent's own credential (read access is enough). Everything returned is text from outside. */
 export class GitHubPullRequestReader implements PullRequestReader {
 	readonly #apiBase: string;
@@ -197,7 +215,7 @@ export class GitHubPullRequestReader implements PullRequestReader {
 			const body = location ? await this.#fetch(location, { signal: AbortSignal.timeout(30_000), redirect: "error" }) : first;
 			if (!body.ok) return "";
 			const lines = (await body.text()).split("\n").map((line) => line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, "").trimEnd()).filter((line) => line !== "");
-			return redactText(lines.slice(-LOG_TAIL_LINES).join("\n"));
+			return redactText(failureExcerpt(lines).join("\n"));
 		} catch {
 			return "";
 		}

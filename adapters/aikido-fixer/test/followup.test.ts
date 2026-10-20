@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { DEFAULT_EVENTS, HandlerStore, handlersDir, InvalidInput, parseDecision, type HandlerEvent, type ResultContext } from "@somework/agent-kit";
 import card from "../card.json" with { type: "json" };
-import { GitHubPullRequestReader, parseFollowUp, type FeedbackItem, type PullRequestReader, type PullRequestState } from "../src/followup.ts";
+import { failureExcerpt, GitHubPullRequestReader, parseFollowUp, type FeedbackItem, type PullRequestReader, type PullRequestState } from "../src/followup.ts";
 import { createFixerHooks, nextCheck, outcomeOf } from "../src/hooks.ts";
 import { buildFollowUpInstruction } from "../src/prompt.ts";
 import { FOLLOWUP_HANDLER, FOLLOWUP_TOPIC, renderFollowUpHandler, seedHandler } from "../src/seed.ts";
@@ -29,6 +29,38 @@ describe("follow-up settings", () => {
 		assert.throws(() => settings({ AIKIDO_FOLLOWUP_MINUTES: "15,soon" }), /AIKIDO_FOLLOWUP_MINUTES/);
 		assert.throws(() => settings({ AIKIDO_FOLLOWUP_MINUTES: "20000" }), /AIKIDO_FOLLOWUP_MINUTES/);
 		assert.equal(settings().followUpCapPerDay, 10);
+	});
+});
+
+describe("the excerpt of a failed job's log", () => {
+	const log = [
+		"##[group]Run bun test",
+		"##[endgroup]",
+		"\u001b[31mFAIL\u001b[0m src/orders.test.ts > totals",
+		"AssertionError: expected 3 to be 4",
+		"##[error]Process completed with exit code 1.",
+		"Post job cleanup.",
+		"##[group]Run azure/login",
+		"Clearing azure cli accounts from the local cache.",
+		"##[error]Cleanup noise that is not the failure",
+		"Post job cleanup.",
+	];
+	it("shows what the failing step printed, not the cleanup that follows it", () => {
+		const shown = failureExcerpt(log).join("\n");
+		assert.match(shown, /FAIL src\/orders\.test\.ts > totals/);
+		assert.match(shown, /AssertionError: expected 3 to be 4/);
+		assert.match(shown, /ERROR: Process completed with exit code 1\./);
+		assert.doesNotMatch(shown, /Clearing azure|Cleanup noise|Post job cleanup|##\[|\u001b/);
+	});
+	it("keeps the end of the log when it has no error marker, and at most 40 lines of what came before one", () => {
+		const plain = Array.from({ length: 100 }, (_, i) => `line ${i}`);
+		assert.equal(failureExcerpt(plain).length, 40);
+		assert.equal(failureExcerpt(plain).at(-1), "line 99");
+		const long = [...Array.from({ length: 100 }, (_, i) => `out ${i}`), "##[error]boom"];
+		const shown = failureExcerpt(long);
+		assert.ok(shown.length <= 40);
+		assert.equal(shown.at(-1), "ERROR: boom");
+		assert.equal(shown.at(-2), "out 99");
 	});
 });
 
