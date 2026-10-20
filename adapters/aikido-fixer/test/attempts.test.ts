@@ -72,4 +72,21 @@ describe("attempt ledger", () => {
 		l.begin("2", "new");
 		for (let i = 0; i < 520; i++) l.branchFor(`t${i}`, () => `agent/x-${i}`);
 	});
+	it("raises today's cap by what the owner asked, up to a ceiling, and is back to normal the next day", () => {
+		const { ledger: l, clock } = ledger({ maxAttemptsPerIssue: 5, cooldownMinutes: 0, dailyCap: 2 });
+		assert.deepEqual([l.begin("a", "t1"), l.begin("b", "t2")].map((r) => r.ok), [true, true]);
+		assert.match((l.begin("c", "t3") as { reason: string }).reason, /daily cap of 2 fix attempts is reached/);
+		assert.deepEqual(l.raiseDailyCap(2, 8), { raisedToday: 2, cap: 4 });
+		assert.deepEqual([l.begin("c", "t3"), l.begin("d", "t4")].map((r) => r.ok), [true, true]);
+		assert.match((l.begin("e", "t5") as { reason: string }).reason, /daily cap of 4 fix attempts is reached/);
+		assert.equal(l.facts().dailyCap, 4);
+		assert.equal(l.facts().raisedToday, 2);
+		assert.throws(() => l.raiseDailyCap(7, 8), /at most 8 .* \(2 already\)/);
+		assert.deepEqual(l.raiseDailyCap(6, 8), { raisedToday: 8, cap: 10 });
+		for (const bad of [0, -1, 1.5, Number.NaN]) assert.throws(() => l.raiseDailyCap(bad, 8), RangeError, String(bad));
+		clock.now = new Date("2026-10-07T09:00:00Z");
+		assert.equal(l.facts().dailyCap, 2);
+		assert.equal(l.facts().raisedToday, 0);
+		assert.deepEqual(l.begin("f", "t6"), { ok: true });
+	});
 });

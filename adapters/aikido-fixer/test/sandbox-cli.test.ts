@@ -92,7 +92,7 @@ describe("telling the model about the command", () => {
 		assert.match(CLI_CHAT_GUIDANCE, /only when the person talking to you asks for exactly that change in this conversation/);
 	});
 
-	it("gives conversations the guidance only when the command exists, and keeps aikido_lookup and fixer_status either way", () => {
+	it("gives conversations the guidance only when the command exists, and keeps its chat tools either way", () => {
 		const aikido = { resolveIssue: async () => ({ group: {} }) };
 		const stateDir = mkdtempSync(join(tmpdir(), "aikido-cli-chat-"));
 		const without = fixerChat({ settings: loadSettings({ AIKIDO_REPOSITORY_URL: REPO }), aikido, stateDir });
@@ -100,6 +100,6 @@ describe("telling the model about the command", () => {
 		assert.ok(!without.instructions!.includes("aikido issue-counts"));
 		assert.ok(withCli.instructions!.endsWith(CLI_CHAT_GUIDANCE));
 		assert.ok(withCli.instructions!.startsWith(without.instructions!));
-		for (const chat of [without, withCli]) assert.deepEqual(chat.toolNames, ["fixer_status", "aikido_lookup"]);
+		for (const chat of [without, withCli]) assert.deepEqual(chat.toolNames, ["fixer_status", "raise_daily_cap", "aikido_lookup"]);
 	});
 });

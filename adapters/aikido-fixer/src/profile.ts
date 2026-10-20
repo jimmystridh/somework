@@ -75,7 +75,7 @@ export const profile: AgentProfile = validateProfile({
 	systemPrompt: SYSTEM_PROMPT,
 	allowedTools: ["read", "write", "edit", "bash", "aikido_issue"],
 	approvalPatterns: FIXER_APPROVAL_PATTERNS,
-	toolApprovals: { handler_save: () => HANDLER_WRITES, handler_disable: () => HANDLER_WRITES, handler_enable: () => HANDLER_WRITES },
+	toolApprovals: { raise_daily_cap: (args: any) => `raise today's cap of fix attempts by ${Number.isInteger(args?.extra) ? args.extra : "?"} (${String(args?.reason ?? "").replace(/\s+/g, " ").slice(0, 120)})`, handler_save: () => HANDLER_WRITES, handler_disable: () => HANDLER_WRITES, handler_enable: () => HANDLER_WRITES },
 	defaultBudget: { maxTokens: 300_000, maxMinutes: 30 },
 	requireBudget: true,
 	git: { push: true, pullRequest: true, branchPrefix: "agent" },

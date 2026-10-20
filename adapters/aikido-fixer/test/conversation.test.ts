@@ -7,7 +7,7 @@ import { type ResultContext } from "@somework/agent-kit";
 import { AikidoError } from "../src/aikido/client.ts";
 import { createAikidoLookupTools } from "../src/aikido/tool.ts";
 import { AttemptLedger } from "../src/attempts.ts";
-import { ATTEMPTS_FILE, fixerChat } from "../src/chat.ts";
+import { ATTEMPTS_FILE, FIXER_CHAT_INSTRUCTIONS, fixerChat } from "../src/chat.ts";
 import { createFixerHooks } from "../src/hooks.ts";
 import { profile } from "../src/profile.ts";
 import { loadSettings } from "../src/settings.ts";
@@ -33,13 +33,25 @@ const run = async (chat: ReturnType<typeof setup>["chat"], name: string, args: o
 };
 
 describe("the fixer in conversations", () => {
+	it("raises today's cap through raise_daily_cap, needs the owner's approval for it, and stops at the handler's ceiling", async () => {
+		const { chat, settings } = setup({ AIKIDO_DAILY_CAP: "2" });
+		const approval = (profile.toolApprovals as any).raise_daily_cap({ extra: 3, reason: "owner asked for more today" });
+		assert.match(approval, /raise today's cap of fix attempts by 3 \(owner asked for more today\)/);
+		assert.match(await run(chat, "raise_daily_cap", { extra: 3, reason: "the owner said so" }), /Today's cap is now 5 fix attempts \(3 added today\)\. It goes back to 2 tomorrow/);
+		assert.match(await run(chat, "fixer_status"), /Fix tasks today: 0 of 5 \(raised by 3 today\)/);
+		const tooMany = await run(chat, "raise_daily_cap", { extra: 6, reason: "more" });
+		assert.match(tooMany, /Cap not changed: today's cap can be raised by at most 8 fix attempts in all \(3 already\)/);
+		assert.equal(settings.dailyCap, 2, "the setting itself is untouched");
+		assert.match(FIXER_CHAT_INSTRUCTIONS, /raise_daily_cap.*owner is asked to approve/s);
+	});
+
 	const tool = (chat: ReturnType<typeof setup>["chat"], name: string) => chat.jobTools!.find((candidate) => candidate.name === name)!;
 
-	it("reads with fixer_status and aikido_lookup next to the kit's tools: nothing that writes, and not the job's own aikido_issue", () => {
+	it("reads with fixer_status and aikido_lookup next to the kit's tools, may raise today's cap (only with the owner's approval), and has not the job's own aikido_issue", () => {
 		const { chat } = setup();
-		assert.deepEqual(chat.toolNames, ["fixer_status", "aikido_lookup"]);
+		assert.deepEqual(chat.toolNames, ["fixer_status", "raise_daily_cap", "aikido_lookup"]);
 		assert.ok(!chat.toolNames!.some((name) => ["bash", "write", "edit", "aikido_issue"].includes(name)));
-		assert.deepEqual((chat.extension!.tools as any[]).map((candidate) => candidate.name).sort(), ["aikido_lookup", "fixer_status"]);
+		assert.deepEqual((chat.extension!.tools as any[]).map((candidate) => candidate.name).sort(), ["aikido_lookup", "fixer_status", "raise_daily_cap"]);
 	});
 
 	it("offers the two jobs as tools", () => {

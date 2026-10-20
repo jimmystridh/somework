@@ -7,7 +7,7 @@ export const FOLLOWUP_HANDLER = "aikido-followup";
 /** The topic of the timers this agent asks the event hub for (its id with the hyphen as an underscore). */
 export const FOLLOWUP_TOPIC = "clock.timer.aikido_fixer.due";
 /** Tasks the handler submits per day, as a multiple of the daily fix cap: a task that turns out to be skipped (a pull request is already open, the issue is closed) never counts against the cap on the host, so the handler's own count is only a flood guard. */
-const SUBMIT_FACTOR = 5;
+export const SUBMIT_FACTOR = 5;
 const TEMPLATE = new URL("../handlers/aikido.mjs", import.meta.url);
 const FOLLOWUP_TEMPLATE = new URL("../handlers/aikido-followup.mjs", import.meta.url);
 

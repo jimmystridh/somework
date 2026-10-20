@@ -49,6 +49,8 @@ interface Stored {
 	days: Record<string, string[]>;
 	branches: Record<string, { name: string; at: string }>;
 	outcomes: Record<string, AttemptOutcome>;
+	/** Fix attempts the owner added to a day's cap, by day. */
+	raised?: Record<string, number>;
 }
 
 export type Begin = { ok: true } | { ok: false; reason: string };
@@ -85,7 +87,7 @@ export class AttemptLedger {
 		if (!existsSync(this.#file)) return { issues: {}, days: {}, branches: {}, outcomes: {} };
 		try {
 			const stored = JSON.parse(readFileSync(this.#file, "utf8")) as Partial<Stored>;
-			return { issues: stored.issues ?? {}, days: stored.days ?? {}, branches: stored.branches ?? {}, outcomes: stored.outcomes ?? {} };
+			return { issues: stored.issues ?? {}, days: stored.days ?? {}, branches: stored.branches ?? {}, outcomes: stored.outcomes ?? {}, raised: stored.raised ?? {} };
 		} catch {
 			return { issues: {}, days: {}, branches: {}, outcomes: {} };
 		}
@@ -110,7 +112,8 @@ export class AttemptLedger {
 		if (issue.attempts.length >= this.#limits.maxAttemptsPerIssue) return { ok: false, reason: `this issue was already attempted ${issue.attempts.length} time(s) (the limit is ${this.#limits.maxAttemptsPerIssue}): a person has to look at it` };
 		const last = issue.attempts.at(-1);
 		if (last && now.getTime() - Date.parse(last.at) < this.#limits.cooldownMinutes * 60_000) return { ok: false, reason: `an attempt on this issue started less than ${this.#limits.cooldownMinutes} minutes ago` };
-		if ((stored.days[day] ?? []).length >= this.#limits.dailyCap) return { ok: false, reason: `the daily cap of ${this.#limits.dailyCap} fix attempts is reached` };
+		const cap = this.#limits.dailyCap + (stored.raised?.[day] ?? 0);
+		if ((stored.days[day] ?? []).length >= cap) return { ok: false, reason: `the daily cap of ${cap} fix attempts is reached` };
 		return { ok: true };
 	}
 
@@ -126,6 +129,7 @@ export class AttemptLedger {
 		issue.attempts.push({ taskId, at: now.toISOString() });
 		today.push(taskId);
 		for (const old of Object.keys(stored.days)) if (Date.parse(`${old}T00:00:00Z`) < now.getTime() - KEEP_DAYS * 86_400_000) delete stored.days[old];
+		for (const old of Object.keys(stored.raised ?? {})) if (Date.parse(`${old}T00:00:00Z`) < now.getTime() - KEEP_DAYS * 86_400_000) delete stored.raised![old];
 		this.#write(stored);
 		return { ok: true };
 	}
@@ -183,14 +187,30 @@ export class AttemptLedger {
 	}
 
 	/** What the chat may state: the limits, today's count, and the recent attempts per issue with how they ended. */
-	facts(limit = 10): { dailyCap: number; maxAttemptsPerIssue: number; cooldownMinutes: number; today: number; recent: (AttemptOutcome & { taskId: string; attempts: number })[] } {
+	facts(limit = 10): { dailyCap: number; raisedToday: number; maxAttemptsPerIssue: number; cooldownMinutes: number; today: number; recent: (AttemptOutcome & { taskId: string; attempts: number })[] } {
 		const stored = this.#read();
 		const today = this.#now().toISOString().slice(0, 10);
 		const recent = Object.entries(stored.outcomes)
 			.sort(([, a], [, b]) => b.at.localeCompare(a.at))
 			.slice(0, limit)
 			.map(([taskId, outcome]) => ({ taskId, ...outcome, attempts: stored.issues[outcome.groupId]?.attempts.length ?? 0 }));
-		return { dailyCap: this.#limits.dailyCap, maxAttemptsPerIssue: this.#limits.maxAttemptsPerIssue, cooldownMinutes: this.#limits.cooldownMinutes, today: stored.days[today]?.length ?? 0, recent };
+		const raisedToday = stored.raised?.[today] ?? 0;
+		return { dailyCap: this.#limits.dailyCap + raisedToday, raisedToday, maxAttemptsPerIssue: this.#limits.maxAttemptsPerIssue, cooldownMinutes: this.#limits.cooldownMinutes, today: stored.days[today]?.length ?? 0, recent };
+	/**
+	 * Adds `extra` fix attempts to today's cap, at most `maxRaise` over all raises of the day (the handler's own flood guard sits above that), and goes
+	 * back to the normal cap tomorrow. Throws a `RangeError` the chat can show when the request is not allowed.
+	 */
+	raiseDailyCap(extra: number, maxRaise: number): { raisedToday: number; cap: number } {
+		if (!Number.isInteger(extra) || extra < 1) throw new RangeError("the number of extra fix attempts must be a whole number of at least 1");
+		const stored = this.#read();
+		const day = this.#now().toISOString().slice(0, 10);
+		const raisedToday = (stored.raised?.[day] ?? 0) + extra;
+		if (raisedToday > maxRaise) throw new RangeError(`today's cap can be raised by at most ${maxRaise} fix attempts in all (${stored.raised?.[day] ?? 0} already)`);
+		(stored.raised ??= {})[day] = raisedToday;
+		this.#write(stored);
+		return { raisedToday, cap: this.#limits.dailyCap + raisedToday };
+	}
+
 	}
 
 	/** The branch a task uses: the first name it was given, forever, so a retry never opens a second branch. */
