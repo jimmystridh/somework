@@ -7,6 +7,7 @@ import { GitHubPullFinder } from "./github-pulls.ts";
 import { qaChat } from "./chat.ts";
 import { createQaHooks } from "./hooks.ts";
 import { JiraClient } from "./jira.ts";
+import { createImageTools } from "./image-tool.ts";
 import { createJiraTools, jiraToolApprovals } from "./jira-tools.ts";
 import { qaPreflight } from "./preflight.ts";
 import { qaProfile } from "./profile.ts";
@@ -35,7 +36,7 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 		browser: (allowHosts) => launchBrowser(settings, allowHosts),
 		allowHosts: settings.browser.allowHosts,
 		cliPath,
-		extensions: tools ? [tools.extension] : undefined,
+		extensions: [...(tools ? [tools.extension] : []), createImageTools({ root: settings.root }).extension],
 		hasTicketSystem: Boolean(tools),
 		...(context.branchesNaming ? { branches: context.branchesNaming } : {}),
 		pulls: new GitHubPullFinder({ token: (owner) => context.ownerTokens?.[owner.toLowerCase()] ?? context.gitToken }),
@@ -82,7 +83,7 @@ export function runQaService(options: { env?: NodeJS.ProcessEnv } = {}): void {
 	const client = settings.jira && secrets ? new JiraClient({ baseUrl: settings.jira.url, token: secrets.token, pfx: secrets.pfx, passphrase: secrets.passphrase, ca: secrets.ca }) : undefined;
 	const tools = client && settings.jira ? createJiraTools({ jira: client, session, pattern: settings.ticketPattern, testStatus: settings.jira.testStatus, inProgressStatus: settings.jira.inProgressStatus, verifiedLabel: settings.jira.verifiedLabel, log: jsonLogger() }) : undefined;
 	runAgentService({
-		profile: qaProfile({ toolNames: tools?.toolNames, toolApprovals: settings.jira ? jiraToolApprovals(session, settings.jira.verifiedLabel, settings.jira.inProgressStatus, settings.jira.approve) : undefined }),
+		profile: qaProfile({ toolNames: [...(tools?.toolNames ?? []), ...createImageTools({ root: settings.root }).toolNames], toolApprovals: settings.jira ? jiraToolApprovals(session, settings.jira.verifiedLabel, settings.jira.inProgressStatus, settings.jira.approve) : undefined }),
 		// the kit requires a sandbox URL and workspace root; here the "sandbox" is this process and its root is the confined directory
 		env: { ...env, SANDBOX_URL: env.SANDBOX_URL ?? "local://windows", SANDBOX_WORKSPACES: settings.root, PI_CONCURRENCY: "1" },
 		hooks: (context) => composeQa(settings, context, session, profiles, tools, client, secrets),
