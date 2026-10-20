@@ -33,6 +33,13 @@ export interface FixerSettings {
 	ciWatchMinutes: number;
 	/** Follow-up tasks the handler starts per day. */
 	followUpCapPerDay: number;
+	/** With pull request watches the timer is only a safety net: one look this many minutes after the pull request is opened (`AIKIDO_SAFETY_CHECK_MINUTES`). */
+	safetyCheckMinutes: number;
+	/** The least time between two follow-ups the watch handler starts for one pull request, and how many it starts for one in all. */
+	watchCooldownSeconds: number;
+	watchMaxPerPullRequest: number;
+	/** Logins whose events on a watched pull request never start a follow-up (this agent's own account, for example). */
+	watchIgnoreSenders: string[];
 	/** The least time between two requests to Aikido, in milliseconds (`AIKIDO_API_MIN_INTERVAL_MS`). */
 	apiMinIntervalMs: number;
 	apiBase?: string;
@@ -125,6 +132,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): FixerSetting
 		followUpMinutes: minutesList(env, "AIKIDO_FOLLOWUP_MINUTES", [10, 20, 40, 90, 180, 360]),
 		ciWatchMinutes: integer(env, "AIKIDO_CI_WATCH_MINUTES", 10),
 		followUpCapPerDay: integer(env, "AIKIDO_FOLLOWUP_CAP_PER_DAY", 10),
+		safetyCheckMinutes: integer(env, "AIKIDO_SAFETY_CHECK_MINUTES", 240),
+		watchCooldownSeconds: integer(env, "AIKIDO_WATCH_COOLDOWN_SECONDS", 120),
+		watchMaxPerPullRequest: integer(env, "AIKIDO_WATCH_MAX_PER_PR", 10),
+		watchIgnoreSenders: list(env.AIKIDO_WATCH_IGNORE_SENDERS, []).map((login) => login.toLowerCase()),
 		apiMinIntervalMs: integer(env, "AIKIDO_API_MIN_INTERVAL_MS", 1500),
 		sandboxCli: env.AIKIDO_SANDBOX_CLI === "1",
 		...(env.AIKIDO_LEDGER_IMPORT ? { ledgerImport: env.AIKIDO_LEDGER_IMPORT } : {}),

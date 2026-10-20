@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import { InvalidInput, silent, type AgentRuntime, type TimersClient, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
+import { InvalidInput, silent, type AgentRuntime, type TimersClient, type WatchesClient, type Log, type ResultContext, type ResultPatch, type RoleHooks, type ServiceContext } from "@somework/agent-kit";
 import type { Outcome } from "@somework/agent-kit";
 import { AikidoClient, AikidoError, readCredentials } from "./aikido/client.ts";
 import { eligibility, summariseIssue, type IssueSummary } from "./aikido/issue.ts";
@@ -35,6 +35,8 @@ interface TaskState {
 	followUp?: { input: FollowUpInput; pullRequest: PullRequestState };
 	/** The next look at the pull request, decided when the result is known and asked of the hub once the task has settled. */
 	nextCheck?: { round: number; minutes: number; pullRequest: string; branch: string };
+	/** An open pull request of this agent that the hub is asked to watch once the task has settled. */
+	watch?: string;
 }
 
 export interface FixerOptions {
@@ -44,6 +46,8 @@ export interface FixerOptions {
 	reader?: PullRequestReader;
 	/** Asks the event hub for the next look at a pull request. Without it no follow-up is scheduled. */
 	timers?: Pick<TimersClient, "request">;
+	/** Asks the event hub for the events of one pull request. With it the pull requests the agent opened are watched and the timer is only a safety net. */
+	watches?: Pick<WatchesClient, "watch">;
 	stateDir: string;
 	log?: Log;
 	now?: () => Date;
@@ -125,7 +129,15 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 	return {
 		extensions: [tools.extension],
 
-		async prepareInput(input, { taskId }) {
+		async prepareInput(rawInput, { taskId }) {
+			let input = rawInput;
+			// a follow-up started by a watch event names only the pull request: the issue and the branch are what this agent recorded when it opened it
+			if (input?.followUp?.source === "watch") {
+				const address = typeof input.followUp.pullRequest === "string" ? input.followUp.pullRequest.trim() : "";
+				const known = attempts.pullRequestOf(address);
+				if (!known) throw new InvalidInput("the pull request is not one this agent opened and recorded");
+				input = { ...input, issue: { id: known.groupId }, followUp: { ...input.followUp, pullRequest: known.prUrl, branch: known.branch } };
+			}
 			const parsed = parseInput(input);
 			if (!allowedRepositories.has(normaliseRepositoryUrl(parsed.repository.url))) throw new InvalidInput("this agent only fixes the repository it is configured for");
 			const followUp = input?.followUp === undefined ? undefined : parseFollowUp(input.followUp);
@@ -257,7 +269,10 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 			const state = tasks.get(context.taskId);
 			if (!state) return { failure: { code: "job_error", message: "the run finished without its Aikido issue", retryable: true } };
 			const result = outcomeOf(base, context, state);
-			state.nextCheck = nextCheck(settings, state, result);
+			const watching = Boolean(options.watches);
+			state.nextCheck = nextCheck(settings, state, result, watching);
+			const openPullRequest = state.followUp ? (state.followUp.pullRequest.state === "open" ? state.followUp.input.pullRequest : undefined) : result.outcome === "pr_opened" && typeof result.prUrl === "string" ? result.prUrl : undefined;
+			if (watching && openPullRequest && settings.followUpMinutes.length > 0) state.watch = openPullRequest;
 			if (state.followUp) return { result };
 			attempts.recordOutcome(context.taskId, {
 				groupId: state.summary.groupId,
@@ -273,6 +288,7 @@ export function createFixerHooks(options: FixerOptions): RoleHooks {
 			const state = tasks.get(taskId);
 			tasks.delete(taskId);
 			if (state?.nextCheck && outcome.type === "completed") scheduleCheck(options.timers, state.nextCheck, state.summary.groupId, log);
+			if (state?.watch && outcome.type === "completed") watchPullRequest(options.watches, state.watch, log);
 			if (!state?.env || !state.workspace || outcome.type !== "completed") return;
 			// the result is reported and the branch is pushed (or nothing was to be): the checkout has done its job
 			void state.env.remove(state.workspace, { recursive: true, force: true }, BACKGROUND_CONTEXT).catch(() => undefined);
@@ -289,8 +305,13 @@ const tokensOf = (usage: unknown): number | undefined => {
 const PULL_REQUEST_NUMBER = /\/pull\/([0-9]+)$/;
 
 /** When the pull request should be looked at next, given how this task ended: after a pull request was opened, and after each look while it is open and rounds are left. */
-export function nextCheck(settings: Pick<FixerSettings, "followUpMinutes" | "ciWatchMinutes">, state: TaskState, result: Record<string, unknown>): TaskState["nextCheck"] {
+export function nextCheck(settings: Pick<FixerSettings, "followUpMinutes" | "ciWatchMinutes"> & { safetyCheckMinutes?: number }, state: TaskState, result: Record<string, unknown>, watching = false): TaskState["nextCheck"] {
 	const minutes = settings.followUpMinutes;
+	// while the hub watches the pull request its events start the follow-ups: the timer is one late look in case an event was missed, and nothing after it
+	if (watching && minutes.length > 0) {
+		if (state.followUp || result.outcome !== "pr_opened" || typeof result.prUrl !== "string" || typeof result.branch !== "string") return undefined;
+		return PULL_REQUEST_NUMBER.test(result.prUrl) ? { round: 1, minutes: settings.safetyCheckMinutes ?? 240, pullRequest: result.prUrl, branch: result.branch } : undefined;
+	}
 	if (state.followUp) {
 		const { round } = state.followUp.input;
 		const open = state.followUp.pullRequest.state === "open";
@@ -319,6 +340,15 @@ function scheduleCheck(timers: FixerOptions["timers"], check: NonNullable<TaskSt
 		})
 		.then((timer) => log("info", "fixer_followup_scheduled", { pullRequest: check.pullRequest, round: check.round, dueAt: timer.dueAt }))
 		.catch((error: unknown) => log("warn", "fixer_followup_not_scheduled", { pullRequest: check.pullRequest, round: check.round, error: error instanceof Error ? error.message.slice(0, 160) : "error" }));
+}
+
+/** Asks the hub to watch the pull request (or renews the watch). A hub that cannot be reached only costs the events: the timer still looks later. */
+function watchPullRequest(watches: FixerOptions["watches"], pullRequest: string, log: Log): void {
+	if (!watches) return;
+	void watches
+		.watch({ url: pullRequest })
+		.then((watch) => log("info", "fixer_pull_request_watched", { pullRequest, watchId: watch.id, created: watch.created }))
+		.catch((error: unknown) => log("warn", "fixer_pull_request_not_watched", { pullRequest, error: error instanceof Error ? error.message.slice(0, 160) : "error" }));
 }
 
 /** The card's result for a settled task. */
@@ -362,9 +392,9 @@ export async function aikidoFixerHooksFor(context: ServiceContext): Promise<Role
 	if (context.config.concurrency !== 1) throw new Error("the Aikido fixer runs one fix at a time: PI_CONCURRENCY must be 1");
 	readCredentials(settings.credentialsFile);
 	const aikido = new AikidoClient({ region: settings.region, credentials: () => readCredentials(settings.credentialsFile), apiBase: settings.apiBase, oauthUrl: settings.oauthUrl, minIntervalMs: settings.apiMinIntervalMs });
-	seedHandler({ stateDir: context.config.state.dir, settings, log: context.log, reseed: context.env.AIKIDO_RESEED_HANDLER === "1" });
+	seedHandler({ stateDir: context.config.state.dir, settings, log: context.log, reseed: context.env.AIKIDO_RESEED_HANDLER === "1", watches: Boolean(context.watches) });
 	const reader = new GitHubPullRequestReader({ apiBase: context.config.git.githubApi, token: async () => (context.gitTokenSource ? await context.gitTokenSource() : context.gitToken!) });
-	const hooks = createFixerHooks({ settings, aikido, reader, ...(context.timers ? { timers: context.timers } : {}), stateDir: context.config.state.dir, log: context.log });
+	const hooks = createFixerHooks({ settings, aikido, reader, ...(context.timers ? { timers: context.timers } : {}), ...(context.watches ? { watches: context.watches } : {}), stateDir: context.config.state.dir, log: context.log });
 	const chat = fixerChat({ settings, aikido, stateDir: context.config.state.dir, mirrorDir: context.config.git.mirror?.dir, log: context.log });
 	return { ...hooks, chat, readinessChecks: { aikido_credentials: async () => !!readCredentials(settings.credentialsFile) } };
 }

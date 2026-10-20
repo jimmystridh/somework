@@ -134,6 +134,15 @@ export class AttemptLedger {
 		return { ok: true };
 	}
 
+	/** The Aikido issue and branch of a pull request this agent opened and recorded, or undefined for any other. */
+	pullRequestOf(prUrl: string): { groupId: string; branch: string; prUrl: string } | undefined {
+		const wanted = prUrl.toLowerCase();
+		const entries = Object.values(this.#read().outcomes)
+			.filter((outcome) => outcome.outcome === "pr_opened" && outcome.prUrl?.toLowerCase() === wanted && outcome.branch)
+			.sort((a, b) => b.at.localeCompare(a.at));
+		return entries[0] ? { groupId: entries[0].groupId, branch: entries[0].branch!, prUrl: entries[0].prUrl! } : undefined;
+	}
+
 	/** Notes how a task ended, once (the first record of a task wins), for the chat's account of what the agent did. */
 	recordOutcome(taskId: string, outcome: Omit<AttemptOutcome, "at">): void {
 		const stored = this.#read();
@@ -186,16 +195,6 @@ export class AttemptLedger {
 		return result;
 	}
 
-	/** What the chat may state: the limits, today's count, and the recent attempts per issue with how they ended. */
-	facts(limit = 10): { dailyCap: number; raisedToday: number; maxAttemptsPerIssue: number; cooldownMinutes: number; today: number; recent: (AttemptOutcome & { taskId: string; attempts: number })[] } {
-		const stored = this.#read();
-		const today = this.#now().toISOString().slice(0, 10);
-		const recent = Object.entries(stored.outcomes)
-			.sort(([, a], [, b]) => b.at.localeCompare(a.at))
-			.slice(0, limit)
-			.map(([taskId, outcome]) => ({ taskId, ...outcome, attempts: stored.issues[outcome.groupId]?.attempts.length ?? 0 }));
-		const raisedToday = stored.raised?.[today] ?? 0;
-		return { dailyCap: this.#limits.dailyCap + raisedToday, raisedToday, maxAttemptsPerIssue: this.#limits.maxAttemptsPerIssue, cooldownMinutes: this.#limits.cooldownMinutes, today: stored.days[today]?.length ?? 0, recent };
 	/**
 	 * Adds `extra` fix attempts to today's cap, at most `maxRaise` over all raises of the day (the handler's own flood guard sits above that), and goes
 	 * back to the normal cap tomorrow. Throws a `RangeError` the chat can show when the request is not allowed.
@@ -211,6 +210,16 @@ export class AttemptLedger {
 		return { raisedToday, cap: this.#limits.dailyCap + raisedToday };
 	}
 
+	/** What the chat may state: the limits, today's count, and the recent attempts per issue with how they ended. */
+	facts(limit = 10): { dailyCap: number; raisedToday: number; maxAttemptsPerIssue: number; cooldownMinutes: number; today: number; recent: (AttemptOutcome & { taskId: string; attempts: number })[] } {
+		const stored = this.#read();
+		const today = this.#now().toISOString().slice(0, 10);
+		const recent = Object.entries(stored.outcomes)
+			.sort(([, a], [, b]) => b.at.localeCompare(a.at))
+			.slice(0, limit)
+			.map(([taskId, outcome]) => ({ taskId, ...outcome, attempts: stored.issues[outcome.groupId]?.attempts.length ?? 0 }));
+		const raisedToday = stored.raised?.[today] ?? 0;
+		return { dailyCap: this.#limits.dailyCap + raisedToday, raisedToday, maxAttemptsPerIssue: this.#limits.maxAttemptsPerIssue, cooldownMinutes: this.#limits.cooldownMinutes, today: stored.days[today]?.length ?? 0, recent };
 	}
 
 	/** The branch a task uses: the first name it was given, forever, so a retry never opens a second branch. */

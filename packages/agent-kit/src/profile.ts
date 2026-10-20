@@ -141,6 +141,8 @@ export interface ServiceContext {
 	gitTokenSource?: () => Promise<string>;
 	/** Asks the event hub to wake this agent later; present only when `TIMERS_URL` is set. */
 	timers?: import("./timers/client.ts").TimersClient;
+	/** Asks the event hub for the events of one pull request; present only when `WATCH_URL` is set. */
+	watches?: import("./watches/client.ts").WatchesClient;
 	/** The remote branches of a repository that name a ticket, from the agent's mirror (git access only, no API); empty without a mirror. */
 	branchesNaming?: (repoUrl: string, ticket: string) => Promise<import("./git.ts").BranchInfo[]>;
 }

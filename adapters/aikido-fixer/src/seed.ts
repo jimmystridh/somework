@@ -6,10 +6,14 @@ export const HANDLER = "aikido";
 export const FOLLOWUP_HANDLER = "aikido-followup";
 /** The topic of the timers this agent asks the event hub for (its id with the hyphen as an underscore). */
 export const FOLLOWUP_TOPIC = "clock.timer.aikido_fixer.due";
+/** A pull request this agent asked the hub to watch wakes it under this topic (rule `aikido-fixer-watch`). */
+export const WATCH_HANDLER = "aikido-watch";
+export const WATCH_TOPIC = "github.watch.aikido_fixer.event";
 /** Tasks the handler submits per day, as a multiple of the daily fix cap: a task that turns out to be skipped (a pull request is already open, the issue is closed) never counts against the cap on the host, so the handler's own count is only a flood guard. */
 export const SUBMIT_FACTOR = 5;
 const TEMPLATE = new URL("../handlers/aikido.mjs", import.meta.url);
 const FOLLOWUP_TEMPLATE = new URL("../handlers/aikido-followup.mjs", import.meta.url);
+const WATCH_TEMPLATE = new URL("../handlers/aikido-watch.mjs", import.meta.url);
 
 /** The settings the handler needs, as the object written into its source. */
 export const handlerConfig = (settings: FixerSettings) => ({
@@ -19,6 +23,17 @@ export const handlerConfig = (settings: FixerSettings) => ({
 	maxAttempts: settings.maxAttemptsPerIssue,
 	cooldownMinutes: settings.cooldownMinutes,
 	submitCapPerDay: settings.dailyCap * SUBMIT_FACTOR,
+	budget: settings.budget,
+});
+
+/** The watch handler's settings: which pull requests and which events start a follow-up, and how often. */
+export const watchConfig = (settings: FixerSettings) => ({
+	repositoryUrl: settings.repositories[0],
+	repositoryName: repositoryFullName(settings.repositories[0]!),
+	submitCapPerDay: settings.followUpCapPerDay,
+	cooldownSeconds: settings.watchCooldownSeconds,
+	maxPerPullRequest: settings.watchMaxPerPullRequest,
+	ignoreSenders: settings.watchIgnoreSenders,
 	budget: settings.budget,
 });
 
@@ -42,11 +57,16 @@ export function renderFollowUpHandler(settings: FixerSettings, template: string 
 	return template.replace("__CONFIG__", () => JSON.stringify(followUpConfig(settings), null, 1));
 }
 
+export function renderWatchHandler(settings: FixerSettings, template: string = readFileSync(WATCH_TEMPLATE, "utf8")): string {
+	if (!template.includes("__CONFIG__")) throw new Error("the watch handler template has no __CONFIG__ placeholder");
+	return template.replace("__CONFIG__", () => JSON.stringify(watchConfig(settings), null, 1));
+}
+
 /**
  * Installs the handlers into the agent's handler directory on its first start. A handler that is already there (the live copy, which the
  * operator may have edited) is left alone; `reseed` saves the rendered one as a new version instead (the earlier versions stay).
  */
-export function seedHandler(options: { stateDir: string; settings: FixerSettings; log: Log; reseed?: boolean; template?: string }): { seeded: boolean; version?: number } {
+export function seedHandler(options: { stateDir: string; settings: FixerSettings; log: Log; reseed?: boolean; template?: string; /** the service can ask the hub for pull request watches (`WATCH_URL`) */ watches?: boolean }): { seeded: boolean; version?: number } {
 	const store = new HandlerStore(handlersDir(options.stateDir));
 	// the follow-up handler is only useful while follow-ups are on, and installing it costs a handler slot that wakes on timers: leave it out when they are off
 	if (options.settings.followUpMinutes.length > 0) {
@@ -54,6 +74,14 @@ export function seedHandler(options: { stateDir: string; settings: FixerSettings
 		if (!followUp || options.reseed) {
 			const saved = store.save(FOLLOWUP_HANDLER, renderFollowUpHandler(options.settings), [FOLLOWUP_TOPIC]);
 			options.log("info", "aikido_handler_seeded", { handler: FOLLOWUP_HANDLER, version: saved.version, hash: saved.hash.slice(0, 12), reseed: options.reseed === true });
+		}
+	}
+	// pull request events come only while the agent watches pull requests (WATCH_URL); the handler is useless without them
+	if (options.settings.followUpMinutes.length > 0 && options.watches) {
+		const watch = store.current(WATCH_HANDLER);
+		if (!watch || options.reseed) {
+			const saved = store.save(WATCH_HANDLER, renderWatchHandler(options.settings), [WATCH_TOPIC]);
+			options.log("info", "aikido_handler_seeded", { handler: WATCH_HANDLER, version: saved.version, hash: saved.hash.slice(0, 12), reseed: options.reseed === true });
 		}
 	}
 	const existing = store.current(HANDLER);

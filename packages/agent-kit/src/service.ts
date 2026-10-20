@@ -137,7 +137,7 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			// the git session is built after the role's hooks (it needs the hooks' environment): a role that asks for branches reaches it through this
 			const gitSessionLate: { current?: GitSession } = {};
 			const branchesNaming = async (repoUrl: string, ticket: string) => (gitSessionLate.current ? branchesNamingIn(gitSessionLate.current, repoUrl, ticket) : []);
-			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}), branchesNaming }) : (options.hooks ?? {});
+			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}), ...(watches ? { watches: watches.client } : {}), branchesNaming }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);

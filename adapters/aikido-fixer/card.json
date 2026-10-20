@@ -185,7 +185,7 @@
       "id": "code.fix.followup",
       "version": "1",
       "name": "Follow up on a pull request this agent opened",
-      "description": "Give the Aikido issue id, the repository (url, and the pull request's branch as ref) and followUp (the pull request's address, its agent/ branch and the check number). The agent reads the reviews, comments and failing checks that came after the branch's newest commit; when there are some it works on that same branch, so the pull request updates, and reports followup_pushed. When the pull request is closed or merged, or nothing new was said, nothing is cloned and the result is skipped. Started by the agent itself from a timer it asked the event hub for after opening the pull request.",
+      "description": "Give the Aikido issue id, the repository (url, and the pull request's branch as ref) and followUp (the pull request's address, its agent/ branch and the check number). The agent reads the reviews, comments and failing checks that came after the branch's newest commit; when there are some it works on that same branch, so the pull request updates, and reports followup_pushed. When the pull request is closed or merged, or nothing new was said, nothing is cloned and the result is skipped. Started by the agent itself: by an event of the pull request, which it asks the event hub to watch after opening it (source watch; only the pull request address is given), and by one late timer it asks for as a safety net.",
       "tags": [
         "contract:idempotent",
         "fix",
@@ -197,7 +197,6 @@
       "inputSchema": {
         "type": "object",
         "required": [
-          "issue",
           "repository",
           "followUp",
           "budget"
@@ -224,7 +223,8 @@
                   }
                 ]
               }
-            }
+            },
+            "description": "optional for a follow-up started by a pull request watch: the agent then takes the issue from its own record of the pull request"
           },
           "repository": {
             "type": "object",
@@ -248,7 +248,6 @@
             "type": "object",
             "required": [
               "pullRequest",
-              "branch",
               "round"
             ],
             "additionalProperties": false,
@@ -261,12 +260,21 @@
               "branch": {
                 "type": "string",
                 "maxLength": 160,
-                "pattern": "^agent/"
+                "pattern": "^agent/",
+                "description": "optional for a follow-up started by a pull request watch: the agent then takes the branch from its own record of the pull request"
               },
               "round": {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 10
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "timer",
+                  "watch"
+                ],
+                "description": "watch: started by an event of a pull request the agent watches; the pull request must be one the agent opened and recorded"
               }
             }
           },
