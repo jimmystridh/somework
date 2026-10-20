@@ -3,6 +3,7 @@ import { mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "nod
 import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import type { BrowserBackend } from "./backend.ts";
+import { ConfinementError, nativeFlavour, resolveInside } from "@somework/agent-kit/windows";
 import { displayUrl, isAllowedUrl, safeName } from "./policy.ts";
 
 export interface DaemonOptions {
@@ -10,6 +11,8 @@ export interface DaemonOptions {
 	/** Where state, screenshots and videos go. Created if missing. */
 	dir: string;
 	allowHosts: readonly string[];
+	/** The directory a file given to the page must be inside (the workspace root: ticket attachments and evidence are under it). Without it the `upload` command is refused. */
+	uploadRoot?: string;
 	/** For tests: how long a snapshot may be before it is cut. */
 	maxSnapshotChars?: number;
 }
@@ -21,6 +24,7 @@ export interface DaemonFiles {
 
 const MAX_BODY = 64 * 1024;
 const REF = /^e[0-9]{1,5}$/;
+const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
 
 class UsageError extends Error {}
 
@@ -34,6 +38,7 @@ export class BrowserDaemon {
 	readonly statePath: string;
 	readonly #backend: BrowserBackend;
 	readonly #allowHosts: readonly string[];
+	readonly #uploadRoot: string | undefined;
 	readonly #maxSnapshot: number;
 	readonly #token = randomBytes(24).toString("hex");
 	#server: Server | undefined;
@@ -48,6 +53,7 @@ export class BrowserDaemon {
 		this.statePath = join(options.dir, "browser.json");
 		this.#backend = options.backend;
 		this.#allowHosts = options.allowHosts;
+		this.#uploadRoot = options.uploadRoot;
 		this.#maxSnapshot = options.maxSnapshotChars ?? 24_000;
 	}
 
@@ -132,6 +138,26 @@ export class BrowserDaemon {
 				return `clicked "${str("text", 80)}"; now ${page(await this.#backend.clickText(str("text", 80)))}`;
 			case "fill":
 				return `filled ${args.ref}; now ${page(await this.#backend.fill(ref(), str("text", 5000)))}`;
+			case "upload": {
+				if (!this.#uploadRoot) throw new UsageError("upload: this verification may not hand files to the page");
+				const given = str("file", 500);
+				let file: string;
+				try {
+					file = resolveInside(this.#uploadRoot, given, { flavour: nativeFlavour() });
+				} catch (error) {
+					throw new UsageError(`upload: ${error instanceof ConfinementError ? error.message : "that path is not usable"}`);
+				}
+				let size: number;
+				try {
+					const info = statSync(file);
+					if (!info.isFile()) throw new Error("not a file");
+					size = info.size;
+				} catch {
+					throw new UsageError(`upload: no file at ${given}`);
+				}
+				if (size === 0 || size > MAX_UPLOAD_BYTES) throw new UsageError(`upload: the file must be between 1 byte and ${MAX_UPLOAD_BYTES} bytes`);
+				return `uploaded ${given} (${size} bytes)${args.ref === undefined ? "" : ` through ${args.ref}`}; now ${page(await this.#backend.upload(args.ref === undefined ? undefined : ref(), file))}`;
+			}
 			case "press":
 				return `pressed; now ${page(await this.#backend.press(str("key", 40)))}`;
 			case "wait": {
@@ -171,7 +197,7 @@ export class BrowserDaemon {
 			case "status":
 				return `recording: ${this.#recording}\nfiles: ${JSON.stringify(this.files())}`;
 			default:
-				throw new UsageError(`unknown command "${cmd}" (open, snapshot, click, click-text, fill, press, wait, screenshot, errors, video-start, video-stop, status)`);
+				throw new UsageError(`unknown command "${cmd}" (open, snapshot, click, click-text, fill, upload, press, wait, screenshot, errors, video-start, video-stop, status)`);
 		}
 	}
 

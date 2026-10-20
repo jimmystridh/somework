@@ -32,6 +32,8 @@ describe("the command line", () => {
 		assert.deepEqual(parseCli(["--state", state, "wait", "--ms", "500", "--text", "Saved"]).args, { ms: 500, text: "Saved" });
 		assert.deepEqual(parseCli(["--state", state, "screenshot", "after"]).args, { name: "after" });
 		assert.deepEqual(parseCli(["--state", state, "screenshot"]).args, {});
+		assert.deepEqual(parseCli(["--state", state, "upload", "e7", "C:/w/.qa/job-1/ticket-files/1-a b.BCK"]).args, { ref: "e7", file: "C:/w/.qa/job-1/ticket-files/1-a b.BCK" });
+		assert.deepEqual(parseCli(["--state", state, "upload", "C:/w/x.BCK"]).args, { file: "C:/w/x.BCK" });
 		for (const cmd of ["snapshot", "errors", "video-start", "video-stop", "status"]) assert.equal(parseCli(["--state", state, cmd]).cmd, cmd);
 	});
 	it("explains bad usage", () => {
@@ -53,6 +55,48 @@ async function daemon() {
 	const cmd = (argv: string[]) => send(parseCli(["--state", d.statePath, ...argv]));
 	return { d, backend, dir, cmd };
 }
+
+describe("handing a file to the page", () => {
+	async function uploading(uploadRoot?: string) {
+		const dir = mkdtempSync(join(tmpdir(), "qa-daemon-"));
+		const backend = new FakeBackend(pages);
+		const d = await BrowserDaemon.start({ backend, dir, allowHosts: ["127.0.0.1"], ...(uploadRoot ? { uploadRoot } : {}) });
+		return { d, backend, cmd: (argv: string[]) => send(parseCli(["--state", d.statePath, ...argv])) };
+	}
+	const files = mkdtempSync(join(tmpdir(), "qa-files-"));
+	writeFileSync(join(files, "backup.BCK"), "backup bytes");
+	writeFileSync(join(files, "empty.BCK"), "");
+
+	it("gives a file inside the workspace to the page, through a control or into the first file input", async () => {
+		const { d, backend, cmd } = await uploading(files);
+		try {
+			assert.match(await cmd(["upload", "e5", join(files, "backup.BCK")]), /uploaded .*backup\.BCK \(12 bytes\) through e5/);
+			assert.match(await cmd(["upload", join(files, "backup.BCK")]), /uploaded .*backup\.BCK \(12 bytes\); now/);
+			assert.ok(backend.calls.some((call) => /^upload e5 .*backup\.BCK$/.test(call)));
+			assert.ok(backend.calls.some((call) => /^upload - .*backup\.BCK$/.test(call)));
+		} finally {
+			await d.stop();
+		}
+	});
+
+	it("refuses a file outside the workspace, a missing or empty one, and any file when no root is given", async () => {
+		const { d, backend, cmd } = await uploading(files);
+		try {
+			await assert.rejects(cmd(["upload", "/etc/passwd"]), /upload: /);
+			await assert.rejects(cmd(["upload", join(files, "missing.BCK")]), /no file at/);
+			await assert.rejects(cmd(["upload", join(files, "empty.BCK")]), /between 1 byte and/);
+			assert.equal(backend.calls.some((call) => call.startsWith("upload")), false, "the backend never saw them");
+		} finally {
+			await d.stop();
+		}
+		const none = await uploading();
+		try {
+			await assert.rejects(none.cmd(["upload", join(files, "backup.BCK")]), /may not hand files to the page/);
+		} finally {
+			await none.d.stop();
+		}
+	});
+});
 
 describe("the browser daemon", () => {
 	it("drives the backend through the command line and keeps the state file private", async () => {

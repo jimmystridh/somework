@@ -248,7 +248,7 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 			current.backendRevision = started.backendRevision;
 			log("info", "app_started", { taskId: context.taskId, health: profile.health.length, backendRevision: started.backendRevision });
 
-			current.daemon = await BrowserDaemon.start({ backend: await options.browser(options.allowHosts), dir: evidence, allowHosts: options.allowHosts });
+			current.daemon = await BrowserDaemon.start({ backend: await options.browser(options.allowHosts), dir: evidence, allowHosts: options.allowHosts, uploadRoot: options.root });
 			const wrapper = wrapperFor(options.root, context.taskId);
 			writeFileSync(wrapper, `#!/bin/bash\nexec node "${options.cliPath.replaceAll("\\", "/")}" --state "${evidence}/browser.json" "$@"\n`, { mode: 0o755 });
 			chmodSync(wrapper, 0o755);

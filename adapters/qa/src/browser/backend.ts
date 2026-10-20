@@ -26,6 +26,8 @@ export interface BrowserBackend {
 	/** Clicks the element whose visible text is exactly `text` (the first one): for tree nodes and labels the outline gives no ref. */
 	clickText(text: string): Promise<PageInfo>;
 	fill(ref: string, text: string): Promise<PageInfo>;
+	/** Hands a file to the page: into the file input behind `ref` (a button that opens the file chooser, or the input itself), or, without a ref, into the page's first file input. */
+	upload(ref: string | undefined, file: string): Promise<PageInfo>;
 	press(key: string): Promise<PageInfo>;
 	wait(options: WaitOptions): Promise<PageInfo>;
 	/** Writes a PNG to `file`. */

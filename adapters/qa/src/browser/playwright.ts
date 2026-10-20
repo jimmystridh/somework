@@ -132,6 +132,25 @@ export class PlaywrightBackend implements BrowserBackend {
 		return this.#info();
 	}
 
+	async upload(ref: string | undefined, file: string): Promise<PageInfo> {
+		if (ref === undefined) {
+			const input = this.#page.locator('input[type="file"]');
+			if ((await input.count()) === 0) throw new Error("no file input on the page (take a snapshot, then name the control that opens the file chooser: upload <ref> <file>)");
+			await input.first().setInputFiles(file, { timeout: 30_000 });
+			return this.#info();
+		}
+		const target = this.#target(ref);
+		if ((await target.count()) === 0) throw new Error(`no control ${ref} on the page (take a new snapshot)`);
+		const isFileInput = await target.first().evaluate((element: any) => element.tagName === "INPUT" && element.type === "file");
+		if (isFileInput) await target.first().setInputFiles(file, { timeout: 30_000 });
+		else {
+			const [chooser] = await Promise.all([this.#page.waitForEvent("filechooser", { timeout: 15_000 }), target.first().click({ timeout: 30_000 })]);
+			await chooser.setFiles(file);
+		}
+		await this.#page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});
+		return this.#info();
+	}
+
 	async press(key: string): Promise<PageInfo> {
 		await this.#page.keyboard.press(key);
 		await this.#page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});

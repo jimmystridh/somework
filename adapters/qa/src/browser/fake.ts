@@ -57,6 +57,10 @@ export class FakeBackend implements BrowserBackend {
 		this.#record(`fill ${ref} ${text}`);
 		return this.#info();
 	}
+	async upload(ref: string | undefined, file: string) {
+		this.#record(`upload ${ref ?? "-"} ${file}`);
+		return this.#info();
+	}
 	async press(key: string) {
 		this.#record(`press ${key}`);
 		return this.#info();

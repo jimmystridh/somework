@@ -12,6 +12,7 @@ const USAGE = `usage: node cli.ts --state <browser.json> <command> [arguments]
   click <ref>                       click a control from the last snapshot
   click-text <text>                 click the element whose visible text is exactly this (a tree node or label that has no ref in the snapshot)
   fill <ref> <text...>              type into a field
+  upload [<ref>] <file>             hand a file inside your workspace to the page: through the control <ref> that opens the file chooser (or is the file input), or into the page's first file input
   press <key>                       press a key, for example Enter or Control+A
   wait [--ms N] [--text T] [--selector S]
   screenshot [name]                 save a PNG
@@ -54,6 +55,13 @@ export function parseCli(argv: readonly string[]): CliCommand {
 			if (params.length < 2) throw new CliUsageError("fill takes a ref and a text");
 			args.ref = params[0];
 			args.text = params.slice(1).join(" ");
+			break;
+		case "upload":
+			if (params.length < 1) throw new CliUsageError("upload takes a file, and optionally the ref of the control before it");
+			if (params.length > 1 && /^e[0-9]{1,5}$/.test(params[0]!)) {
+				args.ref = params[0];
+				args.file = params.slice(1).join(" ");
+			} else args.file = params.join(" ");
 			break;
 		case "press":
 			if (params.length !== 1) throw new CliUsageError("press takes one key");
