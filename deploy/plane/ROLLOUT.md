@@ -1,4 +1,17 @@
-# Deployment continuation — NOT deployed (2026-10-14)
+# Plane rollout
+
+**Status 2026-10-25: deployed** on Services with Garage storage (single node, layout
+`dc1` 20 GB) from this directory staged by `git archive` (tree-hash checked), and
+reachable only through the owner-only gateway at
+`https://admin-cloud-agents.tail371505.ts.net:8443` (tailnet, no Funnel). Verified:
+migrations, loopback proxy, ingress chain, owner/non-owner gateway checks, and
+Plane's own boto3 presigned POST/GET, head, copy, wrong-key and anonymous
+rejection, and persistence across a Garage restart. Still owner steps: create the
+first admin at `/god-mode/`. Layout capacity (20 GB) can be raised with
+`garage layout assign` when needed. The record below is the pre-deployment
+history of 2026-10-14.
+
+## Pre-deployment history (2026-10-14)
 
 This continuation leaves `feat/plane-garage-contract` at exact `5c59937` unchanged.
 Its storage contract is useful preparation, not a deployed Plane instance. The

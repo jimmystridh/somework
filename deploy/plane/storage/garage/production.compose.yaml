@@ -7,6 +7,9 @@ services:
     command: !override [/garage, server]
     tmpfs: !override []
     environment: !override {}
+    # cap_drop ALL (upstream layer) also drops root's DAC override, so the
+    # owner-only 0600 RPC secret needs this one read capability.
+    cap_add: [DAC_READ_SEARCH]
     volumes: !override
       - garage_meta:/data/meta
       - garage_objects:/data/objects

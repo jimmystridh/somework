@@ -31,6 +31,7 @@ test('candidate layer removes licensed runtime mounts and keeps private listener
  const s=c.services['plane-minio'];assert.equal(s.image,JSON.parse(readFileSync(`${dir}provenance.json`)).image);
  assert.deepEqual(s.command,['/garage','server']);assert.deepEqual(s.healthcheck.test,['CMD','/garage','health']);
  assert.equal(s.ports,undefined);assert.deepEqual(s.environment,undefined);
+ assert.deepEqual(s.cap_drop,['ALL']);assert.deepEqual(s.cap_add,['DAC_READ_SEARCH']);
  assert.ok(!s.volumes.some(v=>v.target==='/minio.license'||v.source==='uploads'));
  assert.deepEqual(s.volumes.filter(v=>v.type==='volume').map(v=>v.source).sort(),['garage_meta','garage_objects']);
  assert.ok(s.volumes.filter(v=>v.type==='bind').every(v=>v.read_only && !v.bind.create_host_path));
@@ -38,6 +39,7 @@ test('candidate layer removes licensed runtime mounts and keeps private listener
  assert.match(readFileSync(`${plane}upstream/compose.yaml`,'utf8'),/uploads:/);
  assert.equal(c.volumes.uploads,undefined);
  assert.equal(c.services.proxy.ports[0].host_ip,'127.0.0.1');
+ assert.match(c.services.proxy.environment.CERT_ACME_CA,/^https:/);
  for(const n of ['api','worker','beat-worker','migrator'])assert.equal(c.services[n].environment.AWS_REGION,'garage');
  const config=readFileSync(`${dir}production.toml`,'utf8');
  assert.match(config,/rpc_bind_addr = "127.0.0.1:3901"/);assert.match(config,/rpc_secret_file =/);

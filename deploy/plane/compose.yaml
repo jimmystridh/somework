@@ -148,6 +148,8 @@ services:
     environment:
       SITE_ADDRESS: ":80"
       APP_DOMAIN: ${APP_DOMAIN:?Set the verified tailnet DNS name}
+      # Caddy rejects an empty acme_ca; plane.env leaves it blank for HTTP-only use.
+      CERT_ACME_CA: ${CERT_ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
     # HTTPS termination must be provided by a reviewed tailnet-only ingress.
     # !override requires Compose >= 2.24.4 and removes BOTH public upstream ports.
     ports: !override
