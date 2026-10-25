@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,chmodSync,readFileSync,statSync,rmSync} from 'node:fs';
+import {mkdtempSync,chmodSync,readFileSync,statSync,rmSync,writeFileSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {generate} from './generate-secrets.mjs';
@@ -42,5 +42,14 @@ test('opt-in Garage uses compatible key IDs, explicit region, private exclusive 
   assert.throws(()=>generate(dir,origin,'garage'),/EEXIST/);
   assert.equal(readFileSync(join(dir,'garage_rpc'),'utf8'),rpc);
   assert.throws(()=>generate(dir,origin,'minio-ce'),/unreviewed/);
+ }finally{rmSync(dir,{recursive:true});}
+});
+test('an existing Garage RPC secret leaves no new plane.env behind',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'plane-env-test-'));chmodSync(dir,0o700);
+ try {
+  writeFileSync(join(dir,'garage_rpc'),'kept');
+  assert.throws(()=>generate(dir,origin,'garage'),/EEXIST/);
+  assert.equal(existsSync(join(dir,'plane.env')),false);
+  assert.equal(readFileSync(join(dir,'garage_rpc'),'utf8'),'kept');
  }finally{rmSync(dir,{recursive:true});}
 });

@@ -38,7 +38,14 @@ headroom() {
  [ "$available" -ge "$1" ] || { echo "insufficient measured headroom: ${available} MiB available" >&2; exit 5; }
 }
 pc config --quiet
-headroom 4800
+if [ "$storage" = garage ]; then
+ # An AIStor plane-minio holds uploads in another volume; replacing it with an
+ # empty Garage would hide them. Migrating objects needs its own reviewed step.
+ case "$(docker ps -a --filter label=com.docker.compose.project=plane --filter label=com.docker.compose.service=plane-minio --format '{{.Image}}')" in
+  *aistor*) echo 'existing AIStor storage; migrate objects before switching to Garage' >&2; exit 4;;
+ esac
+fi
+headroom 4000
 if [ "$phase" = storage ]; then
  # Fresh Garage is unhealthy until an operator assigns an explicit layout.
  # This phase starts ONLY storage; no DB, migrations, app or proxy can start.

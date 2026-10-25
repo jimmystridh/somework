@@ -3,6 +3,7 @@
 Secrets travel only on docker exec stdin, never argv, logs or API error output.
 Run AFTER explicit layout initialization. No automatic disk sizing/data conversion.
 """
+import hmac
 import json
 import re
 import stat
@@ -34,7 +35,9 @@ def bootstrap(api, access, secret, bucket):
     keys = api('ListKeys', None)
     if not any(k['id'] == access for k in keys):
         api('ImportKey', {'accessKeyId': access, 'secretAccessKey': secret, 'name': 'plane'})
-    key = api('GetKeyInfo', {'id': access, 'showSecretKey': False})
+    key = api('GetKeyInfo', {'id': access, 'showSecretKey': True})
+    if not hmac.compare_digest(key.get('secretAccessKey') or '', secret):
+        raise ValueError('existing Garage key has a different secret than plane.env')
     if key['permissions']['createBucket']:
         raise ValueError('refusing a key with bucket-creation privileges')
     if any(b['id'] != bucket_id or b['permissions']['owner'] for b in key['buckets']):

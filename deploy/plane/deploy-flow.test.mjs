@@ -22,6 +22,7 @@ if(name==='awk') console.log('6000');
 if(name==='python3' && process.env.FAIL_STEP==='preflight') process.exit(1);
 if(name==='python3' && !args.includes('--check') && process.env.FAIL_STEP==='provision') process.exit(1);
 if(name==='docker') {
+ if(args[0]==='ps' && args.includes('--filter') && process.env.FAIL_STEP==='aistor') console.log('quay.io/minio/aistor/minio:RELEASE');
  if(args[0]==='wait') console.log(process.env.FAIL_STEP==='migration'?'1':'0');
  if(args.includes('ps') && args.includes('-q')) console.log(args.includes('plane-minio')?'storage-id':'migration-id');
  if(args.includes('up') && args.includes('--wait') && args.includes('plane-minio') && process.env.FAIL_STEP==='layout') process.exit(1);
@@ -71,5 +72,12 @@ test('default remains licensed AIStor and invalid modes do not mutate containers
  const r=run();assert.equal(r.status,4);assert.match(r.stderr,/AIStor license required/);assert.equal(compose(r).length,0);
  for(const args of [['unknown'],['garage','unknown'],['aistor','storage'],['garage','application','extra']]){
   const invalid=run(args);assert.equal(invalid.status,2,invalid.stderr);assert.equal(compose(invalid).length,0);
+ }
+});
+test('Garage refuses to replace an existing AIStor storage container',()=>{
+ for(const phase of ['application','storage']){
+  const r=run(['garage',phase],'aistor');assert.equal(r.status,4,r.stderr);
+  assert.match(r.stderr,/existing AIStor storage/);
+  assert.equal(starts(r).length,0);
  }
 });

@@ -211,7 +211,9 @@ application workers, then exits. Frontends/live are single-process initial caps;
 Valkey is a small dedicated cache. No database/MQ/storage component was removed,
 no upstream command or concurrency weakened. Backend/storage caps were retained.
 OOM/restarts under real workload require reevaluation, not claims of capacity.
-The deploy script gates on measured available memory before and between phases;
+The deploy script gates on measured available memory before and between phases
+(4,000 MiB before the first start, an owner decision on 2026-10-25 because the caps
+are upper bounds and Services shows about 4,800 MiB available);
 if pressure appears, stop the next phase, keep ingress unavailable and reassess.
 There is no entitlement to resize, prune or steal another service's headroom.
 

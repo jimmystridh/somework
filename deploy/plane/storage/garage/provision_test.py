@@ -18,6 +18,7 @@ class Fake:
         self.calls = []
         self.exists = False
         self.key_exists = False
+        self.stored_secret = SECRET
         self.public = False
         self.create_bucket = False
         self.extra_bucket = False
@@ -39,10 +40,10 @@ class Fake:
             self.granted = True
             return {}
         if endpoint == 'GetKeyInfo':
-            assert payload['showSecretKey'] is False
+            result = {'secretAccessKey': self.stored_secret} if payload['showSecretKey'] else {}
             buckets = [{'id': 'other' if self.extra_bucket else 'bucket',
                         'permissions': {'owner': self.owner, 'read': True, 'write': True}}] if (self.granted or self.extra_bucket or self.owner) else []
-            return {'permissions': {'createBucket': self.create_bucket}, 'buckets': buckets}
+            return {**result, 'permissions': {'createBucket': self.create_bucket}, 'buckets': buckets}
         raise AssertionError(endpoint)
 
 class ProvisionTest(unittest.TestCase):
@@ -55,6 +56,13 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(imports, 1)
         self.assertIn(('AllowBucketKey', {'bucketId': 'bucket', 'accessKeyId': KEY,
                           'permissions': {'read': True, 'write': True, 'owner': False}}), api.calls)
+    def test_existing_key_with_other_secret_rejected(self):
+        api = Fake()
+        api.key_exists = True
+        api.stored_secret = 'f' * 64
+        with self.assertRaises(ValueError):
+            bootstrap(api, KEY, SECRET, 'uploads')
+        self.assertFalse(any(e in ('ImportKey', 'AllowBucketKey') for e, _ in api.calls))
     def test_wider_permissions_rejected(self):
         for attribute in ('public', 'create_bucket', 'extra_bucket', 'owner'):
             api = Fake()

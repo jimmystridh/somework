@@ -27,6 +27,12 @@ export function generate(directory, origin, storage = 'aistor') {
   CERT_EMAIL:'',CERT_ACME_CA:'',CERT_ACME_DNS:''
  };
  // Exclusive creation: refuse existing files/symlinks; never rotate or overwrite.
+ // Check every target first so a conflict cannot leave a half-written set behind.
+ for (const name of storage === 'garage' ? ['plane.env', 'garage_rpc'] : ['plane.env']) {
+  const target = resolve(directory, name);
+  try { lstatSync(target); } catch { continue; }
+  throw new Error(`EEXIST: ${name} already exists`);
+ }
  const fd = openSync(resolve(directory, 'plane.env'), 'wx', 0o600);
  try {
   if (storage === 'garage') {
