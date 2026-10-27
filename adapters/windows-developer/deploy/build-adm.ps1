@@ -1,7 +1,8 @@
 # Builds the Visma Administration back end (Source\BFS\BFS.sln, DebugAdm|x64 -> Source\Administration\x64\Debug\Adm.exe) in the current checkout.
 # Run from the repository root. The private NuGet packages come from a read-only copy of the build station's package folder
-# (C:\somework\nuget-cache\packages): this machine holds no package-feed credential, so nothing the model's shell can read opens that feed.
-# Refresh the copy from the build station when the repository moves to other private package versions. Windows PowerShell 5.1, ASCII only.
+# (C:\somework\nuget-cache\packages) and, when C:\somework\secrets\nuget-feed exists ("user:token", a read-only package token), from the private
+# GitHub Packages feed for versions the copy lacks. That token is readable by the job shell (same account): keep it read:packages only.
+# Windows PowerShell 5.1, ASCII only.
 [CmdletBinding()]
 param([string]$Configuration = 'DebugAdm', [string]$Platform = 'x64')
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,15 @@ if (-not (Test-Path $packages)) {
     if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit $LASTEXITCODE" }
 }
 
+$feedSource = ''
+$credentialFile = 'C:\somework\secrets\nuget-feed'
+if (Test-Path $credentialFile) {
+    $user, $token = (Get-Content -LiteralPath $credentialFile -TotalCount 1).Trim() -split ':', 2
+    if ($user -and $token) {
+        $feedSource = '<add key="github.com" value="https://nuget.pkg.github.com/Visma-Spcs-OnPrem-Tools/index.json" protocolVersion="3" />'
+        $feedCredentials = "<packageSourceCredentials><github.com><add key=`"Username`" value=`"$user`" /><add key=`"ClearTextPassword`" value=`"$token`" /></github.com></packageSourceCredentials>"
+    }
+}
 $config = Join-Path $env:TEMP ('adm-nuget-' + [guid]::NewGuid().ToString('N') + '.config')
 @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -26,7 +36,9 @@ $config = Join-Path $env:TEMP ('adm-nuget-' + [guid]::NewGuid().ToString('N') + 
     <clear />
     <add key="local-cache" value="$cache" />
     <add key="nuget.org" value="https://api.nuget.org/v3/index.json" protocolVersion="3" />
+    $feedSource
   </packageSources>
+  $feedCredentials
 </configuration>
 "@ | Set-Content -LiteralPath $config -Encoding UTF8
 
@@ -39,7 +51,10 @@ try {
     $env:MSBuildSDKsPath = Join-Path $sdk.FullName 'Sdks'
     $env:Path = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0;C:\Program Files\Git\cmd;C:\AgentTools;$dotnet;$env:Path"
     & C:\AgentTools\nuget.exe restore "$repo\Source\BFS\BFS.sln" -ConfigFile $config -MSBuildPath 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin' -NonInteractive
-    if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed with exit $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) {
+        $hint = if ($feedSource) { 'the private feed was tried' } else { "no feed credential at $credentialFile, so only the package copy was used" }
+        throw "NuGet restore failed with exit $LASTEXITCODE ($hint)"
+    }
 } finally {
     Remove-Item -LiteralPath $config -ErrorAction SilentlyContinue
 }

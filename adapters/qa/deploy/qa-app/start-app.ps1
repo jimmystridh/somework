@@ -28,6 +28,16 @@ Set-Content "$ctl\web-port.txt" $WebPort
 Set-Content "$ctl\tenant-mode.txt" $TenantMode
 Remove-Item "$ctl\stop-server", "$ctl\stop-web" -ErrorAction SilentlyContinue
 function Test-Url([string]$Url) { try { return (Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 5).StatusCode -eq 200 } catch { return $false } }
+# a back end that is still running from another job's build is not the one this job built: end it, the launcher below then starts the right one
+$wantedBackend = if (Test-Path "$ctl\backend-dir.txt") { (Get-Content "$ctl\backend-dir.txt" -TotalCount 1).Trim() } else { '' }
+$runningBackend = if (Test-Path "$ctl\backend-running.txt") { (Get-Content "$ctl\backend-running.txt" -TotalCount 1).Trim() } else { '' }
+if ($wantedBackend -ne '' -and $wantedBackend -ne $runningBackend -and ((Test-Listening 8080) -or (Test-TaskRunning 'QaAppServer'))) {
+    Set-Content "$ctl\stop-server" 'stop'
+    $until = (Get-Date).AddSeconds(60)
+    while (((Test-Listening 8080) -or (Test-TaskRunning 'QaAppServer')) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+    if (Test-TaskRunning 'QaAppServer') { & schtasks.exe /End /TN QaAppServer | Out-Null; Start-Sleep -Seconds 3 }
+    Remove-Item "$ctl\stop-server" -ErrorAction SilentlyContinue
+}
 if (-not (Test-Listening 8080)) { & schtasks.exe /Run /TN QaAppServer | Out-Null }
 if (-not (Test-Listening $WebPort)) { & schtasks.exe /Run /TN QaAppWeb | Out-Null }
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)

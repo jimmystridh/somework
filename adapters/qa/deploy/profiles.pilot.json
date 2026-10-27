@@ -1,22 +1,28 @@
 {
   "app": {
     "local": {
+      "prepare": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/agent/adapters/qa/deploy/qa-app/build-backend.ps1 -Checkout \"$(pwd -W)\"",
+      "prepareTimeoutSeconds": 10800,
       "start": "W=\"$(pwd -W)/Source/admin.web\"; C:/tools/bun/bun.exe install --frozen-lockfile --cwd \"$W\" && C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/start-app.ps1 -WebRoot \"$W\" -WebPort 4499 -TenantMode multi -TimeoutSeconds 900",
       "health": [
         "http://127.0.0.1:8080/health",
         "http://127.0.0.1:4499/"
       ],
       "stop": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/stop-app.ps1",
-      "startupTimeoutSeconds": 1700
+      "startupTimeoutSeconds": 1700,
+      "backendRevisionCommand": "head -n 1 C:/somework/qa-app/control/backend-sha.txt"
     },
     "default": {
+      "prepare": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/agent/adapters/qa/deploy/qa-app/build-backend.ps1 -Checkout \"$(pwd -W)\"",
+      "prepareTimeoutSeconds": 10800,
       "start": "W=\"$(pwd -W)/Source/admin.web\"; C:/tools/bun/bun.exe install --frozen-lockfile --cwd \"$W\" && C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/start-app.ps1 -WebRoot \"$W\" -WebPort 4499 -TenantMode multi -TimeoutSeconds 900",
       "health": [
         "http://127.0.0.1:8080/health",
         "http://127.0.0.1:4499/"
       ],
       "stop": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:/somework/qa-app/stop-app.ps1",
-      "startupTimeoutSeconds": 1700
+      "startupTimeoutSeconds": 1700,
+      "backendRevisionCommand": "head -n 1 C:/somework/qa-app/control/backend-sha.txt"
     }
   }
 }

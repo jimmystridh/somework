@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,7 +13,7 @@ const root = join(dir, "ws");
 mkdirSync(root, { recursive: true });
 const env = () => new ConfinedExecutionEnv({ root, baseEnv: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: root }, flavour: "posix" });
 
-const profile = (over: Partial<AppProfile> = {}): AppProfile => ({ start: "true", health: ["http://127.0.0.1:1/"], env: {}, startupTimeoutSeconds: 5, ...over });
+const profile = (over: Partial<AppProfile> = {}): AppProfile => ({ start: "true", health: ["http://127.0.0.1:1/"], env: {}, startupTimeoutSeconds: 5, prepareTimeoutSeconds: 60, ...over });
 
 describe("application profiles", () => {
 	const ok = { app: { default: { start: "nohup node server.js > .qa-app.log 2>&1 < /dev/null &", health: ["http://127.0.0.1:3000/health"], stop: "echo stop", env: { MODE: "local" }, startupTimeoutSeconds: 60, backendRevisionCommand: "echo abc123", cwd: "web" } } };
@@ -23,6 +23,14 @@ describe("application profiles", () => {
 		assert.equal(parsed.default!.health[0], "http://127.0.0.1:3000/health");
 		assert.equal(parsed.default!.cwd, "web");
 		assert.deepEqual(parseAppProfiles({}), {});
+	});
+
+	it("takes a preparation command with its own, longer timeout", () => {
+		const parsed = parseAppProfiles({ app: { default: { ...ok.app.default, prepare: "build.sh", prepareTimeoutSeconds: 7200 } } }).default!;
+		assert.equal(parsed.prepare, "build.sh");
+		assert.equal(parsed.prepareTimeoutSeconds, 7200);
+		assert.equal(parseAppProfiles(ok).default!.prepareTimeoutSeconds, 3600);
+		assert.equal(parseAppProfiles(ok).default!.prepare, undefined);
 	});
 
 	it("refuses typos, other sections, non-loopback health URLs, credentials in env and escaping directories", () => {
@@ -37,6 +45,9 @@ describe("application profiles", () => {
 			[{ app: { default: { ...ok.app.default, env: { API_TOKEN: "x" } } } }, /looks like a credential/],
 			[{ app: { default: { ...ok.app.default, cwd: "../x" } } }, /relative path/],
 			[{ app: { default: { ...ok.app.default, startupTimeoutSeconds: 1 } } }, /startupTimeoutSeconds/],
+			[{ app: { default: { ...ok.app.default, prepare: "build", prepareTimeoutSeconds: 10 } } }, /prepareTimeoutSeconds must be/],
+			[{ app: { default: { ...ok.app.default, prepare: "build", prepareTimeoutSeconds: 99999 } } }, /prepareTimeoutSeconds must be/],
+			[{ app: { default: { ...ok.app.default, prepareTimeoutSeconds: 600 } } }, /needs a prepare command/],
 		];
 		for (const [value, message] of bad) assert.throws(() => parseAppProfiles(value), (error) => error instanceof AppProfilesError && message.test(error.message), JSON.stringify(value).slice(0, 80));
 	});
@@ -74,6 +85,23 @@ describe("starting and stopping the application", () => {
 		assert.match((result as any).reason, /exit 3/);
 		assert.match((result as any).reason, /boot error/);
 		assert.doesNotMatch((result as any).reason, /hunter2/);
+	});
+
+	it("runs the preparation command to its end before the start command, and does not start when it fails", async () => {
+		const runner = new AppRunner({ env: env(), secrets: ["hunter2hunter2"], pollMs: 50 });
+		const port = await freePort();
+		const order = join(root, "order.txt");
+		const app = profile({ prepare: `echo prepare >> ${order}; sleep 1; echo built >> ${order}`, start: `echo start >> ${order}; nohup node ${serverScript} ${port} > app3.log 2>&1 < /dev/null & echo $! > app3.pid`, health: [`http://127.0.0.1:${port}/`], stop: "kill $(cat app3.pid)", startupTimeoutSeconds: 15 });
+		assert.equal((await runner.start(app, root)).ok, true);
+		await runner.stop(app, root, Date.now());
+		assert.equal(readFileSync(order, "utf8"), "prepare\nbuilt\nstart\n");
+
+		const failing = await runner.start(profile({ prepare: `echo compile error with hunter2hunter2 >&2; exit 2`, start: `echo started >> ${order}` }), root);
+		assert.equal(failing.ok, false);
+		assert.match((failing as any).reason, /preparation command failed \(exit 2\)/);
+		assert.match((failing as any).reason, /compile error/);
+		assert.doesNotMatch((failing as any).reason, /hunter2/);
+		assert.doesNotMatch(readFileSync(order, "utf8"), /started/);
 	});
 
 	it("gives up when the application never becomes healthy, and when a health URL answers 5xx", async () => {

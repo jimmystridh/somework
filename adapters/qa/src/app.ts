@@ -10,6 +10,12 @@ export class AppProfilesError extends Error {
 /** How to bring the application under test up and how to tell that it is. The job picks one by name; it never supplies a command. */
 export interface AppProfile {
 	/**
+	 * Optional command run before `start`, in the same place, for work that takes long and must finish before the application can start (building the
+	 * back end of this checkout). It runs in the foreground; the application is started only when it exits 0. Its output is kept for the failure reason.
+	 */
+	prepare?: string;
+	prepareTimeoutSeconds: number;
+	/**
 	 * Run through bash in the task workspace (or `cwd` below it). It must START the application in the background and return: redirect its
 	 * output to a file and detach its input, for example `nohup node server.js > .qa/app.log 2>&1 < /dev/null &`, otherwise the command
 	 * waits for the application to exit.
@@ -50,7 +56,7 @@ export function parseAppProfiles(raw: unknown): Record<string, AppProfile> {
 		const at = `profiles.app.${name}`;
 		if (!NAME.test(name)) fail("profiles.app", `"${name}" is not a valid profile name (lower-case letters, digits, . _ -)`);
 		const entry = object(entryRaw, at);
-		for (const key of Object.keys(entry)) if (!["start", "health", "stop", "cwd", "env", "startupTimeoutSeconds", "backendRevisionCommand"].includes(key)) fail(at, `unknown setting "${key}"`);
+		for (const key of Object.keys(entry)) if (!["start", "health", "stop", "cwd", "env", "startupTimeoutSeconds", "backendRevisionCommand", "prepare", "prepareTimeoutSeconds"].includes(key)) fail(at, `unknown setting "${key}"`);
 		const health = entry.health;
 		if (!Array.isArray(health) || health.length === 0 || health.length > 8) fail(at, "health must be a list of one to eight loopback URLs");
 		for (const url of health as unknown[]) {
@@ -65,6 +71,9 @@ export function parseAppProfiles(raw: unknown): Record<string, AppProfile> {
 		}
 		const startup = entry.startupTimeoutSeconds ?? 120;
 		if (typeof startup !== "number" || !Number.isInteger(startup) || startup < 5 || startup > 1800) fail(at, "startupTimeoutSeconds must be an integer from 5 to 1800");
+		const prepareTimeout = entry.prepareTimeoutSeconds ?? 3600;
+		if (typeof prepareTimeout !== "number" || !Number.isInteger(prepareTimeout) || prepareTimeout < 60 || prepareTimeout > 14400) fail(at, "prepareTimeoutSeconds must be an integer from 60 to 14400");
+		if (entry.prepareTimeoutSeconds !== undefined && entry.prepare === undefined) fail(at, "prepareTimeoutSeconds needs a prepare command");
 		let cwd: string | undefined;
 		if (entry.cwd !== undefined) {
 			if (typeof entry.cwd !== "string" || /^([A-Za-z]:|[\\/])/.test(entry.cwd) || entry.cwd.split(/[\\/]/).includes("..") || entry.cwd.includes(":")) fail(at, "cwd must be a relative path inside the workspace");
@@ -78,6 +87,8 @@ export function parseAppProfiles(raw: unknown): Record<string, AppProfile> {
 			env[key] = value as string;
 		}
 		profiles[name] = {
+			...(entry.prepare !== undefined ? { prepare: command(entry.prepare, `${at}.prepare`) } : {}),
+			prepareTimeoutSeconds: prepareTimeout,
 			start: command(entry.start, `${at}.start`),
 			health: (health as unknown[]).map(String),
 			...(entry.stop !== undefined ? { stop: command(entry.stop, `${at}.stop`) } : {}),
@@ -154,6 +165,10 @@ export class AppRunner {
 	async start(profile: AppProfile, workspace: string, signal?: AbortSignal): Promise<StartResult> {
 		const startedAtMs = Date.now();
 		const cwd = profile.cwd ? `${workspace}/${profile.cwd}` : workspace;
+		if (profile.prepare) {
+			const prepared = await this.#run(profile.prepare, cwd, profile.env, profile.prepareTimeoutSeconds, signal);
+			if (!prepared.ok) return { ok: false, reason: redactLog(`the preparation command failed${prepared.exitCode !== undefined ? ` (exit ${prepared.exitCode})` : ""}${prepared.error ? `: ${prepared.error}` : ""}\n${prepared.output}`, this.#secrets).trim() };
+		}
 		const launched = await this.#run(profile.start, cwd, profile.env, Math.min(profile.startupTimeoutSeconds, 900), signal);
 		if (!launched.ok) return { ok: false, reason: redactLog(`the start command failed${launched.exitCode !== undefined ? ` (exit ${launched.exitCode})` : ""}${launched.error ? `: ${launched.error}` : ""}\n${launched.output}`, this.#secrets).trim() };
 		const deadline = Date.now() + profile.startupTimeoutSeconds * 1000;

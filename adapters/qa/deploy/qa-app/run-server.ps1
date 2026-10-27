@@ -10,6 +10,14 @@ $stopFlag = "$ctl\stop-server"
 Remove-Item $stopFlag -ErrorAction SilentlyContinue
 if (@(Get-NetTCPConnection -State Listen -LocalPort 8080 -ErrorAction SilentlyContinue).Count -gt 0) { 'the server already listens on 8080'; exit 0 }
 $dir = (Get-Content "$root\server-dir.txt" -TotalCount 1).Trim()
+# the back end the QA job built for its revision (build-backend.ps1 writes the directory); a name that is not such a directory is refused rather than replaced by another back end
+$chosen = "$ctl\backend-dir.txt"
+if (Test-Path $chosen) {
+    $want = (Get-Content $chosen -TotalCount 1).Trim()
+    if ($want -notlike 'C:\somework\qa-backends\*' -or $want -match '\.\.' -or -not (Test-Path "$want\Adm.exe") -or -not (Test-Path "$want\config.json") -or ((Get-Item $want).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "backend-dir.txt names $want, which is not a built back end under C:\somework\qa-backends" }
+    $dir = $want
+}
+Set-Content "$ctl\backend-running.txt" $dir
 if (-not (Test-Path "$dir\Adm.exe")) { throw "Adm.exe not found in $dir" }
 if (-not (Test-Path "$dir\config.json")) { throw "config.json not found in $dir" }
 foreach ($f in 'bfs.log', 'bfs.err.log') { if ((Test-Path "$logs\$f") -and ((Get-Item "$logs\$f").Length -gt 20MB)) { Move-Item "$logs\$f" "$logs\$f.1" -Force } }
