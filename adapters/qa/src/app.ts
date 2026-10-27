@@ -169,7 +169,7 @@ export class AppRunner {
 			const prepared = await this.#run(profile.prepare, cwd, profile.env, profile.prepareTimeoutSeconds, signal);
 			if (!prepared.ok) return { ok: false, reason: redactLog(`the preparation command failed${prepared.exitCode !== undefined ? ` (exit ${prepared.exitCode})` : ""}${prepared.error ? `: ${prepared.error}` : ""}\n${prepared.output}`, this.#secrets).trim() };
 		}
-		const launched = await this.#run(profile.start, cwd, profile.env, Math.min(profile.startupTimeoutSeconds, 900), signal);
+		const launched = await this.#run(profile.start, cwd, profile.env, profile.startupTimeoutSeconds, signal);
 		if (!launched.ok) return { ok: false, reason: redactLog(`the start command failed${launched.exitCode !== undefined ? ` (exit ${launched.exitCode})` : ""}${launched.error ? `: ${launched.error}` : ""}\n${launched.output}`, this.#secrets).trim() };
 		const deadline = Date.now() + profile.startupTimeoutSeconds * 1000;
 		while (Date.now() < deadline) {
