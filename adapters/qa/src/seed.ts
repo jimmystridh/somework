@@ -23,7 +23,7 @@ export interface QaEventSettings {
 	budget: { maxTokens: number; maxMinutes: number };
 }
 
-export const EVENT_BUDGET = { maxTokens: 4_000_000, maxMinutes: 60 };
+export const EVENT_BUDGET = { maxTokens: 4_000_000, maxMinutes: 180 };
 
 const positive = (env: NodeJS.ProcessEnv, name: string, fallback: number): number => {
 	const raw = env[name];

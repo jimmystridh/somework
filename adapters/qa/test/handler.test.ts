@@ -34,7 +34,7 @@ describe("the shipped ticket handler", () => {
 		assert.equal(decision.action, "submit");
 		assert.deepEqual(decision.task.capability, { id: "qa.verify", version: "1" });
 		assert.deepEqual(decision.task.input, { ticket: "PROJ-123", app: "local", repository: { url: "https://github.com/example-org/example-repo.git", ref: "refs/heads/feature/PROJ-123-rounding" } });
-		assert.deepEqual(decision.task.budget, { maxTokens: 4_000_000, maxMinutes: 60 });
+		assert.deepEqual(decision.task.budget, { maxTokens: 4_000_000, maxMinutes: 180 });
 		assert.deepEqual(decision.task.budget, settings.budget);
 		assert.doesNotMatch(JSON.stringify(decision.task), /Rounding differs|j\.doe/, "no summary or actor name is copied");
 	});
@@ -178,6 +178,6 @@ describe("seeding the handler", () => {
 
 	it("has events on in the profile, with a budget cap that covers a verification", () => {
 		assert.equal(qaProfile().events?.enabled, true);
-		assert.deepEqual(qaProfile().events?.submitBudgetCap, { maxTokens: 4_000_000, maxMinutes: 60 });
+		assert.deepEqual(qaProfile().events?.submitBudgetCap, { maxTokens: 4_000_000, maxMinutes: 180 });
 	});
 });

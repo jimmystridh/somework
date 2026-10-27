@@ -64,7 +64,7 @@ describe("the QA profile", () => {
 	it("gives a conversation a roomier budget than the default, and a verification job the budget of a task", () => {
 		assert.deepEqual(qaProfile().chat?.runBudget, { maxTokens: 1_500_000, maxMinutes: 30 });
 		assert.equal(qaProfile().chat?.hardTokenCap, 2_000_000);
-		assert.deepEqual(qaProfile().defaultBudget, { maxTokens: 4_000_000, maxMinutes: 60 });
+		assert.deepEqual(qaProfile().defaultBudget, { maxTokens: 4_000_000, maxMinutes: 180 });
 	});
 
 	it("asks before a shell command that would change the checkout, on top of the default and Windows rules", () => {

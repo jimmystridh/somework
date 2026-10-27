@@ -49,6 +49,10 @@ $started = Get-Date
 if (-not (Test-Path (Join-Path $src '.git'))) {
     Write-Host "first build: cloning the checkout into $src"
     Git $Backends clone --no-checkout $Checkout $src
+    if (Test-Path (Join-Path $src '.git\objects\info\alternates')) {
+        Git $src repack -a -d
+        Remove-Item (Join-Path $src '.git\objects\info\alternates') -Force
+    }
 }
 Write-Host "moving the source tree to $short"
 Git $src fetch --no-tags $Checkout $sha

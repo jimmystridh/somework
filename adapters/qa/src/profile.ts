@@ -30,13 +30,13 @@ export function qaProfile(options: QaProfileOptions = {}): AgentProfile {
 		allowedTools: ["read", "bash", ...(options.toolNames ?? [])],
 		approvalPatterns: QA_APPROVAL_PATTERNS,
 		...(options.toolApprovals ? { toolApprovals: options.toolApprovals } : {}),
-		defaultBudget: { maxTokens: 4_000_000, maxMinutes: 60 },
-		// a conversation of QA reads tickets, code and logs and may drive the browser by hand: it gets more than the default of a conversation (a verification is a job with the budget above)
+		defaultBudget: { maxTokens: 4_000_000, maxMinutes: 180 },
+		// a conversation of QA reads tickets, code and logs and may drive the browser by hand: it gets more than the default of a conversation (a verification is a job with the budget above: it covers building the back end for the checkout, which takes up to an hour)
 		chat: { runBudget: { maxTokens: 1_500_000, maxMinutes: 30 }, hardTokenCap: 2_000_000, share: 0.3 },
 		requireBudget: true,
 		git: { push: false, pullRequest: false, branchPrefix: "qa" },
 		skills: { allow: [] },
-		events: { enabled: true, notifyTo: "agent/manager", submitBudgetCap: { maxTokens: 4_000_000, maxMinutes: 60 } },
+		events: { enabled: true, notifyTo: "agent/manager", submitBudgetCap: { maxTokens: 4_000_000, maxMinutes: 180 } },
 	});
 }
 
