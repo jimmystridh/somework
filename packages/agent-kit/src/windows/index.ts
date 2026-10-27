@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { RoleHooks } from "../profile.ts";
 import { localEnvFactory } from "./local-env.ts";
 import type { WindowsEnvSettings } from "./settings.ts";
-import { baseEnvironment, GIT_CONFIG } from "./shell.ts";
+import { baseEnvironment, credentialHelperScript, gitConfigFor, type ShellGitAuth } from "./shell.ts";
 
 export * from "./approvals.ts";
 export * from "./local-env.ts";
@@ -13,10 +13,16 @@ export * from "./shell.ts";
 export * from "./sweep.ts";
 
 /** `TEMP` and the home directory of every command are inside the workspace root, so spill files and git configuration stay confined. */
-export function prepareWindowsRoot(root: string): void {
+export function prepareWindowsRoot(root: string, gitAuth?: ShellGitAuth): void {
 	for (const dir of [root, `${root}/.tmp`, `${root}/.home`]) mkdirSync(dir, { recursive: true });
+	const helper = `${root}/.home/git-credential-somework`;
+	if (gitAuth) {
+		const script = credentialHelperScript(gitAuth);
+		if (!existsSync(helper) || readFileSync(helper, "utf8") !== script) writeFileSync(helper, script);
+	}
 	const gitConfig = `${root}/.home/.gitconfig`;
-	if (!existsSync(gitConfig) || readFileSync(gitConfig, "utf8") !== GIT_CONFIG) writeFileSync(gitConfig, GIT_CONFIG);
+	const config = gitConfigFor(gitAuth ? helper : undefined);
+	if (!existsSync(gitConfig) || readFileSync(gitConfig, "utf8") !== config) writeFileSync(gitConfig, config);
 	process.env.TEMP = process.env.TMP = `${root}/.tmp`.replaceAll("/", "\\");
 }
 
@@ -25,7 +31,7 @@ export function prepareWindowsRoot(root: string): void {
  * the machine), the health endpoint stays on loopback unless `WINDOWS_HEALTH_BIND` names one address, and readiness covers bash and a writable workspace root.
  */
 export function windowsExecutionHooks(settings: WindowsEnvSettings): Pick<RoleHooks, "envFactory" | "healthBind" | "readinessChecks"> {
-	prepareWindowsRoot(settings.root);
+	prepareWindowsRoot(settings.root, settings.shellGitAuth);
 	return {
 		envFactory: localEnvFactory({
 			root: settings.root,

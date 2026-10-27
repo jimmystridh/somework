@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
-import { baseEnvironment, bashCandidates, chooseBash, defaultPathDirectories, GIT_CONFIG, isWslLauncher } from "../src/windows/shell.ts";
+import { baseEnvironment, bashCandidates, chooseBash, defaultPathDirectories, credentialHelperScript, GIT_CONFIG, gitConfigFor, isWslLauncher } from "../src/windows/shell.ts";
 import { loadWindowsEnvSettings as loadWindowsSettings } from "../src/windows/settings.ts";
 
 const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";
@@ -79,5 +83,54 @@ describe("settings", () => {
 		assert.throws(() => loadWindowsSettings({}, exists), /WINDOWS_WORKSPACE_ROOT/);
 		assert.throws(() => loadWindowsSettings({ WINDOWS_WORKSPACE_ROOT: "C:\\ws", WINDOWS_MAX_OUTPUT_BYTES: "5" }, exists), /WINDOWS_MAX_OUTPUT_BYTES/);
 		assert.throws(() => loadWindowsSettings({ WINDOWS_WORKSPACE_ROOT: "C:\\ws" }, () => false), /no Git for Windows bash/);
+	});
+});
+
+describe("the shell's git credential helper", () => {
+	const run = (script: string, input: string, verb = "get"): string => {
+		const dir = mkdtempSync(join(tmpdir(), "helper-"));
+		writeFileSync(join(dir, "helper.sh"), script);
+		return execFileSync("sh", [join(dir, "helper.sh"), verb], { input }).toString();
+	};
+	const files = () => {
+		const dir = mkdtempSync(join(tmpdir(), "tokens-"));
+		writeFileSync(join(dir, "default"), "default-token\n");
+		writeFileSync(join(dir, "acme"), "acme-token\n");
+		return { default: join(dir, "default"), acme: join(dir, "acme"), missing: join(dir, "missing") };
+	};
+	const ask = (host: string, path: string) => `protocol=https\nhost=${host}\npath=${path}\n\n`;
+
+	it("answers for a configured host with the default token and with the owner's own token, read when asked", () => {
+		const f = files();
+		const script = credentialHelperScript({ hosts: ["github.com"], tokenFile: f.default, ownerTokenFiles: { acme: f.acme } });
+		assert.equal(run(script, ask("github.com", "Other/repo.git")), "username=x-access-token\npassword=default-token\n");
+		assert.equal(run(script, ask("github.com", "ACME/widgets.git")), "username=x-access-token\npassword=acme-token\n");
+		writeFileSync(f.acme, "rotated\n");
+		assert.match(run(script, ask("github.com", "acme/widgets.git")), /password=rotated/);
+	});
+
+	it("says nothing for other hosts, for store and erase, and when there is no readable token file", () => {
+		const f = files();
+		const script = credentialHelperScript({ hosts: ["github.com"], tokenFile: f.default, ownerTokenFiles: {} });
+		assert.equal(run(script, ask("evil.example", "acme/x.git")), "");
+		assert.equal(run(script, ask("github.example.com", "acme/x.git")), "");
+		assert.equal(run(script, ask("github.com", "acme/x.git"), "store"), "");
+		assert.equal(run(script, ask("github.com", "acme/x.git"), "erase"), "");
+		assert.equal(run(credentialHelperScript({ hosts: ["github.com"], tokenFile: f.missing, ownerTokenFiles: {} }), ask("github.com", "acme/x.git")), "");
+	});
+
+	it("is added to the git configuration only when asked for, after the reset of the system helpers", () => {
+		assert.equal(gitConfigFor(undefined), GIT_CONFIG);
+		const config = gitConfigFor("C:\\somework\\ws\\.home\\git-credential-somework");
+		assert.match(config, /\thelper =\n\thelper = !sh 'C:\/somework\/ws\/\.home\/git-credential-somework'\n\tuseHttpPath = true\n$/);
+	});
+
+	it("is configured by WINDOWS_SHELL_GIT_AUTH from the role's token settings", () => {
+		const base = { WINDOWS_WORKSPACE_ROOT: "C:\\somework\\ws", WINDOWS_BASH: GIT_BASH };
+		const exists = () => true;
+		assert.equal(loadWindowsSettings(base, exists).shellGitAuth, undefined);
+		const settings = loadWindowsSettings({ ...base, WINDOWS_SHELL_GIT_AUTH: "1", GIT_TOKEN_FILE: "C:\\s\\git-token", GIT_TOKEN_OWNERS: "Jimmy=C:\\s\\jimmy" }, exists);
+		assert.deepEqual(settings.shellGitAuth, { hosts: ["github.com"], tokenFile: "C:\\s\\git-token", ownerTokenFiles: { jimmy: "C:\\s\\jimmy" } });
+		assert.throws(() => loadWindowsSettings({ ...base, WINDOWS_SHELL_GIT_AUTH: "1" }, exists), /needs GIT_TOKEN_FILE/);
 	});
 });

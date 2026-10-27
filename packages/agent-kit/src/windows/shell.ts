@@ -82,3 +82,44 @@ export function baseEnvironment(options: BaseEnvironmentOptions): Record<string,
  * CA bundle and TLS backend settings that HTTPS needs.
  */
 export const GIT_CONFIG = ["[core]", "\tlongpaths = true", "\tautocrlf = false", "\tsafecrlf = false", "[pull]", "\tff = only", "[credential]", "\thelper =", ""].join("\n");
+
+/** What a command's git may authenticate with: the hosts, the default token file and a token file per repository owner (lower case). */
+export interface ShellGitAuth {
+	hosts: string[];
+	tokenFile?: string;
+	ownerTokenFiles: Record<string, string>;
+}
+
+const shQuote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
+const forwardSlashes = (path: string): string => path.replaceAll("\\", "/");
+
+/**
+ * A git credential helper for the shell (POSIX sh, run by Git for Windows): it answers `get` only for the configured hosts, picks the token
+ * file of the repository's owner (the first path segment, so `credential.useHttpPath` must be on) or the default one, and reads the file when
+ * git asks, so a rotated token is used at once. It stores nothing and answers nothing for `store` and `erase`.
+ */
+export function credentialHelperScript(auth: ShellGitAuth): string {
+	const owners = Object.entries(auth.ownerTokenFiles).map(([owner, file]) => `\t${shQuote(owner)}) file=${shQuote(forwardSlashes(file))};;`);
+	return [
+		"#!/bin/sh",
+		'[ "$1" = get ] || exit 0',
+		'host=""; path=""',
+		'while IFS= read -r line; do case "$line" in host=*) host="${line#host=}";; path=*) path="${line#path=}";; "") break;; esac; done',
+		`case " ${auth.hosts.join(" ")} " in *" $host "*) ;; *) exit 0;; esac`,
+		`file=${shQuote(forwardSlashes(auth.tokenFile ?? ""))}`,
+		'owner=$(printf %s "$path" | cut -d/ -f1 | tr "[:upper:]" "[:lower:]")',
+		'case "$owner" in',
+		...owners,
+		"esac",
+		'[ -n "$file" ] && [ -r "$file" ] || exit 0',
+		"echo username=x-access-token",
+		'printf "password=%s\\n" "$(cat "$file")"',
+		"",
+	].join("\n");
+}
+
+/** The per-service git configuration with the credential helper at `helperPath` (the default configuration when there is no auth). */
+export function gitConfigFor(helperPath: string | undefined): string {
+	if (!helperPath) return GIT_CONFIG;
+	return [...GIT_CONFIG.split("\n").slice(0, -1), "\thelper = !sh " + shQuote(forwardSlashes(helperPath)), "\tuseHttpPath = true", ""].join("\n");
+}

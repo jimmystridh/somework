@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { win32 } from "node:path";
 import { resolveInside } from "./paths.ts";
-import { bashCandidates, chooseBash } from "./shell.ts";
+import { bashCandidates, chooseBash, type ShellGitAuth } from "./shell.ts";
 
 /** What every role that runs on Windows needs to know about its machine. Roles add their own settings next to these. */
 export interface WindowsEnvSettings {
@@ -15,6 +15,8 @@ export interface WindowsEnvSettings {
 	sweepUser?: string;
 	/** Interface of the health endpoint (an IPv4 address of the machine); loopback unless a dashboard on another machine must read it. */
 	healthBind?: string;
+	/** Plain git in the shell authenticates with the role's own token files (`WINDOWS_SHELL_GIT_AUTH=1`); absent: the shell has no git credential. */
+	shellGitAuth?: ShellGitAuth;
 }
 
 export const list = (value: string | undefined, separator: RegExp): string[] => (value ?? "").split(separator).map((item) => item.trim()).filter(Boolean);
@@ -29,6 +31,8 @@ export const list = (value: string | undefined, separator: RegExp): string[] => 
  *   WINDOWS_MAX_OUTPUT_BYTES per-command output cap
  *   WINDOWS_SWEEP_USER      the service account; after a timeout or abort every process of that account started during the command is stopped
  *                           (needs PI_CONCURRENCY=1, because the sweep cannot tell two simultaneous jobs apart)
+ *   WINDOWS_SHELL_GIT_AUTH  `1`: the model's own git (clone, fetch, push) authenticates with the role's token files (GIT_TOKEN_FILE, GIT_TOKEN_OWNERS, hosts
+ *                           GIT_TOKEN_HOSTS) through a host-restricted credential helper; without it the shell holds no git credential and only the kit's own git steps do
  *   WINDOWS_HEALTH_BIND     IPv4 address the health endpoint listens on (default 127.0.0.1; never 0.0.0.0, open the port to one reader with a firewall rule)
  */
 export function loadWindowsEnvSettings(env: Record<string, string | undefined>, exists: (path: string) => boolean = existsSync): WindowsEnvSettings {
@@ -48,6 +52,17 @@ export function loadWindowsEnvSettings(env: Record<string, string | undefined>, 
 	if (healthBind !== undefined && (!/^(\d{1,3}\.){3}\d{1,3}$/.test(healthBind) || healthBind === "0.0.0.0" || healthBind.split(".").some((part) => Number(part) > 255))) {
 		throw new Error(`WINDOWS_HEALTH_BIND must be one IPv4 address of this machine, not a wildcard: ${healthBind}`);
 	}
+	let shellGitAuth: ShellGitAuth | undefined;
+	if (env.WINDOWS_SHELL_GIT_AUTH === "1") {
+		const ownerTokenFiles: Record<string, string> = {};
+		for (const entry of (env.GIT_TOKEN_OWNERS ?? "").split(";").map((item) => item.trim()).filter(Boolean)) {
+			const at = entry.indexOf("=");
+			if (at <= 0 || at === entry.length - 1) throw new Error("GIT_TOKEN_OWNERS entries look like owner=path, separated by semicolons");
+			ownerTokenFiles[entry.slice(0, at).trim().toLowerCase()] = entry.slice(at + 1).trim();
+		}
+		if (!env.GIT_TOKEN_FILE && Object.keys(ownerTokenFiles).length === 0) throw new Error("WINDOWS_SHELL_GIT_AUTH=1 needs GIT_TOKEN_FILE or GIT_TOKEN_OWNERS");
+		shellGitAuth = { hosts: list(env.GIT_TOKEN_HOSTS ?? "github.com", /[\s,]+/), ...(env.GIT_TOKEN_FILE ? { tokenFile: env.GIT_TOKEN_FILE } : {}), ownerTokenFiles };
+	}
 	return {
 		root: win32.normalize(root).replaceAll("\\", "/").replace(/\/+$/, ""),
 		bash: chooseBash({ explicit: env.WINDOWS_BASH || undefined, candidates: bashCandidates(env), exists }),
@@ -56,5 +71,6 @@ export function loadWindowsEnvSettings(env: Record<string, string | undefined>, 
 		maxOutputBytes,
 		sweepUser,
 		healthBind,
+		...(shellGitAuth ? { shellGitAuth } : {}),
 	};
 }
