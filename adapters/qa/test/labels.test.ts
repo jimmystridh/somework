@@ -46,6 +46,20 @@ describe("a ticket that carries the skip label", () => {
 		assert.match(result.result.jira.skippedReason, /no-qa/);
 	});
 
+	it("is skipped before the workspace is cloned, not only before the model runs", async () => {
+		const hooks = make({ labels: ["no-qa"] });
+		const prepared = await hooks.prepareInput!(job, context);
+		const gate = (await hooks.beforeWorkspace!(prepared, context as never)) as any;
+		assert.match(gate.blocked.reason, /carries the label no-qa/);
+		assert.equal(gate.blocked.details.skipped, true);
+	});
+
+	it("is not stopped before the workspace when it has no label", async () => {
+		const hooks = make({ labels: ["vat"] });
+		const prepared = await hooks.prepareInput!(job, context);
+		assert.equal(await hooks.beforeWorkspace!(prepared, context as never), undefined);
+	});
+
 	it("is verified as usual without the label", async () => {
 		const hooks = make({ labels: ["vat"] });
 		const prepared = await hooks.prepareInput!(job, context);

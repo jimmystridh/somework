@@ -226,6 +226,10 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 			return buildBrief(input, taskId, { root: options.root, profiles: options.profiles, ticketPattern: options.ticketPattern, hasTicketSystem: options.hasTicketSystem, verifiedLabel: options.verifiedLabel });
 		},
 
+		beforeWorkspace(input) {
+			if (input?.[GATE_KEY]) return { blocked: { reason: String(input[GATE_KEY]), details: { skipped: true } } };
+		},
+
 		async beforeRun(context) {
 			if (context.input?.[GATE_KEY]) return { blocked: { reason: String(context.input[GATE_KEY]), details: { skipped: true } } };
 			if (context.input?.[UNTESTABLE_KEY]) return { blocked: { reason: String(context.input[UNTESTABLE_KEY]) } };
