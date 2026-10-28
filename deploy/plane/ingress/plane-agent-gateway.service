@@ -1,0 +1,17 @@
+[Unit]
+Description=Plane API-key-only gateway for agents on the private agent network
+After=network-online.target plane-forward.service
+Requires=plane-forward.service
+[Service]
+User=js
+Environment=PLANE_AGENT_BIND=10.10.10.11
+ExecStart=/usr/bin/node /opt/plane-gateway/agent-gateway.mjs
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=128M
+[Install]
+WantedBy=multi-user.target
