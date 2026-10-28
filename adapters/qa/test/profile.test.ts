@@ -81,5 +81,8 @@ describe("the QA profile", () => {
 		assert.match(SYSTEM_PROMPT, /A screenshot is not a video/);
 		assert.match(SYSTEM_PROMPT, /windows-developer agent made at exactly this revision/);
 		assert.match(SYSTEM_PROMPT, /Everything a screen can reach must still pass in the browser/);
+		assert.match(SYSTEM_PROMPT, /testing instructions/);
+		assert.match(SYSTEM_PROMPT, /which versions the ticket needs/);
+		assert.match(SYSTEM_PROMPT, /that is blocked, not not_fixed/);
 	});
 });
