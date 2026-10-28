@@ -68,9 +68,12 @@ if (Test-Path $partial) { Remove-Item $partial -Recurse -Force }
 & robocopy.exe $debug $partial /E /NFL /NDL /NJH /NJS /NP /MT:4 | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy of the build failed with exit $LASTEXITCODE" }
 # what the running back end needs and the compiler does not make (its config.json, runtime files): from the directory the stack used before, only where missing
-& robocopy.exe $baseDir $partial /E /XC /XN /XO /NFL /NDL /NJH /NJS /NP /MT:4 | Out-Null
-if ($LASTEXITCODE -ge 8) { throw "robocopy of the base files failed with exit $LASTEXITCODE" }
-if (-not (Test-Path (Join-Path $partial 'config.json'))) { throw "no config.json in $baseDir to run the back end with" }
+# the newest complete build is the source (this account can read it); the directory in server-dir.txt is only for the first build, and may be unreadable for this account
+$previous = Get-ChildItem $Backends -Directory | Where-Object { $_.Name -match '^[0-9a-f]{12}$' -and (Test-Path (Join-Path $_.FullName '.complete')) } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$baseFiles = if ($previous) { $previous.FullName } else { $baseDir }
+& robocopy.exe $baseFiles $partial /E /XC /XN /XO /NFL /NDL /NJH /NJS /NP /MT:4 | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy of the base files from $baseFiles failed with exit $LASTEXITCODE" }
+if (-not (Test-Path (Join-Path $partial 'config.json'))) { throw "no config.json in $baseFiles to run the back end with" }
 Set-Content (Join-Path $partial '.complete') $sha
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
 Move-Item $partial $out
