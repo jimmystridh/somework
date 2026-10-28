@@ -53,7 +53,12 @@ export interface PiRuntimeOptions {
 	onUsage?: (spent: ModelSpend) => void;
 	/** Keeps the full record of every run (messages, tool calls with arguments and results, usage) for later analysis. */
 	trace?: RunTracer;
+	/** How long a model request may stay silent before it fails and the provider tries again over plain HTTP; unset: {@link DEFAULT_MODEL_SILENCE_MS}. A connection the network dropped quietly otherwise hangs the run for good. */
+	modelSilenceMs?: number;
 }
+
+/** Slow high-effort reasoning can stay quiet for minutes, a dead connection never speaks again: ten minutes tells them apart. */
+export const DEFAULT_MODEL_SILENCE_MS = 10 * 60 * 1000;
 
 /** What one model consumed in a stretch of a run; `provider` and `modelId` are the key the SDK keeps usage under, split at its first slash. */
 export interface ModelSpend {
@@ -121,7 +126,8 @@ export class PiDurableRuntime implements AgentRuntime {
 		registry.install(this.#policyExtension());
 		for (const extension of this.#options.extensions ?? []) registry.install(extension);
 		const storage = await openNodeSqliteStorage(this.#options.storagePath);
-		this.#harness = await Harness.open(storage, { models: this.#options.models, registry, env: ({ cwd }) => this.#options.env(cwd) }, ctx);
+		const settings = { stream: { timeoutMs: this.#options.modelSilenceMs ?? DEFAULT_MODEL_SILENCE_MS } };
+		this.#harness = await Harness.open(storage, { models: this.#options.models, registry, settings, env: ({ cwd }) => this.#options.env(cwd) }, ctx);
 		const root = await this.#harness.root(ctx, { agent: { model: piModel(this.#modelChoice), ...thinkingOf(this.#modelChoice.effort) } });
 		this.#rootId = root.id;
 		// continue any run the last process left unfinished
