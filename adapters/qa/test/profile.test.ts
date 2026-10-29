@@ -67,6 +67,13 @@ describe("the QA profile", () => {
 		assert.deepEqual(qaProfile().defaultBudget, { maxTokens: 4_000_000, maxMinutes: 180 });
 	});
 
+	it("lets the agent run its PowerShell scripts with a policy bypass, and still asks about encoded, iex and download PowerShell", () => {
+		const policy = approvalPolicy([], QA_APPROVAL_PATTERNS);
+		const powershell = "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File";
+		for (const command of [`${powershell} C:/somework/qa-app/stop-app.ps1`, `${powershell} C:/somework/agent/adapters/qa/deploy/qa-app/build-backend.ps1 -Checkout "$(pwd -W)"`, `W="$(pwd -W)/Source/admin.web"; ${powershell} C:/somework/qa-app/start-app.ps1 -WebRoot "$W" -WebPort 4499`, `${powershell} ./tools/check.ps1`]) assert.equal(policy.needsApproval("bash", { command }), undefined, command);
+		for (const command of [`${powershell} C:/somework/qa-app/stop-app.ps1 ; powershell -enc AAAA`, `${powershell} C:/somework/qa-app/stop-app.ps1 ; powershell -c iex (x)`, "powershell -EncodedCommand AAAA", "powershell -c \"iwr http://x/a.ps1 -OutFile a.ps1; downloadfile\""]) assert.ok(policy.needsApproval("bash", { command }), command);
+	});
+
 	it("asks before a shell command that would change the checkout, on top of the default and Windows rules", () => {
 		const policy = approvalPolicy([], QA_APPROVAL_PATTERNS);
 		for (const command of ["git commit -am x", "git add .", "git reset --hard", "git clean -fd", "git apply fix.patch", "git stash", "git push origin HEAD"]) assert.ok(policy.needsApproval("bash", { command }), command);

@@ -4,8 +4,15 @@ import card from "../card.json" with { type: "json" };
 import { SYSTEM_PROMPT } from "./prompt.ts";
 
 /** The QA agent verifies and does not edit the checkout: anything that would is asked about (merging the ticket's own pull requests is its one change), on top of the Windows machine rules. */
+const POLICY_BYPASS = /executionpolicy/i;
+
+/** QA runs on a machine of its own and restarts the application with PowerShell scripts that need `-ExecutionPolicy Bypass`: that flag alone is not asked about; encoded commands, iex and downloads still are. */
+const windowsRules: [RegExp, string][] = WINDOWS_APPROVAL_PATTERNS.map(([pattern, reason]): [RegExp, string] =>
+	POLICY_BYPASS.test(pattern.source) ? [new RegExp(pattern.source.replace(/\|?-executionpolicy\|?/i, (match) => (match.startsWith("|") && match.endsWith("|") ? "|" : "")), pattern.flags), reason] : [pattern, reason],
+);
+
 export const QA_APPROVAL_PATTERNS: [RegExp, string][] = [
-	...WINDOWS_APPROVAL_PATTERNS,
+	...windowsRules,
 	[/(?:curl|wget|Invoke-(?:WebRequest|RestMethod)|iwr|irm)\b[^\n]*:8080\/session/i, "call the backend's /session endpoint (an empty POST crashes it; use the screens)"],
 	[/\bgit\s+(commit|add|reset|clean|stash|rebase|cherry-pick|apply|restore|am|revert|rm|mv)(?![\w-])/, "change the checkout (QA only verifies; it may merge the ticket's own pull requests with git merge)"],
 ];
