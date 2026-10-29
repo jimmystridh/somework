@@ -142,6 +142,15 @@
               "backendRevision": {
                 "type": "string",
                 "description": "the revision of the local back end the check ran against, when the profile can tell"
+              },
+              "merged": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "the pull requests and commits the agent merged into the revision it was given (pull/<n>/head or a commit id, with the commit it resolved to), in order"
+              },
+              "testedSha": {
+                "type": "string",
+                "description": "the commit that was really tested when the agent merged something into the revision it was given"
               }
             }
           },

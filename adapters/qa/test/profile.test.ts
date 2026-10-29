@@ -23,7 +23,7 @@ describe("the QA profile", () => {
 		assert.deepEqual(profile.capabilities, card.capabilities.map(({ id, version }) => ({ id, version })));
 		assert.deepEqual(profile.git, { push: false, pullRequest: false, branchPrefix: "qa" });
 		assert.deepEqual(profile.skills, { allow: [] });
-		assert.deepEqual(profile.allowedTools, ["read", "bash"], "without a ticket system the model has no ticket tools");
+		assert.deepEqual(profile.allowedTools, ["read", "bash", "qa_use_revision"], "without a ticket system the model has no ticket tools");
 	});
 
 	it("offers the ticket tools only when they exist, and every write tool is approval-gated", () => {
@@ -84,5 +84,6 @@ describe("the QA profile", () => {
 		assert.match(SYSTEM_PROMPT, /testing instructions/);
 		assert.match(SYSTEM_PROMPT, /which versions the ticket needs/);
 		assert.match(SYSTEM_PROMPT, /that is blocked, not not_fixed/);
+		assert.match(SYSTEM_PROMPT, /qa_use_revision/);
 	});
 });
