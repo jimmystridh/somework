@@ -18,6 +18,14 @@ export interface ErrorSummary {
 	truncated: boolean;
 }
 
+export interface PrintRecord {
+	frame: string;
+	title: string;
+	text: string;
+	bytes?: number;
+	pdf?: boolean;
+}
+
 export interface BrowserBackend {
 	open(url: string): Promise<PageInfo>;
 	/** A text outline of the page; every control has a ref (`e12`) that `click` and `fill` take. Refs are valid until the next snapshot. */
@@ -33,6 +41,8 @@ export interface BrowserBackend {
 	/** Writes a PNG to `file`. */
 	screenshot(file: string): Promise<void>;
 	errors(): Promise<ErrorSummary>;
+	/** What the page sent to the printer since it opened (the headless browser has no print dialog, so each call is only noted). */
+	prints(): Promise<PrintRecord[]>;
 	/** Starts recording the page into `dir` (the page is reopened on the same URL and keeps its cookies and storage). */
 	videoStart(dir: string): Promise<void>;
 	/** Stops recording and returns the finished .webm file, or undefined when nothing was recording. */

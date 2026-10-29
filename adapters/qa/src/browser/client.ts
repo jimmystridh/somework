@@ -17,6 +17,7 @@ const USAGE = `usage: node cli.ts --state <browser.json> <command> [arguments]
   wait [--ms N] [--text T] [--selector S]
   screenshot [name]                 save a PNG
   errors                            console, page and network errors seen since the page opened
+  prints                            what the page sent to the printer since it opened (the browser has no print dialog; a call is noted and the page then carries on as after a finished print)
   video-start | video-stop          record the decisive pass; a video is saved only on video-stop
   status`;
 
@@ -83,6 +84,7 @@ export function parseCli(argv: readonly string[]): CliCommand {
 			if (params[0]) args.name = params[0];
 			break;
 		case "errors":
+		case "prints":
 		case "video-start":
 		case "video-stop":
 		case "status":

@@ -19,6 +19,9 @@ const PAGE = `<!doctype html><html><head><title>Invoice form</title></head><body
 <a id="away" href="http://example.invalid/page">elsewhere</a>
 <button id="boom" onclick="console.error('exploded'); fetch('/missing')">Break</button>
 <div style="display:none"><button>hidden</button></div>
+<button id="print" onclick="document.getElementById('frame').contentWindow.print()">Print</button>
+<iframe id="frame" srcdoc="<title>Invoice 7</title><p>Total 70 kr</p><script>window.addEventListener('afterprint', function () { parent.document.getElementById('after').textContent = 'print finished' })</script>"></iframe>
+<p id="after">not printed</p>
 <script>console.warn('page loaded')</script>
 </body></html>`;
 
@@ -88,6 +91,19 @@ describe("the Playwright backend", { skip: EDGE ? false : "no installed Edge on 
 		const errors = await backend.errors();
 		assert.ok(errors.console.some((line) => line.includes("exploded")), JSON.stringify(errors));
 		assert.ok(errors.network.some((line) => line.startsWith("404 GET") && line.endsWith("/missing")), JSON.stringify(errors));
+	});
+
+	it("notes what the page prints, and lets it carry on as after a finished print", async () => {
+		await backend.open(base);
+		assert.deepEqual(await backend.prints(), []);
+		const { text } = await backend.snapshot();
+		await backend.click(ref(text, 'button "Print"'));
+		await backend.wait({ ms: 300 });
+		const printed = await backend.prints();
+		assert.equal(printed.length, 1, JSON.stringify(printed));
+		assert.equal(printed[0]!.title, "Invoice 7");
+		assert.match(printed[0]!.text, /Total 70 kr/);
+		assert.match((await backend.snapshot()).text, /print finished/);
 	});
 
 	it("blocks a link to a host that is not allowed instead of leaving the machine", async () => {

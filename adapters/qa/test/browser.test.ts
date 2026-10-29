@@ -34,7 +34,7 @@ describe("the command line", () => {
 		assert.deepEqual(parseCli(["--state", state, "screenshot"]).args, {});
 		assert.deepEqual(parseCli(["--state", state, "upload", "e7", "C:/w/.qa/job-1/ticket-files/1-a b.BCK"]).args, { ref: "e7", file: "C:/w/.qa/job-1/ticket-files/1-a b.BCK" });
 		assert.deepEqual(parseCli(["--state", state, "upload", "C:/w/x.BCK"]).args, { file: "C:/w/x.BCK" });
-		for (const cmd of ["snapshot", "errors", "video-start", "video-stop", "status"]) assert.equal(parseCli(["--state", state, cmd]).cmd, cmd);
+		for (const cmd of ["snapshot", "errors", "prints", "video-start", "video-stop", "status"]) assert.equal(parseCli(["--state", state, cmd]).cmd, cmd);
 	});
 	it("explains bad usage", () => {
 		for (const argv of [[], ["snapshot"], ["--state", state], ["--state", state, "dance"], ["--state", state, "open"], ["--state", state, "fill", "e1"], ["--state", state, "snapshot", "extra"], ["--state", state, "wait", "--ms"], ["--state", state, "wait", "--bogus", "1"]]) {
@@ -113,6 +113,7 @@ describe("the browser daemon", () => {
 			assert.match(await cmd(["press", "Enter"]), /pressed/);
 			assert.match(await cmd(["wait", "--text", "Saved"]), /waited/);
 			assert.match(await cmd(["errors"]), /no console, page or network errors/);
+			assert.match(await cmd(["prints"]), /nothing was sent to the printer/);
 			assert.ok(backend.calls.includes("fill e2 ACME AB"));
 			const state = JSON.parse(readFileSync(d.statePath, "utf8"));
 			assert.equal(typeof state.token, "string");

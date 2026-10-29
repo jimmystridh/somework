@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { BrowserBackend, ErrorSummary, PageInfo, WaitOptions } from "./backend.ts";
+import type { BrowserBackend, ErrorSummary, PageInfo, PrintRecord, WaitOptions } from "./backend.ts";
 import { isAllowedUrl } from "./policy.ts";
 
 export interface FakePage {
@@ -77,6 +77,10 @@ export class FakeBackend implements BrowserBackend {
 	async errors(): Promise<ErrorSummary> {
 		this.#record("errors");
 		return { console: [], pageErrors: [], network: [], truncated: false };
+	}
+	async prints(): Promise<PrintRecord[]> {
+		this.#record("prints");
+		return [];
 	}
 	async videoStart(dir: string) {
 		this.#record(`videoStart ${dir}`);

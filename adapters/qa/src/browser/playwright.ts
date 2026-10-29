@@ -1,7 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import type { BrowserBackend, ErrorSummary, PageInfo, WaitOptions } from "./backend.ts";
+import type { BrowserBackend, ErrorSummary, PageInfo, PrintRecord, WaitOptions } from "./backend.ts";
 import { displayUrl, isAllowedUrl } from "./policy.ts";
+import { recordPrints } from "./print-recorder.ts";
 import { buildSnapshot } from "./snapshot-script.ts";
 
 export interface PlaywrightOptions {
@@ -68,6 +69,7 @@ export class PlaywrightBackend implements BrowserBackend {
 			...(recordDir ? { recordVideo: { dir: recordDir, size: VIDEO_SIZE } } : {}),
 			...(storageState ? { storageState } : {}),
 		});
+		await context.addInitScript(recordPrints);
 		await context.route("**/*", (route: any) => {
 			const url: string = route.request().url();
 			if (url.startsWith("data:") || url.startsWith("blob:") || url === "about:blank") return route.continue();
@@ -172,6 +174,10 @@ export class PlaywrightBackend implements BrowserBackend {
 
 	async errors(): Promise<ErrorSummary> {
 		return { ...this.#errors, console: [...this.#errors.console], pageErrors: [...this.#errors.pageErrors], network: [...this.#errors.network] };
+	}
+
+	async prints(): Promise<PrintRecord[]> {
+		return this.#page.evaluate(() => (window as any).__qaPrints ?? []);
 	}
 
 	async #reopen(recordDir: string | undefined): Promise<string | undefined> {

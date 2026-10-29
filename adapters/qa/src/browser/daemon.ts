@@ -179,6 +179,13 @@ export class BrowserDaemon {
 				const lines = [...summary.pageErrors.map((e) => `page error: ${e}`), ...summary.console.map((e) => `console: ${e}`), ...summary.network.map((e) => `network: ${e}`)];
 				return lines.length === 0 ? "no console, page or network errors" : `${lines.join("\n")}${summary.truncated ? "\n[more not shown]" : ""}`;
 			}
+			case "prints": {
+				const printed = await this.#backend.prints();
+				if (printed.length === 0) return "nothing was sent to the printer since the page opened";
+				return printed
+					.map((p, i) => `print ${i + 1}: ${p.frame}${p.title ? ` "${p.title}"` : ""}${p.pdf === undefined ? "" : p.pdf ? ` (PDF, ${p.bytes} bytes)` : ` (not a PDF, ${p.bytes} bytes)`}${p.text ? ` text: ${p.text}` : ""}`)
+					.join("\n");
+			}
 			case "video-start": {
 				if (this.#recording) throw new UsageError("video-start: already recording; run video-stop first");
 				await this.#backend.videoStart(join(this.dir, "videos"));
@@ -197,7 +204,7 @@ export class BrowserDaemon {
 			case "status":
 				return `recording: ${this.#recording}\nfiles: ${JSON.stringify(this.files())}`;
 			default:
-				throw new UsageError(`unknown command "${cmd}" (open, snapshot, click, click-text, fill, upload, press, wait, screenshot, errors, video-start, video-stop, status)`);
+				throw new UsageError(`unknown command "${cmd}" (open, snapshot, click, click-text, fill, upload, press, wait, screenshot, errors, prints, video-start, video-stop, status)`);
 		}
 	}
 
