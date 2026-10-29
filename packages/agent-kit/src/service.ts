@@ -27,7 +27,7 @@ import { resolveThreadSettings } from "./threads/settings.ts";
 import { DurableInbox, DurableTable } from "./threads/store.ts";
 import { createThreadTools, describeJob, threadKey, type RunContext } from "./threads/tools.ts";
 import { GitHubAppCredentials } from "./github-app.ts";
-import { branchesNaming as branchesNamingIn, prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
+import { branchesNaming as branchesNamingIn, mergeRefsInto, prepareWorkspace, startMirrorRefresh, type GitSession } from "./git.ts";
 import { GitHubHost, noPullRequests } from "./githost.ts";
 import { createHandler, type HandlerDeps } from "./handler.ts";
 import { describeAgent, isoDateOrUndefined, withChangeMarker } from "./describe.ts";
@@ -137,7 +137,11 @@ export function createAgentService(options: AgentServiceOptions): { run(): Promi
 			// the git session is built after the role's hooks (it needs the hooks' environment): a role that asks for branches reaches it through this
 			const gitSessionLate: { current?: GitSession } = {};
 			const branchesNaming = async (repoUrl: string, ticket: string) => (gitSessionLate.current ? branchesNamingIn(gitSessionLate.current, repoUrl, ticket) : []);
-			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}), ...(watches ? { watches: watches.client } : {}), branchesNaming }) : (options.hooks ?? {});
+			const mergeRefs = async (workspace: string, refs: string[]) => {
+				if (!gitSessionLate.current) throw new Error("the git session is not ready");
+				return mergeRefsInto(gitSessionLate.current, workspace, refs);
+			};
+			const hooks: RoleHooks = typeof options.hooks === "function" ? await options.hooks({ env, config, log, client: taskClient, gitToken, ...(hasOwnerTokens ? { ownerTokens } : {}), gitTokenSource, ...(timers ? { timers: timers.client } : {}), ...(watches ? { watches: watches.client } : {}), branchesNaming, mergeRefs }) : (options.hooks ?? {});
 			const envFor: (cwd: string | undefined) => ExecutionEnv = hooks.envFactory ?? remoteEnvFactory(config);
 
 			const { models, model } = await buildModels(config, env);
