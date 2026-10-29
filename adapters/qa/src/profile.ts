@@ -2,7 +2,6 @@ import { validateProfile, type AgentProfile } from "@somework/agent-kit";
 import { WINDOWS_APPROVAL_PATTERNS } from "@somework/agent-kit/windows";
 import card from "../card.json" with { type: "json" };
 import { SYSTEM_PROMPT } from "./prompt.ts";
-import { REVISION_TOOL } from "./revision-tool.ts";
 
 /** The QA agent verifies and never changes the checkout: anything that would is asked about, on top of the Windows machine rules. */
 export const QA_APPROVAL_PATTERNS: [RegExp, string][] = [
@@ -28,7 +27,7 @@ export function qaProfile(options: QaProfileOptions = {}): AgentProfile {
 		id: "qa",
 		capabilities: card.capabilities.map(({ id, version }) => ({ id, version })),
 		systemPrompt: SYSTEM_PROMPT,
-		allowedTools: ["read", "bash", REVISION_TOOL, ...(options.toolNames ?? [])],
+		allowedTools: ["read", "bash", ...(options.toolNames ?? [])],
 		approvalPatterns: QA_APPROVAL_PATTERNS,
 		...(options.toolApprovals ? { toolApprovals: options.toolApprovals } : {}),
 		defaultBudget: { maxTokens: 4_000_000, maxMinutes: 180 },

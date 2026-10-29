@@ -39,7 +39,6 @@ export function composeQa(settings: QaSettings, context: ServiceContext, session
 		extensions: [...(tools ? [tools.extension] : []), createImageTools({ root: settings.root }).extension],
 		hasTicketSystem: Boolean(tools),
 		...(context.branchesNaming ? { branches: context.branchesNaming } : {}),
-		...(context.mergeRefs ? { mergeRefs: context.mergeRefs } : {}),
 		pulls: new GitHubPullFinder({ token: (owner) => context.ownerTokens?.[owner.toLowerCase()] ?? context.gitToken }),
 		...(jiraClient ? { ticketText: async (ticket: string) => [(await jiraClient.getIssue(ticket)).fields.description ?? "", ...(await jiraClient.comments(ticket)).map((comment) => comment.body)].join("\n\n") } : {}),
 		verifiedLabel: settings.jira?.verifiedLabel ?? "AgentTested",

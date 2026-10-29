@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Extension } from "@earendil-works/pi-durable";
-import { InvalidInput, silent, type Log, type MergeRefsResult, type ResultContext, type ResultPatch, type RoleHooks } from "@somework/agent-kit";
+import { InvalidInput, silent, type Log, type ResultContext, type ResultPatch, type RoleHooks } from "@somework/agent-kit";
 import { redactLog } from "@somework/agent-kit/windows";
 import type { SomeWorkClient } from "@somework/sdk";
 import { AppRunner, type AppEnv, type AppProfile } from "./app.ts";
@@ -9,7 +9,6 @@ import type { BrowserBackend } from "./browser/backend.ts";
 import { BrowserDaemon } from "./browser/daemon.ts";
 import { buildBrief, evidenceDirFor, wrapperFor } from "./prompt.ts";
 import { QaRuntime } from "./qa-runtime.ts";
-import { createRevisionTool } from "./revision-tool.ts";
 import type { PullFinder } from "./github-pulls.ts";
 import { chooseRevision, pullRequestInText, pullRequestsInText, saysNotMerged } from "./revision.ts";
 import type { QaReport } from "./result.ts";
@@ -49,8 +48,6 @@ export interface QaHooksOptions {
 	log?: Log;
 	/** Literal secrets to scrub from anything that is reported. */
 	secrets?: readonly string[];
-	/** Merges pull requests or commits into a checkout locally with the agent's git credentials (the kit's `mergeRefs`). Without it the agent cannot combine revisions. */
-	mergeRefs?: (workspace: string, refs: string[]) => Promise<MergeRefsResult>;
 	/** For tests. */
 	fetch?: typeof fetch;
 }
@@ -71,10 +68,6 @@ interface Active {
 	daemon?: BrowserDaemon;
 	backendRevision?: string;
 	stopped?: boolean;
-	/** What the agent merged into the harness's revision, in order. */
-	merged: { ref: string; sha: string }[];
-	/** The commit the checkout is at after the agent merged something. */
-	testedSha?: string;
 }
 
 type EvidenceKind = "video" | "screenshot";
@@ -214,38 +207,8 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 		}
 	}
 
-	/** What the agent merged on top of the revision it was given, for the result. */
-	const mergedFields = (): { merged?: string[]; testedSha?: string } => (active?.merged.length ? { merged: active.merged.map((item) => `${item.ref}@${item.sha}`), ...(active.testedSha ? { testedSha: active.testedSha } : {}) } : {});
-
-	/** The agent asks for more of the ticket's code: merge it locally, rebuild the back end from the result and restart the application. */
-	async function useRevision(request: { pullRequests: number[]; commits: string[] }): Promise<{ ok: boolean; text: string }> {
-		const current = active;
-		if (!current) return { ok: false, text: "no verification is running" };
-		if (!options.mergeRefs) return { ok: false, text: "this agent cannot merge revisions (no git access configured)" };
-		const refs = [...request.pullRequests.map((number) => `pull/${number}/head`), ...request.commits];
-		let result: MergeRefsResult;
-		try {
-			result = await options.mergeRefs(current.workspace, refs);
-		} catch (error) {
-			log("warn", "revision_merge_failed", { taskId: current.taskId, error: scrub(error instanceof Error ? error.message : String(error)).slice(0, 300) });
-			return { ok: false, text: `could not fetch or merge ${refs.join(", ")}: ${scrub(error instanceof Error ? error.message : String(error)).slice(0, 400)}. Your checkout is unchanged.` };
-		}
-		if (result.conflict) return { ok: false, text: `${result.conflict.ref} does not merge cleanly with what you have (conflicts in ${result.conflict.files.join(", ") || "unknown files"}). Your checkout is unchanged. If the ticket needs both, report blocked and name the two.` };
-		const runner = new AppRunner({ env: options.appEnv(options.root), secrets, fetch: options.fetch });
-		await runner.stop(current.profile, current.workspace, current.startedAtMs);
-		current.merged.push(...result.merged);
-		current.testedSha = result.head;
-		const started = await runner.start(current.profile, current.workspace);
-		log("info", "revision_merged", { taskId: current.taskId, refs: result.merged.length, head: result.head, restarted: started.ok });
-		if (!started.ok) return { ok: false, text: `merged ${result.merged.map((item) => item.ref).join(", ")} (checkout now at ${result.head}) but the application did not start: ${scrub(started.reason).slice(0, 1500)}. Report blocked with this reason.` };
-		current.startedAtMs = started.startedAtMs;
-		current.backendRevision = started.backendRevision;
-		return { ok: true, text: `merged ${result.merged.map((item) => `${item.ref} (${item.sha.slice(0, 12)})`).join(", ")}; the checkout is now at ${result.head.slice(0, 12)}${started.backendRevision ? ` and the back end was rebuilt at ${started.backendRevision}` : ""}. The application was restarted: open it again in the browser and take a new snapshot.` };
-	}
-	const revisionTool = createRevisionTool({ use: useRevision });
-
 	const hooks: RoleHooks = {
-		extensions: [...(options.extensions ?? []), revisionTool.extension],
+		extensions: options.extensions,
 
 		async prepareInput(input) {
 			// a ticket this agent is not configured for is `skipped`: the job completes without the model and without a call to the ticket system
@@ -276,7 +239,7 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 			const evidence = evidenceDirFor(options.root, context.taskId);
 			mkdirSync(evidence, { recursive: true });
 			options.session.start({ taskId: context.taskId, ticket: String(input.ticket).trim(), evidenceDir: evidence });
-			const current: Active = { taskId: context.taskId, profile, workspace: context.workspace, startedAtMs: Date.now(), merged: [] };
+			const current: Active = { taskId: context.taskId, profile, workspace: context.workspace, startedAtMs: Date.now() };
 			active = current;
 
 			const runner = new AppRunner({ env: options.appEnv(options.root), secrets, fetch: options.fetch });
@@ -317,7 +280,7 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 				const skipped = (context.blocked.details as { skipped?: boolean } | undefined)?.skipped === true;
 				return { result: skipped
 					? { verdict: "skipped", ticket, jira: { ...jira, skippedReason: context.blocked.reason }, notes: context.blocked.reason, ...(usage ? { usage } : {}) }
-					: { verdict: "blocked", ticket, revision: { frontendSha: context.baseSha, ...(active?.backendRevision ? { backendRevision: active.backendRevision } : {}), ...mergedFields() }, jira, notes: context.blocked.reason, ...(usage ? { usage } : {}) } };
+					: { verdict: "blocked", ticket, revision: { frontendSha: context.baseSha, ...(active?.backendRevision ? { backendRevision: active.backendRevision } : {}) }, jira, notes: context.blocked.reason, ...(usage ? { usage } : {}) } };
 			}
 
 			const reported = guarded?.take(`somework:${context.taskId}`);
@@ -343,7 +306,7 @@ export function createQaHooks(options: QaHooksOptions): RoleHooks {
 				result: {
 					verdict: report.verdict,
 					ticket,
-					revision: { frontendSha: context.baseSha, ...(active?.backendRevision ?? report.backendRevision ? { backendRevision: active?.backendRevision ?? report.backendRevision } : {}), ...(typeof context.input?.revisionNote === "string" ? { note: context.input.revisionNote } : {}), ...mergedFields() },
+					revision: { frontendSha: context.baseSha, ...(active?.backendRevision ?? report.backendRevision ? { backendRevision: active?.backendRevision ?? report.backendRevision } : {}), ...(typeof context.input?.revisionNote === "string" ? { note: context.input.revisionNote } : {}) },
 					acceptanceChecks: report.acceptanceChecks,
 					fixtures: report.fixtures,
 					evidence: evidence.map(({ artifactId, kind, filename }) => ({ artifactId, kind, filename })),
