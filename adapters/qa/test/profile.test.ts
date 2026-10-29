@@ -69,7 +69,8 @@ describe("the QA profile", () => {
 
 	it("asks before a shell command that would change the checkout, on top of the default and Windows rules", () => {
 		const policy = approvalPolicy([], QA_APPROVAL_PATTERNS);
-		for (const command of ["git commit -am x", "git add .", "git reset --hard", "git clean -fd", "git apply fix.patch", "git stash"]) assert.ok(policy.needsApproval("bash", { command }), command);
+		for (const command of ["git commit -am x", "git add .", "git reset --hard", "git clean -fd", "git apply fix.patch", "git stash", "git push origin HEAD"]) assert.ok(policy.needsApproval("bash", { command }), command);
+		for (const command of ["git fetch origin pull/5188/head", "git -c user.name=QA -c user.email=qa@localhost merge --no-edit FETCH_HEAD", "git merge --abort"]) assert.equal(policy.needsApproval("bash", { command }), undefined, command);
 		for (const command of ["git rev-parse HEAD", "git log --oneline -3", "git status", "git merge-base --is-ancestor c562be7db7 HEAD", "git merge-base HEAD origin/main", "curl -s http://127.0.0.1:8080/health", "ls"]) assert.equal(policy.needsApproval("bash", { command }), undefined, command);
 		for (const [pattern] of DEFAULT_APPROVAL_PATTERNS) assert.ok(QA_APPROVAL_PATTERNS.some(([candidate]) => candidate.source === pattern.source), `default rule ${pattern.source} is kept`);
 	});
@@ -84,5 +85,6 @@ describe("the QA profile", () => {
 		assert.match(SYSTEM_PROMPT, /testing instructions/);
 		assert.match(SYSTEM_PROMPT, /which versions the ticket needs/);
 		assert.match(SYSTEM_PROMPT, /that is blocked, not not_fixed/);
+		assert.match(SYSTEM_PROMPT, /git fetch origin pull\/<number>\/head/);
 	});
 });

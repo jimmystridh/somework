@@ -3,11 +3,11 @@ import { WINDOWS_APPROVAL_PATTERNS } from "@somework/agent-kit/windows";
 import card from "../card.json" with { type: "json" };
 import { SYSTEM_PROMPT } from "./prompt.ts";
 
-/** The QA agent verifies and never changes the checkout: anything that would is asked about, on top of the Windows machine rules. */
+/** The QA agent verifies and does not edit the checkout: anything that would is asked about (merging the ticket's own pull requests is its one change), on top of the Windows machine rules. */
 export const QA_APPROVAL_PATTERNS: [RegExp, string][] = [
 	...WINDOWS_APPROVAL_PATTERNS,
 	[/(?:curl|wget|Invoke-(?:WebRequest|RestMethod)|iwr|irm)\b[^\n]*:8080\/session/i, "call the backend's /session endpoint (an empty POST crashes it; use the screens)"],
-	[/\bgit\s+(commit|add|reset|clean|stash|rebase|merge|cherry-pick|apply|restore|am|revert|rm|mv)(?![\w-])/, "change the checkout (QA only verifies)"],
+	[/\bgit\s+(commit|add|reset|clean|stash|rebase|cherry-pick|apply|restore|am|revert|rm|mv)(?![\w-])/, "change the checkout (QA only verifies; it may merge the ticket's own pull requests with git merge)"],
 ];
 
 export interface QaProfileOptions {

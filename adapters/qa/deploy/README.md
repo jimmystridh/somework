@@ -53,7 +53,7 @@ breaks one of them): device-code login for this agent (`node node_modules\@earen
 install directory, approve the code in a browser anywhere) and put the resulting `auth.json` at `C:\somework\state\auth.json`.
 
 **Git token.** Needed only when the repository under test is private: a fine-grained token for that repository with read access
-(Contents) and Pull requests (read: without it every pull request lookup answers 403 and the agent falls back to branches, and the preflight says so), in `C:\somework\secrets\git-token`. `GIT_TOKEN_HOSTS` is the only place the service will send it. Without it, leave
+(Contents) and Pull requests (read: without it every pull request lookup answers 403 and the agent falls back to branches, and the preflight says so), in `C:\somework\secrets\git-token`. `GIT_TOKEN_HOSTS` is the only place the service will send it. With `WINDOWS_SHELL_GIT_AUTH=1` the agent's own `git` uses it too (a credential helper restricted to those hosts, no token in the environment), so it can fetch and merge a ticket's other pull requests itself; keep the token read-only. Without it, leave
 `GIT_TOKEN_FILE` out of `agent.env`.
 
 **Mirror and PATH.** For a large repository set `GIT_MIRROR_DIR`, `GIT_MIRROR_REPOS` and `GIT_MIRROR_REFRESH_MINUTES` (see `agent.env.example`): the kit keeps a bare mirror on the data volume and each task clones from it instead of downloading the repository again (the first refresh takes as long as one full clone). A profile's start and stop commands run in Git Bash with `WINDOWS_PATH_DIRS` as the whole `PATH`; if they call `powershell.exe`, that list must include `C:\Windows\System32\WindowsPowerShell\v1.0` (a missing entry shows up as `powershell.exe: command not found`, exit 127).
