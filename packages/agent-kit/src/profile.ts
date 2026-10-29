@@ -145,8 +145,6 @@ export interface ServiceContext {
 	watches?: import("./watches/client.ts").WatchesClient;
 	/** The remote branches of a repository that name a ticket, from the agent's mirror (git access only, no API); empty without a mirror. */
 	branchesNaming?: (repoUrl: string, ticket: string) => Promise<import("./git.ts").BranchInfo[]>;
-	/** Merges pull requests or commits into a workspace's checkout with the agent's git credentials, locally only (nothing is pushed). */
-	mergeRefs?: (workspace: string, refs: string[]) => Promise<import("./git.ts").MergeRefsResult>;
 }
 
 /** Role-specific behaviour that is code rather than data. Every member is optional; the defaults are the developer role's. */

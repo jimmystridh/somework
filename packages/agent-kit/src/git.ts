@@ -270,42 +270,6 @@ export async function branchesNaming(session: GitSession, repoUrl: string, ticke
 	return found.sort((a, b) => b.committedAt - a.committedAt);
 }
 
-export interface MergeRefsResult {
-	/** What the checkout holds now: every ref that was merged, with the commit it resolved to. */
-	merged: { ref: string; sha: string }[];
-	/** The first ref that did not merge cleanly; the checkout is back at the commit it had before the call and `merged` is empty. */
-	conflict?: { ref: string; files: string[] };
-	/** The checkout's commit afterwards. */
-	head: string;
-}
-
-const MERGEABLE_REF = /^(pull\/[1-9][0-9]{0,8}\/head|[0-9a-f]{7,40})$/;
-
-/**
- * Merges pull requests (`pull/<n>/head`) or commits into the workspace's checkout, locally only: nothing is pushed. It fetches with the
- * session's credentials, which the model never holds. A conflict aborts that merge and is returned, never thrown, so the caller can say which
- * ref clashed. The refs merge in the order given, each as its own merge commit.
- */
-export async function mergeRefsInto(session: GitSession, workspace: string, refs: string[]): Promise<MergeRefsResult> {
-	const head = async (): Promise<string> => (await git(session, workspace, ["rev-parse", "HEAD"])).output.trim();
-	for (const ref of refs) if (!MERGEABLE_REF.test(ref)) throw new GitError(`"${ref.slice(0, 60)}" is not a pull request (pull/<number>/head) or a commit id`, -1);
-	const start = await head();
-	const merged: { ref: string; sha: string }[] = [];
-	for (const ref of refs) {
-		await git(session, workspace, ["fetch", "--force", "origin", ref], { auth: true });
-		const sha = (await git(session, workspace, ["rev-parse", "FETCH_HEAD^{commit}"])).output.trim();
-		const result = await git(session, workspace, ["merge", "--no-edit", "--no-ff", "--no-verify", sha], { allow: [1] });
-		if (result.code !== 0) {
-			const files = (await git(session, workspace, ["diff", "--name-only", "--diff-filter=U"], { allow: [1, 128] })).output.split("\n").map((line) => line.trim()).filter(Boolean);
-			await git(session, workspace, ["merge", "--abort"], { allow: [1, 128] });
-			await git(session, workspace, ["reset", "--hard", start]);
-			return { merged: [], conflict: { ref, files: files.slice(0, 20) }, head: start };
-		}
-		merged.push({ ref, sha });
-	}
-	return { merged, head: await head() };
-}
-
 /** The mirror to clone from, refreshed; a stale one when the remote cannot be reached right now (the fetch from origin that follows makes the clone current); none when there is no usable mirror. */
 async function usableMirror(session: GitSession, repoUrl: string): Promise<string | undefined> {
 	if (!session.mirrorDir) return undefined;
